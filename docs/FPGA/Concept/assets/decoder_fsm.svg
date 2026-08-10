@@ -1,0 +1,36 @@
+<svg viewBox="0 0 900 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2f6fb0"/>
+    </marker>
+  </defs>
+
+  <!-- opaque background so text stays readable regardless of viewer theme -->
+  <rect x="0" y="0" width="900" height="320" fill="#ffffff"/>
+
+  <!-- S_FETCH box -->
+  <rect x="60" y="170" width="220" height="90" rx="12" fill="#eaf2fb" stroke="#2f6fb0" stroke-width="2"/>
+  <text x="170" y="222" text-anchor="middle" font-size="20" font-weight="bold" fill="#1a1a1a">S_FETCH</text>
+
+  <!-- S_EXPAND box -->
+  <rect x="620" y="170" width="220" height="90" rx="12" fill="#eaf2fb" stroke="#2f6fb0" stroke-width="2"/>
+  <text x="730" y="222" text-anchor="middle" font-size="20" font-weight="bold" fill="#1a1a1a">S_EXPAND</text>
+
+  <!-- self loop on S_FETCH -->
+  <path d="M 120,170 C 90,70 250,70 220,170" fill="none" stroke="#2f6fb0" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="170" y="45" text-anchor="middle" font-size="13" fill="#1a1a1a">FIFO空 / TIME_HIGH / OTHERS</text>
+  <text x="170" y="62" text-anchor="middle" font-size="13" fill="#1a1a1a">/ TD但time_valid_q=0 → 留在原地</text>
+
+  <!-- self loop on S_EXPAND -->
+  <path d="M 680,170 C 650,70 810,70 780,170" fill="none" stroke="#2f6fb0" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="730" y="45" text-anchor="middle" font-size="13" fill="#1a1a1a">tready=0,或清bit後mask_q≠0</text>
+  <text x="730" y="62" text-anchor="middle" font-size="13" fill="#1a1a1a">→ 留在原地,清最低位的1</text>
+
+  <!-- FETCH -> EXPAND, well above center -->
+  <path d="M 280,185 L 620,185" fill="none" stroke="#2f6fb0" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="450" y="175" text-anchor="middle" font-size="13" fill="#1a1a1a">type=TD,time_valid_q=1 → latch x_f,y_f,type,t;mask_q←vx_f</text>
+
+  <!-- EXPAND -> FETCH, well below center, clear gap from the line above -->
+  <path d="M 620,245 L 280,245" fill="none" stroke="#2f6fb0" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="450" y="265" text-anchor="middle" font-size="13" fill="#1a1a1a">tready=1,清bit後mask_q=0 → 這筆展開完</text>
+</svg>
