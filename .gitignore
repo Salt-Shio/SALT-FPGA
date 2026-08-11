@@ -1,6 +1,7 @@
 # 外部參考原始碼(複製進來或 clone 的第三方專案,不是本專案產出)
 FPGA/fpga-projects-1.0.0
 FPGA/zipcpu
+FPGA/ip_repo
 docs/FPGA/Reference
 
 # Claude Code 本機設定(跟機器/使用者綁定,不共用)
@@ -11,7 +12,6 @@ docs/FPGA/Reference
 *.hw/
 *.ip_user_files/
 *.runs/
-*.sim/
 *.gen/
 *.srcs/sources_1/bd/*/hw_handoff/
 *.srcs/sources_1/bd/*/ip/
@@ -21,8 +21,16 @@ docs/FPGA/Reference
 *.pb
 *.dcp
 *.str
+*.wdb
 *.xpr.lock
 webtalk*
+dfx_runtime.txt
+
+# *.sim/ 底下只有 sim_1/new/ 是手寫的 testbench 原始碼,要進版控;
+# 其餘(sim_1/behav/ 之類)是跑模擬產生的執行期產物,不進版控
+# FPGA/EvtDecoder/EvtDecoder.sim/sim_*/behav/
+*/*/*.sim/sim_*/behav
+*/*/*.sim/sim_*/synth
 
 # OS 產生的雜項檔案
 Thumbs.db
