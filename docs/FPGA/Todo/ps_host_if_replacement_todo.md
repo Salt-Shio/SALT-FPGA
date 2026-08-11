@@ -17,26 +17,24 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 ## 具體任務
 
 1. **解碼模組**:輸入 ESST 的 AXI4-Stream(64-bit,EVT2.1),輸出 `(x,y,type,t)`,`t` 微秒。`type_f==0x0/0x1` 是 TD,展開;`0x8` 只更新內部時間、不輸出;`0xE` 丟棄。
-2. **PL→PS 傳輸介面**:AXI DMA,kernel driver 未動工,依賴下方問題 2、3。
+2. **PL→PS 傳輸介面**:AXI DMA,kernel driver 未動工,依賴下方問題 1、2。
 3. **bias 設定工具**:獨立小程式,對 sensor subdev 下 `VIDIOC_S_CTRL`,不依賴 `metavision_viewer`。
 
 ## 解碼模組實作步驟(依序做,由使用者實作,這裡只列順序跟每步的驗收標準)
 
-1. **建 RTL 專案目錄結構**:`hdl/`(原始碼)、`sim/`(testbench)分開,先決定好放哪裡再開始寫檔案。
-2. **bit-scan 組合邏輯**(最小單元,先從這裡開始):輸入 `mask_q`(32-bit),輸出「最低位的 1 在哪個 offset」+「清掉那個 bit 後的新 mask」。純組合邏輯,不含狀態,最容易獨立寫 testbench 驗證。驗收:餵幾組手算過的 `vx_f`(如查證筆記範例 `0x00000003`),offset 序列跟清 bit 後的值要跟手算一致。
-3. **展開狀態機主體**(`S_FETCH`/`S_EXPAND`):接上一步的 bit-scan,加上:
-   - `type_f` dispatch(`0x0`/`0x1`=TD、`0x8`=TIME_HIGH、其他丟棄)
-   - `time_valid_q` guard(reset 後沒收過 TIME_HIGH 之前,TD 事件要丟棄)
-   - 暫存器:`time_high_q`、`x_f_q`/`y_f_q`/`type_q`/`t_q`、`mask_q`
-   驗收:對照 [`Concept/ps_host_if_replacement_notes.md`](../Concept/ps_host_if_replacement_notes.md)「展開狀態機」那張轉移表,每一列轉移條件都要有對應的 testbench case,包含「reset 後第一筆是 TD、還沒收過 TIME_HIGH」這個邊界情況。
-4. **輸入端 FIFO**:深度 16,存原始 64-bit 封包(不是解碼後的資料),接在 ESST 跟展開狀態機之間,標準同步 AXI4-Stream FIFO。
-5. **FIFO + 展開狀態機整合**,加上輸出端 `flush_timer_q` + 提前掛 `tlast` 的機制(見 Concept 筆記「定案:不做心跳」那節)。
-6. **AXI-Lite slave 介面**:`REG_CONTROL`(enable/reset/clear)、`REG_CONFIG.enable_pattern`(假資料模式)、`REG_TLAST_TIMEOUT`、除錯讀寫後門。
-7. **頂層模組**:把 4~6 包成一個對外只留 `s_axis`/`m_axis`/`s_axi_lite` 的模組,對應要接的位置是 `event_stream_smart_t_0/m_axis → [這個模組] → axi_dma/S_AXIS_S2MM`。
-8. **Testbench 驗證**:不要等 3~7 全部寫完才測,每步都要有對應 testbench;整合後再跑一次「真實封包序列」測試(TD 混 TIME_HIGH 混 OTHERS、多 bit mask、reset 後首筆該丟棄)。
-9. **Vivado block design 整合**:換掉 `ps_host_if_0`,接線見 Concept 筆記「Vivado block design」那節。
-10. **上板驗證**:先用 `REG_CONFIG.enable_pattern` 假資料測完「`axi_dma` → kernel driver → PS 軟體」這條路,確認通了再接真感測器,避免同時除錯 RTL 邏輯跟資料路徑兩個問題。
-11. **Kernel driver**:仿 `psee-composite.c`(V4L2 media graph)+ `psee-dma.c`(`dma_request_chan` 接 `xilinx_dma`)兩層模式。
+目前進度:1~8(RTL 邏輯 + 模擬驗證)已完成,全部在 xsim 上跑過 testbench 確認 PASS。**下一步是 9(Vivado block design 整合)**,9~11(上板、kernel driver)都還沒開始,這些需要接觸實體硬體/PetaLinux 環境,模擬驗證不能取代。
+
+1. **建 RTL 專案目錄結構**(已完成):`EvtDecoder.srcs/sources_1/new/`(原始碼)、`EvtDecoder.sim/sim_1/new/`(testbench)分開。
+2. **bit-scan 組合邏輯**(已完成):`EventProcessor.sv` 裡的 `x_offset` 低位優先編碼器,`tb_event_processor.sv` 驗證過。
+3. **展開狀態機主體**(已完成):`EventProcessor.sv` 的 `S_FETCH`/`S_EXPAND` FSM,含 `type_f` dispatch、`time_valid_q` guard,`tb_event_processor.sv` Test 1~8 涵蓋轉移表各種情況與邊界情況(reset 後首筆 TD 該丟棄)。
+4. **輸入端 FIFO**(已完成):`axis_data_fifo_0` IP(16 深),接在 `FsmEventExtractor.sv` 裡。
+5. **FIFO + 展開狀態機整合 + flush_timer/tlast**(已完成):`FsmEventExtractor.sv` 接線,`EventProcessor.sv` 的 `flush_timer_q`/`tlast_due` 邏輯,`REG_CONFIG.tlast_timeout_enable` + `REG_TLAST_TIMEOUT` 非 0 預設值雙重防線也已補上並測試。
+6. **AXI-Lite slave 介面**(已完成):`FsmConfigSetter.sv`,`REG_CONTROL`/`REG_CONFIG`/`REG_TLAST_TIMEOUT`/除錯後門都有,AR/R channel 額外做過 back-to-back 讀取優化(組合邏輯算 `ARREADY`,實測比原始 latch 設計與官方 `ps_host_if_reg_bank` 都快一倍)。
+7. **頂層模組**(已完成):`FsmEventExtractor.sv`,對外只留 `s_axis`/`m_axis`/`s_axi_lite`。
+8. **Testbench 驗證**(已完成):`tb_fsm_config_setter.sv`(隨機化 master 行為 + protocol checker + reset 預設值檢查)、`tb_event_processor.sv`(隨機事件 + backpressure)、`tb_fsm_event_extractor.sv`(整合測試,真實 EVT2.1 封包序列 + FIFO 反壓驗證)全部 `ALL PASS`。
+9. **Vivado block design 整合**(尚未開始):換掉 `ps_host_if_0`,接線見 Concept 筆記「Vivado block design」那節。
+10. **上板驗證**(尚未開始):先用 `REG_CONFIG.enable_pattern` 假資料測完「`axi_dma` → kernel driver → PS 軟體」這條路,確認通了再接真感測器,避免同時除錯 RTL 邏輯跟資料路徑兩個問題。
+11. **Kernel driver**(尚未開始):仿 `psee-composite.c`(V4L2 media graph)+ `psee-dma.c`(`dma_request_chan` 接 `xilinx_dma`)兩層模式。
 
 ## 待解決問題(依序處理)
 

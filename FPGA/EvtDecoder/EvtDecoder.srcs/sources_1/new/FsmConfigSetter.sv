@@ -23,13 +23,20 @@
 // PS 端還沒來得及設定就發生「flush_timer_q(0) >= cfg_tlast_timeout(0)」恆成立、
 // 每筆事件都被迫掛 tlast 的空窗期。
 //
-// 設計方式:每個 channel 都是明確的 idle/busy 兩態狀態機,ready 訊號本身就是
-// 「目前是不是 idle」的直接體現(reset 完預設 idle=1;收到請求就轉 busy、
-// 把對應的 ready 壓低;busy 期間絕不再接受新請求;response/資料被對方收走
-// 才轉回 idle、把 ready 還原成 1)。ARREADY 跟 RVALID 永遠互斥、
-// AWREADY/WREADY 跟 BVALID 永遠互斥,不可能出現「已經答應收下新請求,
-// 但前一筆的 response/資料還沒交完」這種狀態,不會卡死。
-// AW 跟 W 允許分開拍到,不要求兩者同一拍到齊。
+// 設計方式:
+// - Read channel(AR/R):ARREADY = !axi_rvalid || S_AXI_RREADY,用組合邏輯直接算,
+//   不是 latch 住的兩態機。允許「這拍舊資料被 RREADY 拿走,同一拍就接受下一筆新位址」
+//   (ARREADY 跟 RVALID 可以同時是 1,只要 RREADY 也同時是 1),達到 back-to-back、
+//   每拍一筆的吞吐量;唯一會擋住新位址的情況是「舊資料還沒被拿走」(rvalid=1 且
+//   rready=0),不會發生新位址覆蓋掉還沒交出去的舊資料這種卡死/掉資料的問題。
+//   （這個公式比官方 ps_host_if_reg_bank 的 pulse 式 ARREADY 實測快一倍,官方那版
+//   跟這裡原本的 latch 式寫法吞吐量其實相同,都是每兩拍一筆,已用 xsim 量測驗證。）
+// - Write channel(AW/W/B):明確的 idle/busy 兩態 latch,AWREADY/WREADY 跟 BVALID
+//   永遠互斥,不可能出現「已經答應收下新請求,但前一筆的 response 還沒交完」這種
+//   狀態,不會卡死;AW 跟 W 允許分開拍到,不要求兩者同一拍到齊。這裡沒有比照 read
+//   channel 做同樣的 back-to-back 優化——AW/W 分開到達的暫存機制,跟 back-to-back
+//   要求的「同一拍解決舊的、順便接受新的」兜在一起會需要額外的 pending 旗標與狀態,
+//   複雜度不成比例(config 暫存器寫入本來就不是高頻路徑),故意保持原本的簡單設計。
 //
 // Dependencies:
 //
@@ -84,39 +91,34 @@ module FsmConfigSetter #(
 
 	logic [C_S_AXI_DATA_WIDTH-1:0] regfile [0:REG_COUNT-1];
 
-	/* ================= Read channel(AR/R):idle/busy 兩態 ================= */
-	logic axi_arready;
+	/* ================= Read channel(AR/R) ================= */
 	logic [C_S_AXI_ADDR_WIDTH-1:0] axi_araddr; // 純記錄用,方便看波形,不在資料路徑上
 	logic axi_rvalid;
 	logic [1:0] axi_rresp;
 	logic [C_S_AXI_DATA_WIDTH-1:0] axi_rdata;
 
-	assign S_AXI_ARREADY = axi_arready;
+	// ARREADY 直接算,不 latch:手上沒有還沒被拿走的舊資料,或舊資料這拍剛好被
+	// RREADY 拿走,兩種情況都可以接受新位址(後者就是 back-to-back 的關鍵)。
+	assign S_AXI_ARREADY = !axi_rvalid || S_AXI_RREADY;
 	assign S_AXI_RDATA   = axi_rdata;
 	assign S_AXI_RRESP   = axi_rresp;
 	assign S_AXI_RVALID  = axi_rvalid;
 
 	always_ff @(posedge S_AXI_ACLK or negedge S_AXI_ARESETN) begin
 		if (!S_AXI_ARESETN) begin
-			axi_arready <= 1'b1;   // reset 完是 idle,可以收新的位址
 			axi_araddr  <= '0;
 			axi_rvalid  <= 1'b0;
 			axi_rresp   <= 2'b00;
 			axi_rdata   <= '0;
-		end else if (!axi_rvalid) begin
-			// idle:手上沒有還沒被拿走的舊資料,才可以收新位址
-			if (S_AXI_ARVALID && axi_arready) begin
+		end else if (!axi_rvalid || S_AXI_RREADY) begin
+			if (S_AXI_ARVALID) begin
 				axi_araddr  <= S_AXI_ARADDR;
 				axi_rdata   <= regfile[S_AXI_ARADDR[ADDR_LSB +: IDX_W]];
 				axi_rresp   <= 2'b00;
 				axi_rvalid  <= 1'b1;
-				axi_arready <= 1'b0;   // 轉 busy,直到資料被拿走前都不再接受新位址
-			end
-		end else begin
-			// busy:資料已經準備好,等 master 用 RREADY 收走
-			if (S_AXI_RREADY) begin
+			end else begin
+				// 沒有新位址進來,但舊資料被拿走了:回到沒資料狀態
 				axi_rvalid  <= 1'b0;
-				axi_arready <= 1'b1;   // 資料被收走,轉回 idle
 			end
 		end
 	end

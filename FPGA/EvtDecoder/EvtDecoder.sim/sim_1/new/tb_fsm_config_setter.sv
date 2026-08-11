@@ -229,8 +229,8 @@ module tb_fsm_config_setter;
 	always @(posedge clk) begin
 		#1;
 		if (rstn) begin
-			if (rvalid && arready) begin
-				$error("[%0t] 違反 protocol:RVALID=1 的時候 ARREADY 不該是 1(busy 卻還說可以收新位址)", $time);
+			if (rvalid && arready && !rready) begin
+				$error("[%0t] 違反 protocol:RVALID=1、RREADY=0(舊資料沒被拿走)的時候 ARREADY 不該是 1", $time);
 				error_count++;
 			end
 			if (bvalid && (awready || wready)) begin
