@@ -74,6 +74,7 @@ module FsmEventExtractor #(
 	logic cfg_enable;
 	logic cfg_enable_pattern;
 	logic [15:0] cfg_tlast_timeout;
+	logic cfg_tlast_timeout_enable;
 	logic cfg_soft_reset;
 	logic cfg_fifo_clear;
 
@@ -124,7 +125,8 @@ module FsmEventExtractor #(
 
 		.cfg_enable(cfg_enable),
 		.cfg_enable_pattern(cfg_enable_pattern),
-		.cfg_tlast_timeout(cfg_tlast_timeout)
+		.cfg_tlast_timeout(cfg_tlast_timeout),
+		.cfg_tlast_timeout_enable(cfg_tlast_timeout_enable)
 	);
 
 	/* ---------------- AXI-Lite 控制介面 ---------------- */
@@ -158,6 +160,7 @@ module FsmEventExtractor #(
 		.cfg_enable(cfg_enable),
 		.cfg_enable_pattern(cfg_enable_pattern),
 		.cfg_tlast_timeout(cfg_tlast_timeout),
+		.cfg_tlast_timeout_enable(cfg_tlast_timeout_enable),
 		.cfg_soft_reset(cfg_soft_reset),
 		.cfg_fifo_clear(cfg_fifo_clear)
 	);

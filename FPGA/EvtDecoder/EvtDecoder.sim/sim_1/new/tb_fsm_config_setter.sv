@@ -46,7 +46,7 @@ module tb_fsm_config_setter;
 	logic                rvalid;
 	logic                rready = 0;
 
-	logic cfg_enable, cfg_enable_pattern, cfg_soft_reset, cfg_fifo_clear;
+	logic cfg_enable, cfg_enable_pattern, cfg_tlast_timeout_enable, cfg_soft_reset, cfg_fifo_clear;
 	logic [15:0] cfg_tlast_timeout;
 
 	FsmConfigSetter #(
@@ -77,6 +77,7 @@ module tb_fsm_config_setter;
 		.cfg_enable(cfg_enable),
 		.cfg_enable_pattern(cfg_enable_pattern),
 		.cfg_tlast_timeout(cfg_tlast_timeout),
+		.cfg_tlast_timeout_enable(cfg_tlast_timeout_enable),
 		.cfg_soft_reset(cfg_soft_reset),
 		.cfg_fifo_clear(cfg_fifo_clear)
 	);
@@ -341,6 +342,18 @@ module tb_fsm_config_setter;
 
 		do_reset();
 
+		// --- reset 後的預設值:REG_CONFIG.tlast_timeout_enable 應該是 0(關閉),
+		//     REG_TLAST_TIMEOUT 應該是非 0 的安全預設值,兩者是雙重防線,
+		//     不能讓 reset 完、PS 還沒設定前就發生「每筆都掛 tlast」的空窗期 ---
+		if (cfg_tlast_timeout_enable !== 1'b0) begin
+			$error("reset 後 cfg_tlast_timeout_enable 應該為 0(關閉)");
+			error_count++;
+		end
+		if (cfg_tlast_timeout === 16'h0) begin
+			$error("reset 後 cfg_tlast_timeout 不應該是 0(需要非 0 安全預設值)");
+			error_count++;
+		end
+
 		// --- 具名暫存器 write 後 read-back ---
 		axi_write(32'h00, 32'h0000_0001); // REG_CONTROL.enable=1
 		axi_read(32'h00, rd);
@@ -350,11 +363,15 @@ module tb_fsm_config_setter;
 			error_count++;
 		end
 
-		axi_write(32'h04, 32'h0000_0001); // REG_CONFIG.enable_pattern=1
+		axi_write(32'h04, 32'h0000_0003); // REG_CONFIG.enable_pattern=1, tlast_timeout_enable=1
 		axi_read(32'h04, rd);
-		check_eq("REG_CONFIG read-back", rd, 32'h0000_0001);
+		check_eq("REG_CONFIG read-back", rd, 32'h0000_0003);
 		if (cfg_enable_pattern !== 1'b1) begin
 			$error("cfg_enable_pattern 應該為 1");
+			error_count++;
+		end
+		if (cfg_tlast_timeout_enable !== 1'b1) begin
+			$error("cfg_tlast_timeout_enable 應該為 1");
 			error_count++;
 		end
 

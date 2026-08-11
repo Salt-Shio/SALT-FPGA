@@ -13,9 +13,15 @@
 //
 // 位址對照(word-aligned,32-bit 暫存器):
 //   0x00 REG_CONTROL       bit0=enable bit1=soft_reset bit2=fifo_clear
-//   0x04 REG_CONFIG        bit0=enable_pattern
+//   0x04 REG_CONFIG        bit0=enable_pattern bit1=tlast_timeout_enable
 //   0x08 REG_TLAST_TIMEOUT [15:0]
 //   其他                    純讀寫後門,無功能副作用
+//
+// REG_CONFIG.tlast_timeout_enable 與 REG_TLAST_TIMEOUT 的 reset 預設值是雙重防線,
+// 參考官方 ps_host_if_reg_bank 的 CONFIG_TIMEOUT_ENABLE_DEFAULT/TIMEOUT_VALUE_DEFAULT
+// 設計:enable 預設關閉(0),TLAST_TIMEOUT 本身也給非 0 的合理預設值,避免 reset 完、
+// PS 端還沒來得及設定就發生「flush_timer_q(0) >= cfg_tlast_timeout(0)」恆成立、
+// 每筆事件都被迫掛 tlast 的空窗期。
 //
 // 設計方式:每個 channel 都是明確的 idle/busy 兩態狀態機,ready 訊號本身就是
 // 「目前是不是 idle」的直接體現(reset 完預設 idle=1;收到請求就轉 busy、
@@ -67,6 +73,7 @@ module FsmConfigSetter #(
 		output logic  cfg_enable,
 		output logic  cfg_enable_pattern,
 		output logic [15:0] cfg_tlast_timeout,
+		output logic  cfg_tlast_timeout_enable,
 		output logic  cfg_soft_reset,
 		output logic  cfg_fifo_clear
 	);
@@ -131,6 +138,7 @@ module FsmConfigSetter #(
 	always_ff @(posedge S_AXI_ACLK or negedge S_AXI_ARESETN) begin
 		if (!S_AXI_ARESETN) begin
 			for (int i = 0; i < REG_COUNT; i++) regfile[i] <= '0;
+			regfile[2] <= 16'd12500; // REG_TLAST_TIMEOUT 非 0 安全預設值:125MHz 下 100us
 			axi_awready <= 1'b1;   // reset 完是 idle,可以收新的寫入請求
 			axi_wready  <= 1'b1;
 			axi_bvalid  <= 1'b0;
@@ -189,7 +197,8 @@ module FsmConfigSetter #(
 	assign cfg_enable         = regfile[0][0];
 	assign cfg_soft_reset     = regfile[0][1];
 	assign cfg_fifo_clear     = regfile[0][2];
-	assign cfg_enable_pattern = regfile[1][0];
-	assign cfg_tlast_timeout  = regfile[2][15:0];
+	assign cfg_enable_pattern       = regfile[1][0];
+	assign cfg_tlast_timeout_enable = regfile[1][1];
+	assign cfg_tlast_timeout        = regfile[2][15:0];
 
 endmodule

@@ -63,6 +63,7 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 - 輸出端 flush 機制定案:不做心跳、不合成 filler event(PS 端可以接受完全靜默時一直等)。只用一顆逾時計時器,吐真事件時如果計時器超過門檻就在那筆事件上掛 `tlast=1` 提前結束這次 DMA 傳輸,沒超過正常送。完全沒事件時計時器繼續累加但不做任何事,下一筆真事件出現時會立刻被掛 `tlast`
 - 新模組需要 AXI-Lite slave 介面,不是只有 AXI4-Stream。最少要有 `REG_CONTROL`(enable/reset/clear,對照 `psee-dma.c` 實際用法:`reset` 只在 driver 初始化用一次、`enable` 對應 `STREAMON`/`STREAMOFF`、`clear` 在 `STREAMOFF` 時一起用來清空 FIFO 裡的舊資料)。逾時門檻做成 `REG_TLAST_TIMEOUT` 這種 PS 可調的暫存器,不寫死——理由:AXI-Lite 介面反正都要做,多一個暫存器成本很低,寫死的話以後要調數字得重新合成整個 FPGA,划不來
 - 額外加兩個除錯用暫存器,理由同上(AXI-Lite 已經在,多開成本低):`REG_CONFIG.enable_pattern`(吐假 `(x,y,type,t)`,不用等解碼邏輯寫完、不用接真感測器就能測 DMA→kernel driver→PS 軟體這條路,對照 `ps_host_if` 同名機制)、原始暫存器讀寫後門(`g_register`/`s_register`,對照 ESST/`ps_host_if` 的 `CONFIG_VIDEO_ADV_DEBUG` 模式)
+- `REG_CONFIG` 新增 `bit1=tlast_timeout_enable`,reset 預設 0(關閉);`REG_TLAST_TIMEOUT` reset 預設值改成非 0(125MHz 下 100us,即 `16'd12500`)。兩者是雙重防線,理由:對照官方 `ps_host_if_reg_bank` 的 `CONFIG_TIMEOUT_ENABLE_DEFAULT`(預設關閉)+ `TIMEOUT_VALUE_DEFAULT`(非 0),避免我們原本的設計(沒有 enable 位元、`REG_TLAST_TIMEOUT` reset 為 0)在 reset 完、PS 端還沒來得及寫入設定值之前,`flush_timer_q(0) >= cfg_tlast_timeout(0)` 恆成立,導致每一筆事件都被迫掛 `tlast`。PS 端驅動要記得在 `STREAMON`(`REG_CONTROL.enable=1`)之前或同時把這個位元跟門檻值設好,避免踩到同樣的空窗期。
 - FIFO 深度(16 筆)不能做成動態可調——是實體記憶體大小,合成時就決定了,不是邏輯參數
 
 ## 查證細節

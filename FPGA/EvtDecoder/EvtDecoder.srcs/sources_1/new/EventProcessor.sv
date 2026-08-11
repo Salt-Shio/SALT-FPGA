@@ -56,7 +56,8 @@ module EventProcessor #(
 	// 來自 FsmConfigSetter 的控制訊號
 	input logic  cfg_enable,
 	input logic  cfg_enable_pattern,
-	input logic [15:0] cfg_tlast_timeout
+	input logic [15:0] cfg_tlast_timeout,
+	input logic  cfg_tlast_timeout_enable
 );
 	/* 內部暫存器 */
 	logic state_q;
@@ -103,7 +104,7 @@ module EventProcessor #(
 	logic sending_event;
 	assign sending_event = (state_q == EXPAND) && (M_AXIS_TREADY || !m_valid_q) && (td_mask != '0);
 	logic tlast_due;
-	assign tlast_due = sending_event && (flush_timer_q >= cfg_tlast_timeout);
+	assign tlast_due = sending_event && cfg_tlast_timeout_enable && (flush_timer_q >= cfg_tlast_timeout);
 
 	/* 主要狀態機 */
 	assign S_AXIS_TREADY = (state_q == FETCH) && cfg_enable;

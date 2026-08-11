@@ -32,6 +32,7 @@ module tb_event_processor;
 	logic cfg_enable = 1;
 	logic cfg_enable_pattern = 0;
 	logic [15:0] cfg_tlast_timeout = 16'hFFFF;
+	logic cfg_tlast_timeout_enable = 1;
 
 	EventProcessor #(
 		.C_S_AXIS_TDATA_WIDTH(TDATA_W),
@@ -51,7 +52,8 @@ module tb_event_processor;
 		.M_AXIS_TREADY(m_ready),
 		.cfg_enable(cfg_enable),
 		.cfg_enable_pattern(cfg_enable_pattern),
-		.cfg_tlast_timeout(cfg_tlast_timeout)
+		.cfg_tlast_timeout(cfg_tlast_timeout),
+		.cfg_tlast_timeout_enable(cfg_tlast_timeout_enable)
 	);
 
 	always #5 clk = ~clk;
@@ -302,6 +304,15 @@ module tb_event_processor;
 		cfg_tlast_timeout = 16'hFFFF;
 		send_td(4'h1, 6'h0, 11'd9, 11'd9, 32'h5); // 2 bits
 		check_tlast_all(1'b0, 2);
+
+		// --- Test 7c: cfg_tlast_timeout_enable=0 時,即使 timeout=0 也不該掛 tlast
+		// (驗證 enable 位元是獨立開關,不是只看 timeout 數值) ---
+		cfg_tlast_timeout_enable = 1'b0;
+		cfg_tlast_timeout = 16'h0;
+		send_td(4'h0, 6'h1, 11'd9, 11'd9, 32'h5); // 2 bits
+		check_tlast_all(1'b0, 2);
+		cfg_tlast_timeout_enable = 1'b1;
+		cfg_tlast_timeout = 16'hFFFF;
 
 		// --- Test 8: 大量隨機事件,上游送資料前隨機空拍 + 下游隨機 backpressure 同時開著 ---
 		// 這是專門回應「master 行為是不是被定死」的測試:位址/type/mask 隨機、
