@@ -427,6 +427,55 @@ driver 透過 V4L2 subdev core/video/pad ops 暴露的暫存器只有三個:
 
 **未解決的矛盾**:上表步驟 4 的 `V4L2_SENSOR_PATH=/dev/v4l-subdev3` 環境變數確實被使用且生效,但前一節查證(這份 clone 的 OpenEB 原始碼,`main`/`5.2.0`)搜尋這個環境變數是零命中。兩者不一致,原因未查證。可能是板子上實際運作的 `metavision_viewer` 二進位檔對應另一個版本的 OpenEB(官方文件提過「modified version of OpenEB」),與這份 clone 版本不同。此矛盾待查證,不應假設任一版本正確。
 
+## Vivado block design 整合(2026-08-12,步驟 9 完成)
+
+### 建置環境
+
+baseline 專案(含 `ps_host_if_0`、`axi_dma` 等官方接線)用 `FPGA/fpga-projects-1.0.0/projects/kv260/scripts/kv260_patched_2025_2.tcl`(針對 Vivado 2025.2 修過的版本,原始 `kv260.tcl` 是 2022.2.1 產生的)在 Vivado Tcl Console 用 `source` 建出來,輸出在 `FPGA/fpga-projects-1.0.0/build/projects/kv260/`。這個路徑是實際建置用的,`docs/FPGA/Reference/` 底下那份 `fpga-projects-1.0.0` 只是給查證用的參考副本,兩者是分開的兩份複本。
+
+### `FsmEventExtractor` 封裝成 IP
+
+用 Vivado「Package IP」(Tools → Create and Package New IP → Package your current project,來源是 `FPGA/EvtDecoder/EvtDecoder.xpr`)封裝,VLNV `csnn-fpga.local:ip:fsm_event_extractor:1.0`,輸出到 `FPGA/ip_repo/fsm_event_extractor/`(這個資料夾是容器,以後其他自封裝 IP 也放在同一層,不綁版本號進資料夾名字——資料夾名字跟 `component.xml` 內部的版本號是各自獨立的兩件事,不需要每次改版就開新資料夾,除非要故意讓新舊版本並存,那才用 Vivado 的「Create a New IP Version」功能)。
+
+Compatibility 頁只留 `zynquplus`(跟官方 `ps_host_if_3_0` 一致,`zynq`/`azynq` 這種沒驗證過的 family 不要宣告),「Package for Vitis」「Package for IPI」都不勾(官方也沒用,這兩個是給不同流程用的功能,不影響一般手動接線的 Block Design 使用方式)。
+
+### 踩到的坑:`AXIS_ACLK` 沒有自動關聯到 `S_AXI`
+
+`FsmEventExtractor` 頂層只有一根 clock(`AXIS_ACLK`),內部同時接給 `S_AXIS`/`M_AXIS`/`S_AXI` 三個介面用。但 Package IP 精靈在 Ports and Interfaces 頁自動偵測 clock 關聯時,是**照 port 命名慣例做字面比對**,不是真的去分析 RTL 內部接線:名字裡帶 `axis` 字樣的 clock 只會被自動關聯到 Stream 類介面(`M_AXIS`/`S_AXIS`),不會被關聯到 AXI-Lite(`S_AXI`)——因為 AXI-Lite 慣例預期的 clock 名字是 `s_axi_aclk` 這種字面,對不上 `AXIS_ACLK`。
+
+症狀:`validate_bd_design` 出現
+
+```
+CRITICAL WARNING: [BD 41-967] AXI interface pin /fsm_event_extractor_0/S_AXI is not associated to any clock pin.
+ERROR: [BD 41-237] Bus Interface property FREQ_HZ does not match between
+       /fsm_event_extractor_0/S_AXI(100000000) and /axi_interconnect_master_lpd/xbar/M03_AXI(124998749)
+```
+
+第二條是第一條的連帶後果:`S_AXI` 沒關聯到任何 clock,Vivado 就塞一個預設 100MHz 進去,跟實際接的 125MHz 對不上,擋下合成。
+
+修法:Block Design 裡右鍵該 cell → **Edit in IP Packager...** → Ports and Interfaces → 右鍵 `Clock and Reset Signals` 底下的 `AXIS_ACLK` → **Edit Interface...** → **Parameters** 分頁 → `Overridden` 底下的 **`ASSOCIATED_BUSIF`** 參數,把值從 `M_AXIS:S_AXIS` 改成 `M_AXIS:S_AXIS:S_AXI`,重新 Package IP。改完回 Block Design,Vivado 會提示該 cell 的 IP 定義已更新,跳出 **Generate Output Products** 對話框,需要重新生成該 IP 的輸出檔案。
+
+對照官方 `ps_host_if_3_0/component.xml`(第 310–334 行),它的 clock port 直接取通用名字 **`aclk`**(不是 `axis_aclk`),`ASSOCIATED_BUSIF` 寫的是 `m_axis:s_axis:s_axi_lite`,三個介面都包含。教訓:多介面共用的 clock/reset,命名盡量中性(`aclk`/`aresetn`),避免因為命名慣例被自動偵測誤判;但即使取中性名字,仍建議每次都進 Ports and Interfaces 頁肉眼確認,不要完全依賴自動偵測。
+
+### AXI-Lite 位址分配
+
+在 Block Design 的 **Address Editor** 分頁手動分配(不用 auto-assign,因為 auto-assign 給的位址跟大小通常不好對照文件),沿用 `ps_host_if_0` 原本空出來的位址:
+
+| 項目 | 值 | 理由 |
+|---|---|---|
+| Base Address | `0xA0030000` | 沿用 `ps_host_if_0` 原本的位址(已從 block design 移除,位址空出來),與本文件既有記錄一致 |
+| Range | `128`(`0x80`) | `FsmConfigSetter.sv` 的 `REG_COUNT=16` 個 32-bit 暫存器,實際用到 `0x00`~`0x3C`(64 bytes),AXI 位址區塊大小規定要 2 的次方,取 ≥64 的最小 2 次方 |
+
+Range 要先設定好、再改 Base Address——順序反過來會出現「proposed address must fit an available aperture」的錯誤(區塊大小沒對齊前,起始位址的對齊檢查會用舊的、過大的 Range 去驗證,導致合法位址被拒絕)。
+
+### `Generate Output Products` 曾經誤判為環境問題,其實是背景批次腳本互相搶檔案
+
+跑合成時一度出現兩個錯誤(`mipi_csi2_rx_subsyst_0` 內部一個 `_board.xdc` 找不到、`Failed to create directory 'C:'`),一開始懷疑是這台機器 KV260 board 檔案裝不完整。後來用 Vivado batch mode 單獨重跑 `generate_target all [get_files kv260.bd] -force` 完全乾淨過關,確認 `kv260_som`(1.4)+ `kv260_carrier`(1.3,`board_connections` 指定的版本)的 board 檔案本身是完整的,`som240_1_connector_mipi_csi_raspi`、`som240_1_connector_hda_iic_switch` 這些 `BOARD_INTERFACE` 都能正常解析。真正原因是**同時有另一個 Vivado batch 程序在背景跑檢查腳本,跟 GUI 的 Generate 搶著寫同一批產生檔案**,不是環境或板卡檔案缺失。教訓:對同一個 Vivado 專案跑批次 Tcl 檢查時,避免跟 GUI 操作同時進行。
+
+### 專案檔案配置調整:`.gitignore`
+
+`FPGA/fpga-projects-1.0.0` 與 `FPGA/ip_repo` 原本整個被最外層 `.gitignore` 當「外部參考碼」忽略,今天在裡面建了實際的 kv260 專案跟封裝了自己的 IP 之後,這個假設不成立,已把這兩行從 `.gitignore` 移除。另外 `FPGA/fpga-projects-1.0.0/.gitignore`(官方原始碼自帶的)裡有一行 `build/`,會擋住 `kv260.bd` 這類我們自己產出的東西,也已移除,改交給外層通用的 Vivado 產物規則(`*.cache/`、`*.gen/`、`*.runs/` 等,不含路徑前綴,任何深度都適用)過濾——驗證過,拿掉這三行規則後只新增 224 個原始碼/設定檔(`.vhd`/`.tcl`/`.sv`/`.xci`/`.bd`/`component.xml` 等),沒有任何自動產生的大量檔案混進來。
+
 ## 參考檔案索引
 
 | 主題 | 路徑 |

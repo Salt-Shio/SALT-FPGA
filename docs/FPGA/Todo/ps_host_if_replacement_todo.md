@@ -22,7 +22,7 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 
 ## 解碼模組實作步驟(依序做,由使用者實作,這裡只列順序跟每步的驗收標準)
 
-目前進度:1~8(RTL 邏輯 + 模擬驗證)已完成,全部在 xsim 上跑過 testbench 確認 PASS。**下一步是 9(Vivado block design 整合)**,9~11(上板、kernel driver)都還沒開始,這些需要接觸實體硬體/PetaLinux 環境,模擬驗證不能取代。
+目前進度:1~9(RTL 邏輯 + 模擬驗證 + Vivado block design 整合)已完成。**下一步是 10(上板驗證)**,10~11(上板、kernel driver)都還沒開始,這些需要接觸實體硬體/PetaLinux 環境,模擬驗證不能取代。
 
 1. **建 RTL 專案目錄結構**(已完成):`EvtDecoder.srcs/sources_1/new/`(原始碼)、`EvtDecoder.sim/sim_1/new/`(testbench)分開。
 2. **bit-scan 組合邏輯**(已完成):`EventProcessor.sv` 裡的 `x_offset` 低位優先編碼器,`tb_event_processor.sv` 驗證過。
@@ -32,7 +32,7 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 6. **AXI-Lite slave 介面**(已完成):`FsmConfigSetter.sv`,`REG_CONTROL`/`REG_CONFIG`/`REG_TLAST_TIMEOUT`/除錯後門都有,AR/R channel 額外做過 back-to-back 讀取優化(組合邏輯算 `ARREADY`,實測比原始 latch 設計與官方 `ps_host_if_reg_bank` 都快一倍)。
 7. **頂層模組**(已完成):`FsmEventExtractor.sv`,對外只留 `s_axis`/`m_axis`/`s_axi_lite`。
 8. **Testbench 驗證**(已完成):`tb_fsm_config_setter.sv`(隨機化 master 行為 + protocol checker + reset 預設值檢查)、`tb_event_processor.sv`(隨機事件 + backpressure)、`tb_fsm_event_extractor.sv`(整合測試,真實 EVT2.1 封包序列 + FIFO 反壓驗證)全部 `ALL PASS`。
-9. **Vivado block design 整合**(尚未開始):換掉 `ps_host_if_0`,接線見 Concept 筆記「Vivado block design」那節。
+9. **Vivado block design 整合**(已完成):`FsmEventExtractor` 封裝成 IP(`csnn-fpga.local:ip:fsm_event_extractor:1.0`,位於 `FPGA/ip_repo/fsm_event_extractor`),在 `kv260` block design 裡換掉 `ps_host_if_0`,接線、AXI-Lite 位址(`0xA0030000`,range 128)、clock 關聯都已修正,`validate_bd_design` 與 `Generate Output Products` 皆乾淨通過。細節見 Concept 筆記「Vivado block design 整合(2026-08-12)」那節。
 10. **上板驗證**(尚未開始):先用 `REG_CONFIG.enable_pattern` 假資料測完「`axi_dma` → kernel driver → PS 軟體」這條路,確認通了再接真感測器,避免同時除錯 RTL 邏輯跟資料路徑兩個問題。
 11. **Kernel driver**(尚未開始):仿 `psee-composite.c`(V4L2 media graph)+ `psee-dma.c`(`dma_request_chan` 接 `xilinx_dma`)兩層模式。
 
@@ -63,6 +63,8 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 - 額外加兩個除錯用暫存器,理由同上(AXI-Lite 已經在,多開成本低):`REG_CONFIG.enable_pattern`(吐假 `(x,y,type,t)`,不用等解碼邏輯寫完、不用接真感測器就能測 DMA→kernel driver→PS 軟體這條路,對照 `ps_host_if` 同名機制)、原始暫存器讀寫後門(`g_register`/`s_register`,對照 ESST/`ps_host_if` 的 `CONFIG_VIDEO_ADV_DEBUG` 模式)
 - `REG_CONFIG` 新增 `bit1=tlast_timeout_enable`,reset 預設 0(關閉);`REG_TLAST_TIMEOUT` reset 預設值改成非 0(125MHz 下 100us,即 `16'd12500`)。兩者是雙重防線,理由:對照官方 `ps_host_if_reg_bank` 的 `CONFIG_TIMEOUT_ENABLE_DEFAULT`(預設關閉)+ `TIMEOUT_VALUE_DEFAULT`(非 0),避免我們原本的設計(沒有 enable 位元、`REG_TLAST_TIMEOUT` reset 為 0)在 reset 完、PS 端還沒來得及寫入設定值之前,`flush_timer_q(0) >= cfg_tlast_timeout(0)` 恆成立,導致每一筆事件都被迫掛 `tlast`。PS 端驅動要記得在 `STREAMON`(`REG_CONTROL.enable=1`)之前或同時把這個位元跟門檻值設好,避免踩到同樣的空窗期。
 - FIFO 深度(16 筆)不能做成動態可調——是實體記憶體大小,合成時就決定了,不是邏輯參數
+- kv260 Vivado 專案的實際建置位置是 `FPGA/fpga-projects-1.0.0/build/projects/kv260`(用 `scripts/kv260_patched_2025_2.tcl` 建出來的),`docs/FPGA/Reference/` 底下那份是純參考副本,不是建置用的
+- `FPGA/fpga-projects-1.0.0` 與 `FPGA/ip_repo` 已從 `.gitignore` 移除(原本整個被當「外部參考碼」忽略);`FPGA/fpga-projects-1.0.0/.gitignore`(官方原始碼帶的)裡的 `build/` 規則也已拿掉,改交給外層通用的 Vivado 產物規則(`*.cache/`、`*.gen/`、`*.runs/` 等)過濾,`kv260.bd`、`.xci`、`component.xml` 這類原始碼/設定檔正常進版控
 
 ## 查證細節
 

@@ -1,7 +1,5 @@
 # 外部參考原始碼(複製進來或 clone 的第三方專案,不是本專案產出)
-FPGA/fpga-projects-1.0.0
 FPGA/zipcpu
-FPGA/ip_repo
 docs/FPGA/Reference
 
 # Claude Code 本機設定(跟機器/使用者綁定,不共用)
