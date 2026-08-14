@@ -1,0 +1,426 @@
+<title>GenX320 驅動關係圖</title>
+<style>
+  :root {
+    --bg: #EDF0EF;
+    --surface: #FFFFFF;
+    --surface-2: #E3E8E6;
+    --ink: #17201E;
+    --muted: #59645F;
+    --line: #38423F;
+    --accent-data: #1F7A6C;
+    --accent-data-soft: #DCEEE9;
+    --accent-ctrl: #A8672F;
+    --accent-ctrl-soft: #F4E7D7;
+    --accent-boundary: #47548C;
+    --accent-boundary-soft: #E5E7F4;
+    --font-cjk: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", "Heiti TC", system-ui, sans-serif;
+    --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, "Courier New", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101617;
+      --surface: #1B2325;
+      --surface-2: #232E2F;
+      --ink: #E7ECEA;
+      --muted: #93A19D;
+      --line: #B7C1BD;
+      --accent-data: #52C2AA;
+      --accent-data-soft: #1B332E;
+      --accent-ctrl: #E3AC6E;
+      --accent-ctrl-soft: #3A2C1C;
+      --accent-boundary: #939EE4;
+      --accent-boundary-soft: #232744;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101617;
+    --surface: #1B2325;
+    --surface-2: #232E2F;
+    --ink: #E7ECEA;
+    --muted: #93A19D;
+    --line: #B7C1BD;
+    --accent-data: #52C2AA;
+    --accent-data-soft: #1B332E;
+    --accent-ctrl: #E3AC6E;
+    --accent-ctrl-soft: #3A2C1C;
+    --accent-boundary: #939EE4;
+    --accent-boundary-soft: #232744;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-cjk);
+    line-height: 1.75;
+  }
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 48px 28px 80px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+  h1 {
+    font-size: 1.7rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .intro {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.98rem;
+    color: var(--ink);
+    max-width: 68ch;
+  }
+  .intro .muted { color: var(--muted); font-size: 0.9rem; }
+  .key-inline {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    padding: 0.05em 0.4em;
+    border-radius: 4px;
+  }
+  .k-data { background: var(--accent-data-soft); color: var(--accent-data); }
+  .k-ctrl { background: var(--accent-ctrl-soft); color: var(--accent-ctrl); }
+  .k-bound { background: var(--accent-boundary-soft); color: var(--accent-boundary); }
+
+  figure {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .diagram-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--surface-2);
+    border-radius: 12px;
+    background: var(--surface);
+    padding: 4px;
+  }
+  svg { display: block; width: 100%; height: auto; min-width: 980px; }
+  figcaption {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  /* svg text roles */
+  text { font-family: var(--font-cjk); fill: var(--ink); }
+  .mono { font-family: var(--font-mono); }
+  .muted-t { fill: var(--muted); }
+  .band-label { font-size: 13px; fill: var(--muted); font-weight: 600; letter-spacing: 0.02em; }
+  .box-title { font-size: 14px; font-weight: 700; }
+  .box-sub { font-size: 11.5px; fill: var(--muted); }
+  .box-sub-mono { font-size: 11px; font-family: var(--font-mono); fill: var(--muted); }
+  .edge-label { font-size: 11px; fill: var(--muted); }
+  .edge-label-strong { font-size: 11.5px; font-weight: 600; }
+
+  /* boxes */
+  .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; }
+  .box-ctrl-id { stroke: var(--accent-ctrl); stroke-width: 2; }
+  .box-data-id { stroke: var(--accent-data); stroke-width: 2.6; }
+  .box-unknown { fill: var(--surface); stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; }
+  .box-changing { fill: var(--accent-ctrl-soft); stroke: var(--accent-ctrl); stroke-width: 1.6; stroke-dasharray: 5 3; }
+
+  /* arrows */
+  .arrow-data { stroke: var(--accent-data); stroke-width: 4; fill: none; }
+  .arrow-ctrl { stroke: var(--accent-ctrl); stroke-width: 1.8; fill: none; stroke-dasharray: 6 4; }
+  .arrow-neutral { stroke: var(--line); stroke-width: 1.3; fill: none; stroke-dasharray: 2.5 3; }
+  .arrow-boundary { stroke: var(--accent-boundary); stroke-width: 2; fill: none; stroke-dasharray: 9 5; }
+  .arrow-unknown { stroke: var(--muted); stroke-width: 1.2; fill: none; stroke-dasharray: 2 3; }
+
+  .label-chip { fill: var(--bg); }
+
+  /* legend */
+  .legend-wrap {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px 24px;
+    padding: 16px 18px;
+    background: var(--surface);
+    border: 1px solid var(--surface-2);
+    border-radius: 10px;
+    font-size: 0.86rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 10px; }
+  .swatch { width: 30px; height: 0; border-top-width: 3px; border-top-style: solid; flex: none; }
+  .sw-data { border-color: var(--accent-data); border-top-width: 4px; }
+  .sw-ctrl { border-color: var(--accent-ctrl); border-top-style: dashed; }
+  .sw-neutral { border-color: var(--line); border-top-style: dotted; }
+  .sw-bound { border-color: var(--accent-boundary); border-top-style: dashed; }
+
+  table.ref {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.86rem;
+    background: var(--surface);
+    border: 1px solid var(--surface-2);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  table.ref caption {
+    text-align: left;
+    font-size: 0.86rem;
+    font-weight: 700;
+    padding: 14px 16px 8px;
+    color: var(--ink);
+  }
+  table.ref th, table.ref td {
+    text-align: left;
+    padding: 9px 16px;
+    border-top: 1px solid var(--surface-2);
+    vertical-align: top;
+  }
+  table.ref th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
+  table.ref td.mono { font-family: var(--font-mono); font-size: 0.82rem; color: var(--ink); }
+  .tbl-wrap { overflow-x: auto; }
+
+  .next-note {
+    font-size: 0.92rem;
+    color: var(--muted);
+    border-top: 1px dashed var(--surface-2);
+    padding-top: 20px;
+  }
+</style>
+
+<div class="page">
+
+  <h1>GenX320 驅動關係圖</h1>
+
+  <div class="intro">
+    <p>
+      這張圖把之前聊過的東西放進同一個畫面:CPU 特權層級、device tree、driver、DMA、
+      V4L2 的 subdev 跟 video device,全部怎麼接在一起。
+    </p>
+    <p>
+      <b>橫軸</b>(左→右)是事件資料實際流過的硬體順序。
+      <b>縱軸</b>(上→下)是同一顆硬體對應到的軟體層次——最上面是使用者空間的
+      <span class="key-inline k-ctrl">/dev/...</span> 節點,中間是 kernel 裡的 driver 程式碼,
+      最下面是 PL 端真正的硬體 IP。
+    </p>
+    <p class="muted">
+      顏色:<span class="key-inline k-data">綠色</span> = 資料本身在走的路(AXI4-Stream / DMA)。
+      <span class="key-inline k-ctrl">橘色</span> = 控制/設定的路(ioctl、暫存器讀寫)。
+      <span class="key-inline k-bound">靛藍</span> = user mode / kernel mode 的特權層級邊界。
+    </p>
+  </div>
+
+  <figure>
+    <div class="diagram-scroll">
+      <svg viewBox="0 0 2020 700" role="img" aria-label="GenX320 事件資料 pipeline 的五個硬體階段,分別對照使用者空間的 /dev 節點、kernel 裡負責的 driver 程式碼、以及 PL 端的硬體 IP,並標出資料流(綠色)、控制流(橘色)、device tree phandle 參照(灰色)、以及 user/kernel mode 特權層級邊界(靛藍)">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 Z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+
+        <!-- band labels -->
+        <text x="44" y="24" class="band-label">使用者空間 · user mode</text>
+        <text x="44" y="148" class="band-label">kernel 空間 · kernel mode</text>
+        <text x="44" y="234" class="band-label">driver 程式碼(kernel module)</text>
+        <text x="44" y="374" class="band-label">硬體 · PL 端 IP(由 Vivado block design 決定接線)</text>
+
+        <!-- ===== Row 1: /dev nodes ===== -->
+        <!-- col0 sensor -->
+        <rect x="60" y="44" width="300" height="64" rx="10" class="box box-ctrl-id"></rect>
+        <text x="210" y="70" text-anchor="middle" class="box-title">/dev/v4l-subdev3</text>
+        <text x="210" y="90" text-anchor="middle" class="box-sub">sensor subdev(bias 設定走這裡)</text>
+
+        <!-- col1 csi2rx -->
+        <rect x="400" y="44" width="300" height="64" rx="10" class="box box-ctrl-id"></rect>
+        <text x="550" y="70" text-anchor="middle" class="box-title">/dev/v4l-subdev0</text>
+        <text x="550" y="90" text-anchor="middle" class="box-sub">MIPI CSI-2 RX subdev</text>
+
+        <!-- col2 tkeep -->
+        <rect x="740" y="44" width="300" height="64" rx="10" class="box box-ctrl-id"></rect>
+        <text x="890" y="70" text-anchor="middle" class="box-title">/dev/v4l-subdev2</text>
+        <text x="890" y="90" text-anchor="middle" class="box-sub">tkeep_handler subdev</text>
+
+        <!-- col3 ESST -->
+        <rect x="1080" y="44" width="300" height="64" rx="10" class="box box-ctrl-id"></rect>
+        <text x="1230" y="70" text-anchor="middle" class="box-title">/dev/v4l-subdev1</text>
+        <text x="1230" y="90" text-anchor="middle" class="box-sub">ESST subdev</text>
+
+        <!-- col4 video device -->
+        <rect x="1420" y="44" width="300" height="64" rx="10" class="box box-data-id"></rect>
+        <text x="1570" y="70" text-anchor="middle" class="box-title">/dev/video0</text>
+        <text x="1570" y="90" text-anchor="middle" class="box-sub">video device(唯一有 vb2 queue / mmap 的節點)</text>
+
+        <!-- DT card, floating upper-right -->
+        <rect x="1760" y="40" width="220" height="176" rx="10" class="box box-unknown"></rect>
+        <text x="1870" y="60" text-anchor="middle" class="box-title" style="font-size:12.5px">device tree 節點(示範一份)</text>
+        <text x="1774" y="80" class="mono box-sub-mono">esst@a0050000 {</text>
+        <text x="1786" y="96" class="mono box-sub-mono">compatible =</text>
+        <text x="1786" y="110" class="mono box-sub-mono">"psee,event-...";</text>
+        <text x="1786" y="126" class="mono box-sub-mono">reg = &lt;0xa0050000&gt;;</text>
+        <text x="1786" y="142" class="mono box-sub-mono">ports { port@1 {</text>
+        <text x="1798" y="158" class="mono box-sub-mono">remote-endpoint</text>
+        <text x="1798" y="172" class="mono box-sub-mono">= &lt;&amp;packetizer_in&gt;;</text>
+        <text x="1786" y="188" class="mono box-sub-mono">}; };</text>
+        <text x="1774" y="204" class="mono box-sub-mono">};</text>
+
+        <!-- boundary line -->
+        <line x1="30" y1="134" x2="1980" y2="134" class="arrow-boundary"></line>
+        <rect x="360" y="120" width="380" height="24" rx="12" class="label-chip"></rect>
+        <text x="550" y="137" text-anchor="middle" class="edge-label-strong" style="fill:var(--accent-boundary)">syscall 邊界 —— open() / ioctl() / mmap()</text>
+
+        <!-- kernel matching strip -->
+        <rect x="60" y="164" width="1660" height="46" rx="10" class="box box-unknown"></rect>
+        <text x="890" y="182" text-anchor="middle" class="box-sub">kernel 通用機制:platform bus / of 子系統</text>
+        <text x="890" y="198" text-anchor="middle" class="box-sub">掃 compatible 字串,配到登記過的 driver 就呼叫它的 probe()</text>
+
+        <!-- DT card -> strip arrow -->
+        <polyline points="1770,196 1735,196 1735,187 1721,187" class="arrow-neutral" marker-end="url(#arrow)"></polyline>
+        <text x="1645" y="226" text-anchor="middle" class="edge-label">compatible 字串</text>
+
+        <!-- row1 -> boundary -> strip, control arrows (col0-3) -->
+        <line x1="210" y1="108" x2="210" y2="164" class="arrow-ctrl" marker-end="url(#arrow)"></line>
+        <line x1="550" y1="108" x2="550" y2="164" class="arrow-ctrl" marker-end="url(#arrow)"></line>
+        <line x1="890" y1="108" x2="890" y2="164" class="arrow-ctrl" marker-end="url(#arrow)"></line>
+        <rect x="900" y="112" width="140" height="18" rx="4" class="label-chip"></rect>
+        <text x="970" y="126" text-anchor="middle" class="edge-label" style="fill:var(--accent-ctrl)">ioctl(VIDIOC_S_CTRL 等)</text>
+        <line x1="1230" y1="108" x2="1230" y2="164" class="arrow-ctrl" marker-end="url(#arrow)"></line>
+
+        <!-- col4 control arrow -->
+        <line x1="1500" y1="108" x2="1500" y2="164" class="arrow-ctrl" marker-end="url(#arrow)"></line>
+        <rect x="1408" y="112" width="150" height="18" rx="4" class="label-chip"></rect>
+        <text x="1483" y="126" text-anchor="middle" class="edge-label" style="fill:var(--accent-ctrl)">ioctl(QBUF / STREAMON)</text>
+
+        <!-- strip -> row2 probe arrows -->
+        <line x1="210" y1="210" x2="210" y2="246" class="arrow-neutral" marker-end="url(#arrow)"></line>
+        <line x1="550" y1="210" x2="550" y2="246" class="arrow-neutral" marker-end="url(#arrow)"></line>
+        <line x1="890" y1="210" x2="890" y2="246" class="arrow-neutral" marker-end="url(#arrow)"></line>
+        <text x="960" y="232" class="edge-label">配對成功 → probe()</text>
+        <line x1="1230" y1="210" x2="1230" y2="246" class="arrow-neutral" marker-end="url(#arrow)"></line>
+        <line x1="1570" y1="210" x2="1570" y2="246" class="arrow-neutral" marker-end="url(#arrow)"></line>
+
+        <!-- ===== Row 2: driver code ===== -->
+        <rect x="60" y="246" width="300" height="80" rx="10" class="box box-unknown"></rect>
+        <text x="210" y="278" text-anchor="middle" class="box-sub" style="font-size:12px">genx320 sensor driver</text>
+        <text x="210" y="296" text-anchor="middle" class="box-sub">(不在這次查證範圍內)</text>
+
+        <rect x="400" y="246" width="300" height="80" rx="10" class="box"></rect>
+        <text x="550" y="278" text-anchor="middle" class="mono box-title" style="font-size:13px">psee-csi2rxss.c</text>
+        <text x="550" y="298" text-anchor="middle" class="box-sub">(改自 xlnx-csi2rxss driver)</text>
+
+        <rect x="740" y="246" width="300" height="80" rx="10" class="box"></rect>
+        <text x="890" y="278" text-anchor="middle" class="mono box-title" style="font-size:13px">psee-tkeep-handler.c</text>
+        <text x="890" y="298" text-anchor="middle" class="box-sub">v4l2 subdev,無 devnode 外的資料介面</text>
+
+        <rect x="1080" y="246" width="300" height="80" rx="10" class="box"></rect>
+        <text x="1230" y="278" text-anchor="middle" class="mono box-title" style="font-size:12.5px">psee-event-stream-</text>
+        <text x="1230" y="294" text-anchor="middle" class="mono box-title" style="font-size:12.5px">smart-tracker.c</text>
+
+        <rect x="1420" y="246" width="300" height="80" rx="10" class="box box-data-id"></rect>
+        <text x="1570" y="272" text-anchor="middle" class="mono box-title" style="font-size:13px">psee-dma.c</text>
+        <text x="1570" y="290" text-anchor="middle" class="box-sub">同時管:packetizer 暫存器</text>
+        <text x="1570" y="304" text-anchor="middle" class="box-sub">+ vb2 buffer queue + DMA channel</text>
+
+        <!-- row2 -> row3 arrows -->
+        <line x1="210" y1="326" x2="210" y2="386" class="arrow-unknown" marker-end="url(#arrow)"></line>
+        <line x1="550" y1="326" x2="550" y2="386" class="arrow-ctrl" marker-end="url(#arrow)"></line>
+        <line x1="890" y1="326" x2="890" y2="386" class="arrow-ctrl" marker-end="url(#arrow)"></line>
+        <rect x="900" y="330" width="150" height="18" rx="4" class="label-chip"></rect>
+        <text x="975" y="344" text-anchor="middle" class="edge-label" style="fill:var(--accent-ctrl)">write_reg() / read_reg()</text>
+        <line x1="1230" y1="326" x2="1230" y2="386" class="arrow-ctrl" marker-end="url(#arrow)"></line>
+
+        <!-- col4 splits to ps_host_if + axi_dma -->
+        <line x1="1500" y1="326" x2="1490" y2="386" class="arrow-ctrl" marker-end="url(#arrow)"></line>
+        <line x1="1620" y1="326" x2="1650" y2="386" class="arrow-unknown" marker-end="url(#arrow)"></line>
+        <rect x="1580" y="330" width="140" height="18" rx="4" class="label-chip"></rect>
+        <text x="1650" y="344" text-anchor="middle" class="edge-label">dma_request_chan()</text>
+
+        <!-- ===== Row 3: hardware ===== -->
+        <rect x="60" y="386" width="300" height="66" rx="10" class="box"></rect>
+        <text x="210" y="410" text-anchor="middle" class="box-title" style="font-size:13px">GenX320 感光元件</text>
+        <text x="210" y="428" text-anchor="middle" class="mono box-sub-mono">genx320 6-003c(I2C)</text>
+
+        <rect x="400" y="386" width="300" height="66" rx="10" class="box"></rect>
+        <text x="550" y="408" text-anchor="middle" class="box-title" style="font-size:12.5px">MIPI CSI-2 RX Subsystem</text>
+        <text x="550" y="426" text-anchor="middle" class="box-sub">Xilinx 官方 IP · 無 RTL 原始碼</text>
+
+        <rect x="740" y="386" width="300" height="66" rx="10" class="box"></rect>
+        <text x="890" y="408" text-anchor="middle" class="box-title" style="font-size:13px">axis_tkeep_handler</text>
+        <text x="890" y="426" text-anchor="middle" class="mono box-sub-mono">compatible = psee,axis-tkeep-handler</text>
+
+        <rect x="1080" y="386" width="300" height="66" rx="10" class="box"></rect>
+        <text x="1230" y="408" text-anchor="middle" class="box-title" style="font-size:13px">event_stream_smart_tracker</text>
+        <text x="1230" y="426" text-anchor="middle" class="mono box-sub-mono" style="font-size:10px">compatible = psee,event-stream-smart-tracker</text>
+
+        <rect x="1420" y="386" width="140" height="66" rx="10" class="box box-changing"></rect>
+        <text x="1490" y="406" text-anchor="middle" class="box-title" style="font-size:12px">ps_host_if</text>
+        <text x="1490" y="422" text-anchor="middle" class="box-sub" style="font-size:10px">以後是我們的</text>
+        <text x="1490" y="434" text-anchor="middle" class="box-sub" style="font-size:10px">FsmEventExtractor</text>
+
+        <rect x="1580" y="386" width="140" height="66" rx="10" class="box"></rect>
+        <text x="1650" y="410" text-anchor="middle" class="box-title" style="font-size:13px">axi_dma</text>
+        <text x="1650" y="428" text-anchor="middle" class="box-sub" style="font-size:10px">Xilinx 官方 IP,無原始碼</text>
+
+        <!-- row3 horizontal data chain -->
+        <line x1="360" y1="419" x2="400" y2="419" class="arrow-data" marker-end="url(#arrow)"></line>
+        <text x="380" y="405" text-anchor="middle" class="edge-label" style="fill:var(--accent-data)">AXI4-Stream</text>
+        <line x1="700" y1="419" x2="740" y2="419" class="arrow-data" marker-end="url(#arrow)"></line>
+        <line x1="1040" y1="419" x2="1080" y2="419" class="arrow-data" marker-end="url(#arrow)"></line>
+        <line x1="1380" y1="419" x2="1420" y2="419" class="arrow-data" marker-end="url(#arrow)"></line>
+        <line x1="1560" y1="419" x2="1580" y2="419" class="arrow-data" marker-end="url(#arrow)"></line>
+
+        <!-- axi_dma -> DDR -->
+        <line x1="1650" y1="452" x2="1650" y2="482" class="arrow-data" marker-end="url(#arrow)"></line>
+        <rect x="1420" y="482" width="260" height="46" rx="10" class="box box-data-id"></rect>
+        <text x="1550" y="502" text-anchor="middle" class="box-title" style="font-size:13px">PS DDR 記憶體</text>
+        <text x="1550" y="518" text-anchor="middle" class="box-sub" style="font-size:10px">M_AXI_S2MM · DMA 直接寫入,不經 CPU</text>
+
+        <!-- bypass mmap arrow, orthogonal, right margin -->
+        <polyline points="1720,74 1748,74 1748,505 1682,505" class="arrow-data" marker-end="url(#arrow)"></polyline>
+        <rect x="1728" y="255" width="40" height="120" rx="6" class="label-chip"></rect>
+        <text x="1748" y="315" text-anchor="middle" class="edge-label-strong" style="fill:var(--accent-data)" transform="rotate(-90 1748 315)">mmap() 直接看到 DMA 寫的記憶體</text>
+
+        <!-- ===== legend row (inside svg) ===== -->
+        <line x1="60" y1="578" x2="110" y2="578" class="arrow-data"></line>
+        <text x="120" y="583" class="edge-label-strong">資料本身在走(AXI4-Stream / DMA)</text>
+
+        <line x1="60" y1="606" x2="110" y2="606" class="arrow-ctrl"></line>
+        <text x="120" y="611" class="edge-label-strong">控制 / 設定(ioctl、write_reg)</text>
+
+        <line x1="580" y1="578" x2="630" y2="578" class="arrow-neutral"></line>
+        <text x="640" y="583" class="edge-label-strong">kernel 通用機制的配對動作</text>
+
+        <line x1="580" y1="606" x2="630" y2="606" class="arrow-boundary"></line>
+        <text x="640" y="611" class="edge-label-strong">user mode / kernel mode 邊界</text>
+
+        <line x1="1120" y1="578" x2="1170" y2="578" class="arrow-unknown"></line>
+        <text x="1180" y="583" class="edge-label-strong">未查證 / 標準框架代勞,細節未深入</text>
+      </svg>
+    </div>
+    <figcaption>
+      圖中編號取自實測 <span class="mono">media-ctl -p</span> 的真實輸出(subdev 編號不是照順序分配,是系統實際探測到的結果)。
+    </figcaption>
+  </figure>
+
+  <div class="tbl-wrap">
+    <table class="ref">
+      <caption>圖上標籤對應的實際檔案(想核對細節可以直接翻這幾份)</caption>
+      <thead>
+        <tr><th>圖上標籤</th><th>實際檔案</th><th>備註</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>psee-composite.c</td><td class="mono">zynq-video-drivers/psee-composite.c</td><td>建 media graph,compatible = psee,axi4s-packetizer</td></tr>
+        <tr><td>psee-dma.c</td><td class="mono">zynq-video-drivers/psee-dma.c:1065</td><td><span class="mono">video_register_device(..., VFL_TYPE_VIDEO, -1)</span></td></tr>
+        <tr><td>psee-streamer.c</td><td class="mono">zynq-video-drivers/psee-streamer.c:377,391</td><td><span class="mono">V4L2_SUBDEV_FL_HAS_DEVNODE</span> + <span class="mono">v4l2_async_register_subdev()</span></td></tr>
+        <tr><td>DT binding</td><td class="mono">.../Documentation/devicetree/bindings/media/prophesee/psee,axi4s-packetizer.yaml</td><td>新模組節點格式的依據</td></tr>
+        <tr><td>DMA 方向</td><td class="mono">Documentation/devicetree/bindings/dma/xilinx/xilinx_dma.txt</td><td>AXI-DMA:channel 0=MM2S、1=S2MM</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="next-note">
+    這張圖裡故意留了一個還沒展開的箭頭:「kernel 通用機制 → probe()」那一步,
+    背後其實還有 <span class="mono">v4l2_async_notifier</span> 在確保「四顆 subdev 全部到齊,
+    才真的把它們接成一張圖」——這是下一個要講的東西。
+  </p>
+
+</div>

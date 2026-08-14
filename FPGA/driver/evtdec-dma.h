@@ -1,12 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Prophesee Video DMA
+ * CSNN-FPGA Event Decoder Video DMA
  *
+ * Adapted from Prophesee's psee-dma.c/psee-dma.h (zynq-video-drivers,
+ * kernel-5.15 branch, commit 22c8103d047cc7937960fd655d0c6869f745d76b),
+ * with the avoid-descriptor-link-corruption.patch fix folded in (the
+ * @name field below exists so stop_streaming() can re-request the same
+ * DMA channel by name).
  * Copyright (C) Prophesee S.A.
  */
 
-#ifndef PSEE_DMA_H
-#define PSEE_DMA_H
+#ifndef EVTDEC_DMA_H
+#define EVTDEC_DMA_H
 
 #include <linux/dmaengine.h>
 #include <linux/mutex.h>
@@ -20,10 +25,10 @@
 #include <media/videobuf2-v4l2.h>
 
 struct dma_chan;
-struct psee_composite_device;
+struct evtdec_composite_device;
 
 /**
- * struct psee_pipeline - Xilinx Video IP pipeline structure
+ * struct evtdec_pipeline - Xilinx Video IP pipeline structure
  * @pipe: media pipeline
  * @lock: protects the pipeline @stream_count
  * @use_count: number of DMA engines using the pipeline
@@ -31,7 +36,7 @@ struct psee_composite_device;
  * @num_dmas: number of DMA engines in the pipeline
  * @output: DMA engine at the output of the pipeline
  */
-struct psee_pipeline {
+struct evtdec_pipeline {
 	struct media_pipeline pipe;
 
 	struct mutex lock;
@@ -39,20 +44,20 @@ struct psee_pipeline {
 	unsigned int stream_count;
 
 	unsigned int num_dmas;
-	struct psee_dma *output;
+	struct evtdec_dma *output;
 };
 
-static inline struct psee_pipeline *to_psee_pipeline(struct media_entity *e)
+static inline struct evtdec_pipeline *to_evtdec_pipeline(struct media_entity *e)
 {
-	return container_of(e->pipe, struct psee_pipeline, pipe);
+	return container_of(e->pipe, struct evtdec_pipeline, pipe);
 }
 
 /**
- * struct psee_dma - Video DMA interface to PS Host
+ * struct evtdec_dma - Video DMA interface to PS Host
  * @list: list entry in a composite device dmas list
  * @video: V4L2 video device associated with the DMA channel
  * @pad: media pad for the video device entity
- * @psee_dev: composite device the DMA channel belongs to
+ * @evtdec_dev: composite device the DMA channel belongs to
  * @pipe: pipeline belonging to the DMA channel
  * @port: composite device DT node port number for the DMA channel
  * @lock: protects the @queue field
@@ -62,17 +67,19 @@ static inline struct psee_pipeline *to_psee_pipeline(struct media_entity *e)
  * @queued_bufs: list of queued buffers
  * @queued_lock: protects the buf_queued list
  * @dma: DMA engine channel
+ * @name: DMA channel name (e.g. "port0"), kept around so stop_streaming()
+ *        can release and re-request the same channel by name
  * @iomem: Mapping of the IP registers in the kernel space
  * @iosize: size of the mapped register bank (in byte)
  * @clk: clock of the video pipeline
  */
-struct psee_dma {
+struct evtdec_dma {
 	struct list_head list;
 	struct video_device video;
 	struct media_pad pad;
 
-	struct psee_composite_device *psee_dev;
-	struct psee_pipeline pipe;
+	struct evtdec_composite_device *evtdec_dev;
+	struct evtdec_pipeline pipe;
 	unsigned int port;
 
 	struct mutex lock;
@@ -87,13 +94,14 @@ struct psee_dma {
 	void __iomem *iomem;
 	resource_size_t iosize;
 	struct dma_chan *dma;
+	char name[16];
 	struct clk *clk;
 };
 
-#define to_psee_dma(vdev)	container_of(vdev, struct psee_dma, video)
+#define to_evtdec_dma(vdev)	container_of(vdev, struct evtdec_dma, video)
 
-int psee_dma_init(struct psee_composite_device *psee_dev, struct psee_dma *dma,
+int evtdec_dma_init(struct evtdec_composite_device *evtdec_dev, struct evtdec_dma *dma,
 		  enum v4l2_buf_type type, unsigned int port, struct resource *io_space);
-void psee_dma_cleanup(struct psee_dma *dma);
+void evtdec_dma_cleanup(struct evtdec_dma *dma);
 
-#endif /* PSEE_DMA_H */
+#endif /* EVTDEC_DMA_H */

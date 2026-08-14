@@ -19,10 +19,13 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 1. **解碼模組**:輸入 ESST 的 AXI4-Stream(64-bit,EVT2.1),輸出 `(x,y,type,t)`,`t` 微秒。`type_f==0x0/0x1` 是 TD,展開;`0x8` 只更新內部時間、不輸出;`0xE` 丟棄。
 2. **PL→PS 傳輸介面**:AXI DMA,kernel driver 未動工,依賴下方問題 1、2。
 3. **bias 設定工具**:獨立小程式,對 sensor subdev 下 `VIDIOC_S_CTRL`,不依賴 `metavision_viewer`。
+4. **事件讀取驗證程式**(骨架已完成):`FPGA/tools/evt_dump/`,`open`/`mmap` V4L2 capture 裝置,依 `EventProcessor.sv:143` 的實際 bit 排列印出 `(x,y,type,t)`,不做 EVT2.1 解碼(PL 端已解碼完)。對應步驟 10 上板驗證要用的最小工具,依賴 kernel driver 先能生出裝置節點,細節見 `FPGA/tools/evt_dump/README.md`。
 
 ## 解碼模組實作步驟(依序做,由使用者實作,這裡只列順序跟每步的驗收標準)
 
-目前進度:1~9(RTL 邏輯 + 模擬驗證 + Vivado block design 整合)已完成。**下一步是 10(上板驗證)**,10~11(上板、kernel driver)都還沒開始,這些需要接觸實體硬體/PetaLinux 環境,模擬驗證不能取代。
+目前進度:1~9(RTL 邏輯 + 模擬驗證 + Vivado block design 整合)已完成。**下一步是 10(上板驗證)**,10~11(上板、kernel driver)都還沒真的動工,這些需要接觸實體硬體/PetaLinux 環境,模擬驗證不能取代。
+
+kernel driver 這塊的工作在獨立的 `ps-driver` git 分支上進行,原始碼位置開在 `FPGA/driver/`(跟 PL 端的 `FPGA/EvtDecoder` 平行),已把 `psee-composite.c`/`psee-dma.c` 這對(對應官方 `psee-video.ko`)原封不動複製進去當起點,還沒開始改暫存器配置,細節見 `FPGA/driver/README.md`。編譯規劃:本機(Windows)只寫程式碼,實際編譯用 WSL(Ubuntu-22.04)交叉編譯,PetaLinux SDK 目前裝在 KV260 板子上、板子還沒接上,WSL 這邊尚未確認有沒有可用的交叉編譯工具鏈(未查證)。
 
 1. **建 RTL 專案目錄結構**(已完成):`EvtDecoder.srcs/sources_1/new/`(原始碼)、`EvtDecoder.sim/sim_1/new/`(testbench)分開。
 2. **bit-scan 組合邏輯**(已完成):`EventProcessor.sv` 裡的 `x_offset` 低位優先編碼器,`tb_event_processor.sv` 驗證過。
@@ -34,12 +37,16 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 8. **Testbench 驗證**(已完成):`tb_fsm_config_setter.sv`(隨機化 master 行為 + protocol checker + reset 預設值檢查)、`tb_event_processor.sv`(隨機事件 + backpressure)、`tb_fsm_event_extractor.sv`(整合測試,真實 EVT2.1 封包序列 + FIFO 反壓驗證)全部 `ALL PASS`。
 9. **Vivado block design 整合**(已完成):`FsmEventExtractor` 封裝成 IP(`csnn-fpga.local:ip:fsm_event_extractor:1.0`,位於 `FPGA/ip_repo/fsm_event_extractor`),在 `kv260` block design 裡換掉 `ps_host_if_0`,接線、AXI-Lite 位址(`0xA0030000`,range 128)、clock 關聯都已修正,`validate_bd_design` 與 `Generate Output Products` 皆乾淨通過。細節見 Concept 筆記「Vivado block design 整合(2026-08-12)」那節。
 10. **上板驗證**(尚未開始):先用 `REG_CONFIG.enable_pattern` 假資料測完「`axi_dma` → kernel driver → PS 軟體」這條路,確認通了再接真感測器,避免同時除錯 RTL 邏輯跟資料路徑兩個問題。
-11. **Kernel driver**(尚未開始):仿 `psee-composite.c`(V4L2 media graph)+ `psee-dma.c`(`dma_request_chan` 接 `xilinx_dma`)兩層模式。
+11. **Kernel driver**(程式碼已改完、已人工 code review 過,尚未編譯/測試):`FPGA/driver/evtdec-composite.c`/`evtdec-dma.c`,從 `psee-composite.c`/`psee-dma.c` 改寫——暫存器對照 `FsmConfigSetter.sv`(不是官方 `ps_host_if` 配置)、套用官方 `avoid-descriptor-link-corruption.patch`、新增 `V4L2_PIX_FMT_CSNN_XYT`、DT compatible 改成 `csnn-fpga,evt-decoder`。細節見 `FPGA/driver/README.md`。
+    - Code review(2026-08-13)已找到並修好兩個問題:(1) `timeout_threshold_control` 的微秒範圍是照抄官方的,沒配合我們縮小成 16-bit 的 `REG_TLAST_TIMEOUT`,預設值換算後會溢位、且預設就會自動啟用 timeout,已改成配 16-bit 的範圍(`evtdec-dma.c` `timeout_s_ctrl`/`timeout_threshold_control`)。(2) `stop_streaming()` 重新 `dma_request_chan()` 沒檢查失敗(官方 patch 本身就沒檢查),已補上錯誤 log 跟 `start_streaming()`/`buffer_queue()` 兩處的防呆。`evtdec-composite.c` review 過,邏輯跟官方完全一致,只改了字串(`compatible`/`MODULE_*`),沒有新問題。
+    - 改動目前只 stage(`git add`),還沒 commit,在 `ps-driver` branch。
+    - 下一步:WSL 交叉編譯確認語法過關,之後板子連上再真的測。
 
 ## 待解決問題(依序處理)
 
-1. Device tree / `xmutil loadapp` 打包格式未查。
-2. Kernel driver 編譯/部署環境(PetaLinux/Yocto)未查。
+1. Devicetree 節點格式已查到(`psee,axi4s-packetizer` binding),app bundle 大致結構(`<name>.bit.bin`/`<name>.dtbo`/`<name>.xclbin`/`shell.json`,放 `/lib/firmware/.../<app_name>/`,`dfx-mgr` 用 inotify 偵測)也查到公開文件的基本輪廓,但目錄路徑寫法兩份官方文件不一致、`shell.json` 完整欄位、`.xclbin` 是否必要都還沒確認——等上板操作用 `xmutil listapps` 看現有 `prophesee-kv260-genx320` 目錄實際長相再核對。細節見 Concept 筆記。
+2. **已解決**:Prophesee 官方 PetaLinux 專案(`github.com/prophesee-ai/petalinux-projects`,分支 `kv260-2022.2`)裡的 `psee-video_2.0.0.bb` 就是真實範例——標準 `inherit module`,`SRC_URI` 指到 `zynq-video-drivers` git repo。額外確認:本地 `docs/FPGA/Reference/KV260/zynq-video-drivers` 版本(`kernel-5.15` 分支)剛好就是這份 recipe 釘死的 commit,版本上跟板子一致,不用擔心對不上;但板子上多疊了一個 `avoid-descriptor-link-corruption.patch`(修 DMA 停止時 descriptor 亂序),我們自己的 `psee-dma.c` 要一併帶上這個修法。細節見 Concept 筆記。
+3. PL 端真實 device tree 節點(含 phandle 等具體數值)怎麼生成,還沒查到——`petalinux-projects` 裡的 `pl-custom.dtsi` 是空的,實際節點動態包在 accelerated application bundle 裡,確切生成機制未查證。板子連上後可以直接 `dtc -I fs -O dts /proc/device-tree` 拿即時系統的真實數值,不用等原始碼查證。
 
 ## 已定案,不用重問
 

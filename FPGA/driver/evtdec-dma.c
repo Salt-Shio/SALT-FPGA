@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Prophesee Video DMA
+ * CSNN-FPGA Event Decoder Video DMA
  *
+ * Adapted from Prophesee's psee-dma.c (zynq-video-drivers, kernel-5.15
+ * branch, commit 22c8103d047cc7937960fd655d0c6869f745d76b), with the
+ * register map changed to match FsmConfigSetter.sv (FPGA/EvtDecoder)
+ * instead of the official ps_host_if, and the
+ * avoid-descriptor-link-corruption.patch fix folded in.
  * Copyright (C) Prophesee S.A.
  */
 
@@ -19,9 +24,9 @@
 #include <media/videobuf2-v4l2.h>
 #include <media/videobuf2-dma-contig.h>
 
-#include "psee-dma.h"
-#include "psee-composite.h"
-#include "psee-format.h"
+#include "evtdec-dma.h"
+#include "evtdec-composite.h"
+#include "evtdec-format.h"
 
 /* From <media/media-entity.h> on newer kernels (6.11) */
 /**
@@ -39,8 +44,12 @@
 
 #define DEFAULT_PACKET_LENGTH		(1 << 20)
 
-#define DEFAULT_MARKER  0xE019E019E019E019
-
+/*
+ * Register map matches FsmConfigSetter.sv (FPGA/EvtDecoder), not the
+ * official ps_host_if. There is no REG_VERSION, no REG_PACKET_LENGTH
+ * (we don't frame on a fixed packet length) and no marker/heartbeat
+ * mechanism (TODO: 已定案,完全靜默期一直等沒關係,不合成 filler event).
+ */
 #define REG_CONTROL (0x0)
 union global_ctrl {
 	struct {
@@ -55,20 +64,14 @@ union global_ctrl {
 #define REG_CONFIG (0x4)
 union global_cfg {
 	struct {
-		u32:1;
 		u32 enable_pattern:1;
 		u32 enable_tlast_timeout:1;
-		u32:29;
+		u32:30;
 	};
 	u32 raw;
 };
 
-#define REG_VERSION (0x10)
-
-#define REG_PACKET_LENGTH		(0x14)
-#define REG_TLAST_TIMEOUT		(0x18)
-#define REG_TLAST_TIMEOUT_EVT_LSB	(0x20)
-#define REG_TLAST_TIMEOUT_EVT_MSB	(0x24)
+#define REG_TLAST_TIMEOUT		(0x8)
 
 /* V4L2 Control codes */
 #define V4L2_CID_XFER_TIMEOUT_ENABLE	(V4L2_CID_USER_BASE | 0x1001)
@@ -77,53 +80,19 @@ union global_cfg {
 /*
  * Register related operations
  */
-static inline u32 read_reg(struct psee_dma *dma, u32 addr)
+static inline u32 read_reg(struct evtdec_dma *dma, u32 addr)
 {
 	return ioread32(dma->iomem + addr);
 }
 
-static inline void write_reg(struct psee_dma *dma, u32 addr, u32 value)
+static inline void write_reg(struct evtdec_dma *dma, u32 addr, u32 value)
 {
 	iowrite32(value, dma->iomem + addr);
-}
-
-static inline u64 read_reg64(struct psee_dma *dma, u32 addr)
-{
-	return ioread64(dma->iomem + addr);
-}
-
-static inline void write_reg64(struct psee_dma *dma, u32 addr, u64 value)
-{
-	iowrite64(value, dma->iomem + addr);
 }
 
 /* -----------------------------------------------------------------------------
  * Helper functions
  */
-
-static u32 mediabus_to_pixel(unsigned int code)
-{
-	u32 pix;
-
-	switch (code) {
-	case MEDIA_BUS_FMT_PSEE_EVT2:
-		pix = V4L2_PIX_FMT_PSEE_EVT2;
-		break;
-	case MEDIA_BUS_FMT_PSEE_EVT21ME:
-		pix = V4L2_PIX_FMT_PSEE_EVT21ME;
-		break;
-	case MEDIA_BUS_FMT_PSEE_EVT21:
-		pix = V4L2_PIX_FMT_PSEE_EVT21;
-		break;
-	case MEDIA_BUS_FMT_PSEE_EVT3:
-		pix = V4L2_PIX_FMT_PSEE_EVT3;
-		break;
-	default:
-		pix = 0;
-		break;
-	}
-	return pix;
-}
 
 static struct v4l2_subdev *
 remote_subdev(struct media_pad *local, u32 *pad)
@@ -140,7 +109,7 @@ remote_subdev(struct media_pad *local, u32 *pad)
 	return media_entity_to_v4l2_subdev(remote->entity);
 }
 
-static int verify_format(struct psee_dma *dma)
+static int verify_format(struct evtdec_dma *dma)
 {
 	struct v4l2_subdev_format fmt = {
 		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
@@ -161,7 +130,7 @@ static int verify_format(struct psee_dma *dma)
 
 
 /**
- * start_stop_recursive - Recursive part of psee_pipeline_start_stop
+ * start_stop_recursive - Recursive part of evtdec_pipeline_start_stop
  * @entity: V4L2 sd to be started or stopped, with a recursion on its sources
  * @start: Start (when true) or stop (when false) the pipeline
  *
@@ -235,7 +204,7 @@ static int start_stop_recursive(struct media_entity *entity, bool start)
 }
 
 /**
- * psee_pipeline_start_stop - Start ot stop streaming on a pipeline
+ * evtdec_pipeline_start_stop - Start ot stop streaming on a pipeline
  * @pipe: The pipeline
  * @start: Start (when true) or stop (when false) the pipeline
  *
@@ -258,12 +227,12 @@ static int start_stop_recursive(struct media_entity *entity, bool start)
  * disable. This implementation directly uses the call stack, using the
  * start_stop_recursive function.
  *
- * Return: 0 if successful, ENODEV if psee_dma somehow hasn't the expected
+ * Return: 0 if successful, ENODEV if evtdec_dma somehow hasn't the expected
  * layout, or the return value of start_stop_recursive otherwise.
  */
-static int psee_pipeline_start_stop(struct psee_pipeline *pipe, bool start)
+static int evtdec_pipeline_start_stop(struct evtdec_pipeline *pipe, bool start)
 {
-	struct psee_dma *dma = pipe->output;
+	struct evtdec_dma *dma = pipe->output;
 	struct media_pad *pad;
 
 	/* The video device is handled in start_streaming, start operation on
@@ -276,7 +245,7 @@ static int psee_pipeline_start_stop(struct psee_pipeline *pipe, bool start)
 }
 
 /**
- * psee_pipeline_set_stream - Enable/disable streaming on a pipeline
+ * evtdec_pipeline_set_stream - Enable/disable streaming on a pipeline
  * @pipe: The pipeline
  * @on: Turn the stream on when true or off when false
  *
@@ -300,7 +269,7 @@ static int psee_pipeline_start_stop(struct psee_pipeline *pipe, bool start)
  * operation otherwise. Stopping the pipeline never fails. The pipeline state is
  * not updated when the operation fails.
  */
-static int psee_pipeline_set_stream(struct psee_pipeline *pipe, bool on)
+static int evtdec_pipeline_set_stream(struct evtdec_pipeline *pipe, bool on)
 {
 	int ret = 0;
 
@@ -308,14 +277,14 @@ static int psee_pipeline_set_stream(struct psee_pipeline *pipe, bool on)
 
 	if (on) {
 		if (pipe->stream_count == pipe->num_dmas - 1) {
-			ret = psee_pipeline_start_stop(pipe, true);
+			ret = evtdec_pipeline_start_stop(pipe, true);
 			if (ret < 0)
 				goto done;
 		}
 		pipe->stream_count++;
 	} else {
 		if (--pipe->stream_count == 0)
-			psee_pipeline_start_stop(pipe, false);
+			evtdec_pipeline_start_stop(pipe, false);
 	}
 
 done:
@@ -323,8 +292,8 @@ done:
 	return ret;
 }
 
-static int psee_pipeline_validate(struct psee_pipeline *pipe,
-				  struct psee_dma *start)
+static int evtdec_pipeline_validate(struct evtdec_pipeline *pipe,
+				  struct evtdec_dma *start)
 {
 	struct media_graph graph;
 	struct media_entity *entity = &start->video.entity;
@@ -345,12 +314,12 @@ static int psee_pipeline_validate(struct psee_pipeline *pipe,
 	media_graph_walk_start(&graph, entity);
 
 	while ((entity = media_graph_walk_next(&graph))) {
-		struct psee_dma *dma;
+		struct evtdec_dma *dma;
 
 		if (entity->function != MEDIA_ENT_F_IO_V4L)
 			continue;
 
-		dma = to_psee_dma(media_entity_to_video_device(entity));
+		dma = to_evtdec_dma(media_entity_to_video_device(entity));
 
 		if (dma->pad.flags & MEDIA_PAD_FL_SINK) {
 			pipe->output = dma;
@@ -373,31 +342,31 @@ static int psee_pipeline_validate(struct psee_pipeline *pipe,
 	return 0;
 }
 
-static void __psee_pipeline_cleanup(struct psee_pipeline *pipe)
+static void __evtdec_pipeline_cleanup(struct evtdec_pipeline *pipe)
 {
 	pipe->num_dmas = 0;
 	pipe->output = NULL;
 }
 
 /**
- * psee_pipeline_cleanup - Cleanup the pipeline after streaming
+ * evtdec_pipeline_cleanup - Cleanup the pipeline after streaming
  * @pipe: the pipeline
  *
  * Decrease the pipeline use count and clean it up if we were the last user.
  */
-static void psee_pipeline_cleanup(struct psee_pipeline *pipe)
+static void evtdec_pipeline_cleanup(struct evtdec_pipeline *pipe)
 {
 	mutex_lock(&pipe->lock);
 
 	/* If we're the last user clean up the pipeline. */
 	if (--pipe->use_count == 0)
-		__psee_pipeline_cleanup(pipe);
+		__evtdec_pipeline_cleanup(pipe);
 
 	mutex_unlock(&pipe->lock);
 }
 
 /**
- * psee_pipeline_prepare - Prepare the pipeline for streaming
+ * evtdec_pipeline_prepare - Prepare the pipeline for streaming
  * @pipe: the pipeline
  * @dma: DMA engine at one end of the pipeline
  *
@@ -406,8 +375,8 @@ static void psee_pipeline_cleanup(struct psee_pipeline *pipe)
  *
  * Return: 0 if successful or -EPIPE if the pipeline is not valid.
  */
-static int psee_pipeline_prepare(struct psee_pipeline *pipe,
-				 struct psee_dma *dma)
+static int evtdec_pipeline_prepare(struct evtdec_pipeline *pipe,
+				 struct evtdec_dma *dma)
 {
 	int ret;
 
@@ -415,9 +384,9 @@ static int psee_pipeline_prepare(struct psee_pipeline *pipe,
 
 	/* If we're the first user validate and initialize the pipeline. */
 	if (pipe->use_count == 0) {
-		ret = psee_pipeline_validate(pipe, dma);
+		ret = evtdec_pipeline_validate(pipe, dma);
 		if (ret < 0) {
-			__psee_pipeline_cleanup(pipe);
+			__evtdec_pipeline_cleanup(pipe);
 			goto done;
 		}
 	}
@@ -435,23 +404,23 @@ done:
  */
 
 /**
- * struct psee_dma_buffer - Video DMA buffer
+ * struct evtdec_dma_buffer - Video DMA buffer
  * @buf: vb2 buffer base object
  * @queue: buffer list entry in the DMA engine queued buffers list
  * @dma: DMA channel that uses the buffer
  */
-struct psee_dma_buffer {
+struct evtdec_dma_buffer {
 	struct vb2_v4l2_buffer buf;
 	struct list_head queue;
-	struct psee_dma *dma;
+	struct evtdec_dma *dma;
 };
 
-#define to_psee_dma_buffer(vb)	container_of(vb, struct psee_dma_buffer, buf)
+#define to_evtdec_dma_buffer(vb)	container_of(vb, struct evtdec_dma_buffer, buf)
 
-static void psee_dma_complete(void *param, const struct dmaengine_result *result)
+static void evtdec_dma_complete(void *param, const struct dmaengine_result *result)
 {
-	struct psee_dma_buffer *buf = param;
-	struct psee_dma *dma = buf->dma;
+	struct evtdec_dma_buffer *buf = param;
+	struct evtdec_dma *dma = buf->dma;
 
 	spin_lock(&dma->queued_lock);
 	list_del(&buf->queue);
@@ -471,7 +440,7 @@ queue_setup(struct vb2_queue *vq,
 		     unsigned int *nbuffers, unsigned int *nplanes,
 		     unsigned int sizes[], struct device *alloc_devs[])
 {
-	struct psee_dma *dma = vb2_get_drv_priv(vq);
+	struct evtdec_dma *dma = vb2_get_drv_priv(vq);
 
 	/* Make sure the image size is large enough. */
 	if (*nplanes)
@@ -486,8 +455,8 @@ queue_setup(struct vb2_queue *vq,
 static int buffer_prepare(struct vb2_buffer *vb)
 {
 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
-	struct psee_dma *dma = vb2_get_drv_priv(vb->vb2_queue);
-	struct psee_dma_buffer *buf = to_psee_dma_buffer(vbuf);
+	struct evtdec_dma *dma = vb2_get_drv_priv(vb->vb2_queue);
+	struct evtdec_dma_buffer *buf = to_evtdec_dma_buffer(vbuf);
 
 	buf->dma = dma;
 
@@ -497,13 +466,23 @@ static int buffer_prepare(struct vb2_buffer *vb)
 static void buffer_queue(struct vb2_buffer *vb)
 {
 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
-	struct psee_dma *dma = vb2_get_drv_priv(vb->vb2_queue);
-	struct psee_dma_buffer *buf = to_psee_dma_buffer(vbuf);
+	struct evtdec_dma *dma = vb2_get_drv_priv(vb->vb2_queue);
+	struct evtdec_dma_buffer *buf = to_evtdec_dma_buffer(vbuf);
 	struct dma_async_tx_descriptor *desc;
 	enum dma_transfer_direction dir;
 	dma_addr_t addr = vb2_dma_contig_plane_dma_addr(vb, 0);
 	size_t size;
 	u32 flags;
+
+	/* Same reasoning as in start_streaming(): don't hand a possibly
+	 * error-pointer dma->dma to the DMA engine after a failed channel
+	 * re-request in stop_streaming().
+	 */
+	if (IS_ERR(dma->dma)) {
+		dev_err(dma->evtdec_dev->dev, "DMA channel unavailable\n");
+		vb2_buffer_done(&buf->buf.vb2_buf, VB2_BUF_STATE_ERROR);
+		return;
+	}
 
 	if (dma->queue.type == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
 		flags = DMA_PREP_INTERRUPT | DMA_CTRL_ACK;
@@ -518,11 +497,11 @@ static void buffer_queue(struct vb2_buffer *vb)
 
 	desc = dmaengine_prep_slave_single(dma->dma, addr, size, dir, flags);
 	if (!desc) {
-		dev_err(dma->psee_dev->dev, "Failed to prepare DMA transfer\n");
+		dev_err(dma->evtdec_dev->dev, "Failed to prepare DMA transfer\n");
 		vb2_buffer_done(&buf->buf.vb2_buf, VB2_BUF_STATE_ERROR);
 		return;
 	}
-	desc->callback_result = psee_dma_complete;
+	desc->callback_result = evtdec_dma_complete;
 	desc->callback_param = buf;
 
 	spin_lock_irq(&dma->queued_lock);
@@ -537,11 +516,18 @@ static void buffer_queue(struct vb2_buffer *vb)
 
 static int start_streaming(struct vb2_queue *vq, unsigned int count)
 {
-	struct psee_dma *dma = vb2_get_drv_priv(vq);
-	struct psee_dma_buffer *buf, *nbuf;
-	struct psee_pipeline *pipe;
+	struct evtdec_dma *dma = vb2_get_drv_priv(vq);
+	struct evtdec_dma_buffer *buf, *nbuf;
+	struct evtdec_pipeline *pipe;
 	int ret;
 	union global_ctrl control;
+
+	/* A previous stop_streaming() may have failed to re-request the
+	 * DMA channel (avoid-descriptor-link-corruption.patch); refuse to
+	 * stream rather than dereference the error pointer left in dma->dma.
+	 */
+	if (IS_ERR(dma->dma))
+		return PTR_ERR(dma->dma);
 
 	dma->sequence = 0;
 
@@ -553,7 +539,7 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 	 * streaming.
 	 */
 	pipe = dma->video.entity.pipe
-	     ? to_psee_pipeline(&dma->video.entity) : &dma->pipe;
+	     ? to_evtdec_pipeline(&dma->video.entity) : &dma->pipe;
 
 	ret = media_pipeline_start(&dma->video.entity, &pipe->pipe);
 	if (ret < 0)
@@ -566,7 +552,7 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 	if (ret < 0)
 		goto error_stop;
 
-	ret = psee_pipeline_prepare(pipe, dma);
+	ret = evtdec_pipeline_prepare(pipe, dma);
 	if (ret < 0)
 		goto error_stop;
 
@@ -579,7 +565,7 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 	v4l2_ctrl_handler_setup(dma->video.ctrl_handler);
 
 	/* Start the pipeline. */
-	psee_pipeline_set_stream(pipe, true);
+	evtdec_pipeline_set_stream(pipe, true);
 
 	/* Enable the packetizer */
 	control = (union global_ctrl){ .enable = 1 };
@@ -604,13 +590,13 @@ error:
 
 static void stop_streaming(struct vb2_queue *vq)
 {
-	struct psee_dma *dma = vb2_get_drv_priv(vq);
-	struct psee_pipeline *pipe = to_psee_pipeline(&dma->video.entity);
-	struct psee_dma_buffer *buf, *nbuf;
+	struct evtdec_dma *dma = vb2_get_drv_priv(vq);
+	struct evtdec_pipeline *pipe = to_evtdec_pipeline(&dma->video.entity);
+	struct evtdec_dma_buffer *buf, *nbuf;
 	union global_ctrl control = { .enable = 0, .clear = 1 };
 
 	/* Stop the pipeline. */
-	psee_pipeline_set_stream(pipe, false);
+	evtdec_pipeline_set_stream(pipe, false);
 
 	/* Disable packetizer and clear its memories */
 	write_reg(dma, REG_CONTROL, control.raw);
@@ -619,7 +605,7 @@ static void stop_streaming(struct vb2_queue *vq)
 	dmaengine_terminate_all(dma->dma);
 
 	/* Cleanup the pipeline and mark it as being stopped. */
-	psee_pipeline_cleanup(pipe);
+	evtdec_pipeline_cleanup(pipe);
 	media_pipeline_stop(&dma->video.entity);
 
 	/* Give back all queued buffers to videobuf2. */
@@ -629,6 +615,18 @@ static void stop_streaming(struct vb2_queue *vq)
 		list_del(&buf->queue);
 	}
 	spin_unlock_irq(&dma->queued_lock);
+
+	/* Re-request the DMA channel from scratch on every stop, working
+	 * around descriptor link corruption that can otherwise show up on
+	 * the next start_streaming() (avoid-descriptor-link-corruption.patch
+	 * from the official psee-video PetaLinux recipe).
+	 */
+	dma_release_channel(dma->dma);
+	dma->dma = dma_request_chan(dma->evtdec_dev->dev, dma->name);
+	if (IS_ERR(dma->dma))
+		dev_err(dma->evtdec_dev->dev,
+			"failed to re-request DMA channel %s: %ld\n",
+			dma->name, PTR_ERR(dma->dma));
 }
 
 static const struct vb2_ops queue_qops = {
@@ -649,24 +647,29 @@ static int
 querycap(struct file *file, void *fh, struct v4l2_capability *cap)
 {
 	struct v4l2_fh *vfh = file->private_data;
-	struct psee_dma *dma = to_psee_dma(vfh->vdev);
+	struct evtdec_dma *dma = to_evtdec_dma(vfh->vdev);
 
-	cap->capabilities = dma->psee_dev->v4l2_caps | V4L2_CAP_STREAMING |
+	cap->capabilities = dma->evtdec_dev->v4l2_caps | V4L2_CAP_STREAMING |
 			    V4L2_CAP_DEVICE_CAPS;
 
-	strscpy(cap->driver, "psee-dma", sizeof(cap->driver));
+	strscpy(cap->driver, "evtdec-dma", sizeof(cap->driver));
 	strscpy(cap->card, dma->video.name, sizeof(cap->card));
 	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%pOFn:%u",
-		 dma->psee_dev->dev->of_node, dma->port);
+		 dma->evtdec_dev->dev->of_node, dma->port);
 
 	return 0;
 }
 
 static int
-__get_format(struct psee_dma *dma, struct v4l2_pix_format *pix)
+__get_format(struct evtdec_dma *dma, struct v4l2_pix_format *pix)
 {
-	/* This IP does no format conversion, whatever is requested, output
-	 * will be the same as the input
+	/* Our output is always (x,y,type,t) tuples, decoded on the PL side
+	 * (FPGA/EvtDecoder's EventProcessor.sv). It never matches whatever
+	 * media bus format the upstream subdev (ESST) reports, so unlike
+	 * the official ps_host_if driver we don't translate the upstream
+	 * format into our pixelformat, we always report our own fixed one.
+	 * We still require the link to be up (there is something to check),
+	 * and borrow width/height/colorspace from upstream for information.
 	 */
 	struct v4l2_subdev_format fmt = {
 		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
@@ -682,20 +685,10 @@ __get_format(struct psee_dma *dma, struct v4l2_pix_format *pix)
 	if (ret < 0)
 		return ret == -ENOIOCTLCMD ? -EINVAL : ret;
 
-	/* "The media bus pixel codes describe image formats as flowing over
-	 * physical busses (both between separate physical components and inside
-	 * SoC devices). This should not be confused with the V4L2 pixel formats
-	 * that describe, using four character codes, image formats as stored in
-	 * memory.". Well, here we dump the bus content into memory
-	 */
-	pix->pixelformat = mediabus_to_pixel(fmt.format.code);
-	if (!pix->pixelformat)
-		dev_warn(dma->psee_dev->dev,
-			"Could not translate format code 0x%x to pixel code\n",
-			fmt.format.code);
 	v4l2_fill_pix_format(pix, &fmt.format);
+	pix->pixelformat = V4L2_PIX_FMT_CSNN_XYT;
 
-	/* The packetizer uses arbitrary transfer size */
+	/* The decoder uses arbitrary transfer size */
 	pix->sizeimage = dma->transfer_size;
 	/* and there is no per line padding, there isn't even lines */
 	pix->bytesperline = 0;
@@ -706,7 +699,7 @@ static int
 enum_format(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 {
 	struct v4l2_fh *vfh = file->private_data;
-	struct psee_dma *dma = to_psee_dma(vfh->vdev);
+	struct evtdec_dma *dma = to_evtdec_dma(vfh->vdev);
 	struct v4l2_pix_format pix;
 	int ret;
 
@@ -724,7 +717,7 @@ static int
 get_format(struct file *file, void *fh, struct v4l2_format *format)
 {
 	struct v4l2_fh *vfh = file->private_data;
-	struct psee_dma *dma = to_psee_dma(vfh->vdev);
+	struct evtdec_dma *dma = to_evtdec_dma(vfh->vdev);
 
 	return __get_format(dma, &format->fmt.pix);
 }
@@ -733,7 +726,7 @@ static int
 try_format(struct file *file, void *fh, struct v4l2_format *format)
 {
 	struct v4l2_fh *vfh = file->private_data;
-	struct psee_dma *dma = to_psee_dma(vfh->vdev);
+	struct evtdec_dma *dma = to_evtdec_dma(vfh->vdev);
 
 	return __get_format(dma, &format->fmt.pix);
 }
@@ -742,7 +735,7 @@ static int
 set_format(struct file *file, void *fh, struct v4l2_format *format)
 {
 	struct v4l2_fh *vfh = file->private_data;
-	struct psee_dma *dma = to_psee_dma(vfh->vdev);
+	struct evtdec_dma *dma = to_evtdec_dma(vfh->vdev);
 	union global_cfg config;
 
 	if (vb2_is_busy(&dma->queue))
@@ -752,8 +745,6 @@ set_format(struct file *file, void *fh, struct v4l2_format *format)
 	config.raw = read_reg(dma, REG_CONFIG);
 	config.enable_pattern = 0;
 	write_reg(dma, REG_CONFIG, config.raw);
-	/* Set packet size to image size in bus words */
-	write_reg(dma, REG_PACKET_LENGTH, dma->transfer_size / 8);
 
 	return __get_format(dma, &format->fmt.pix);
 }
@@ -764,18 +755,15 @@ set_format(struct file *file, void *fh, struct v4l2_format *format)
 static int log_status(struct file *file, void *fh)
 {
 	struct v4l2_fh *vfh = file->private_data;
-	struct psee_dma *dma = to_psee_dma(vfh->vdev);
+	struct evtdec_dma *dma = to_evtdec_dma(vfh->vdev);
 	struct device *dev = dmaengine_get_dma_device(dma->dma);
 	union global_ctrl control;
 	union global_cfg config;
-	u32 version;
 
 	control.raw = read_reg(dma, REG_CONTROL);
 	config.raw = read_reg(dma, REG_CONFIG);
-	version = read_reg(dma, REG_VERSION);
 
-	dev_info(dev, "***** PseeVideo driver *****\n");
-	dev_info(dev, "Version = 0x%x\n", version);
+	dev_info(dev, "***** EvtDecoder driver *****\n");
 	dev_info(dev, "Control = %s %s(0x%x)\n",
 		control.enable ? "ENABLED" : "DISABLED",
 		control.clear ? "CLEARING " : "",
@@ -792,7 +780,7 @@ static int log_status(struct file *file, void *fh)
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 static int g_register(struct file *file, void *fh, struct v4l2_dbg_register *reg)
 {
-	struct psee_dma *dev = video_drvdata(file);
+	struct evtdec_dma *dev = video_drvdata(file);
 
 	if (reg->match.addr > 0)
 		return -EINVAL;
@@ -812,7 +800,7 @@ static int g_register(struct file *file, void *fh, struct v4l2_dbg_register *reg
 
 static int s_register(struct file *file, void *fh, const struct v4l2_dbg_register *reg)
 {
-	struct psee_dma *dev = video_drvdata(file);
+	struct evtdec_dma *dev = video_drvdata(file);
 
 	if (reg->match.addr > 0)
 		return -EINVAL;
@@ -831,7 +819,7 @@ static int s_register(struct file *file, void *fh, const struct v4l2_dbg_registe
 
 static int g_chip_info(struct file *file, void *fh, struct v4l2_dbg_chip_info *chip)
 {
-	struct psee_dma *dev = video_drvdata(file);
+	struct evtdec_dma *dev = video_drvdata(file);
 
 	if (chip->match.addr > 0)
 		return -EINVAL;
@@ -880,7 +868,7 @@ static const struct v4l2_file_operations fops = {
  */
 static int timeout_s_ctrl(struct v4l2_ctrl *ctrl)
 {
-	struct psee_dma *dma = ctrl->priv;
+	struct evtdec_dma *dma = ctrl->priv;
 	union global_cfg config = { .raw = read_reg(dma, REG_CONFIG) };
 	u64 timeout;
 
@@ -893,6 +881,13 @@ static int timeout_s_ctrl(struct v4l2_ctrl *ctrl)
 		timeout = ctrl->val;
 		timeout *= clk_get_rate(dma->clk);
 		timeout /= 1000000; /* val is in us */
+		/* REG_TLAST_TIMEOUT is only [15:0] wide (FsmConfigSetter.sv).
+		 * The control's range below is sized for the documented
+		 * ~125MHz aclk, but clamp here too instead of silently
+		 * wrapping if the real clock rate ends up different.
+		 */
+		if (timeout > 0xffff)
+			timeout = 0xffff;
 		write_reg(dma, REG_TLAST_TIMEOUT, timeout);
 		return 0;
 	default:
@@ -920,9 +915,14 @@ static const struct v4l2_ctrl_config timeout_threshold_control = {
 	.id = V4L2_CID_XFER_TIMEOUT_THRESHOLD,
 	.name = "Transfer timeout threshold(us)",
 	.type = V4L2_CTRL_TYPE_INTEGER,
+	/* REG_TLAST_TIMEOUT is 16 bits wide; at the documented ~125MHz
+	 * aclk that is at most ~524us, so keep the range well inside
+	 * that. def matches FsmConfigSetter.sv's own reset default
+	 * (100us / 12500 cycles @ 125MHz).
+	 */
 	.min = 1,
-	.max = 4000000,
-	.def = 10000,
+	.max = 500,
+	.def = 100,
 	.step = 1,
 };
 
@@ -930,16 +930,15 @@ static const struct v4l2_ctrl_config timeout_threshold_control = {
  * Video DMA Core
  */
 
-int psee_dma_init(struct psee_composite_device *psee_dev, struct psee_dma *dma,
+int evtdec_dma_init(struct evtdec_composite_device *evtdec_dev, struct evtdec_dma *dma,
 		  enum v4l2_buf_type type, unsigned int port, struct resource *io_space)
 {
-	char name[16];
 	int ret;
-	struct device *dev = psee_dev->dev;
+	struct device *dev = evtdec_dev->dev;
 	struct v4l2_ctrl_handler *ctrl_hdr;
 	union global_ctrl control = { 0 };
 
-	dma->psee_dev = psee_dev;
+	dma->evtdec_dev = evtdec_dev;
 	dma->port = port;
 	mutex_init(&dma->lock);
 	mutex_init(&dma->pipe.lock);
@@ -968,7 +967,7 @@ int psee_dma_init(struct psee_composite_device *psee_dev, struct psee_dma *dma,
 
 	/* ... and the video node... */
 	dma->video.fops = &fops;
-	dma->video.v4l2_dev = &psee_dev->v4l2_dev;
+	dma->video.v4l2_dev = &evtdec_dev->v4l2_dev;
 	dma->video.queue = &dma->queue;
 	snprintf(dma->video.name, sizeof(dma->video.name), "%pOFn %s %u",
 		 dev->of_node,
@@ -1000,7 +999,7 @@ int psee_dma_init(struct psee_composite_device *psee_dev, struct psee_dma *dma,
 	dma->queue.io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
 	dma->queue.lock = &dma->lock;
 	dma->queue.drv_priv = dma;
-	dma->queue.buf_struct_size = sizeof(struct psee_dma_buffer);
+	dma->queue.buf_struct_size = sizeof(struct evtdec_dma_buffer);
 	dma->queue.ops = &queue_qops;
 	dma->queue.mem_ops = &vb2_dma_contig_memops;
 	dma->queue.timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC
@@ -1008,13 +1007,13 @@ int psee_dma_init(struct psee_composite_device *psee_dev, struct psee_dma *dma,
 	dma->queue.dev = dev;
 	ret = vb2_queue_init(&dma->queue);
 	if (ret < 0) {
-		dev_err(dma->psee_dev->dev, "failed to initialize VB2 queue\n");
+		dev_err(dma->evtdec_dev->dev, "failed to initialize VB2 queue\n");
 		goto error;
 	}
 
 	/* ... and the DMA channel. */
-	snprintf(name, sizeof(name), "port%u", port);
-	dma->dma = dma_request_chan(dev, name);
+	snprintf(dma->name, sizeof(dma->name), "port%u", port);
+	dma->dma = dma_request_chan(dev, dma->name);
 	if (IS_ERR(dma->dma)) {
 		ret = PTR_ERR(dma->dma);
 		if (ret != -EPROBE_DEFER)
@@ -1034,8 +1033,6 @@ int psee_dma_init(struct psee_composite_device *psee_dev, struct psee_dma *dma,
 	/* Reset the RTL */
 	control.reset = 1;
 	write_reg(dma, REG_CONTROL, control.raw);
-	/* Set packet size to image size in bus words */
-	write_reg(dma, REG_PACKET_LENGTH, dma->transfer_size / 8);
 
 	/* Initialize the V4L2-ctl handler to tune the behavior */
 	dma->video.ctrl_handler =
@@ -1047,9 +1044,6 @@ int psee_dma_init(struct psee_composite_device *psee_dev, struct psee_dma *dma,
 		goto error;
 	}
 	v4l2_ctrl_handler_init(ctrl_hdr, 3);
-
-	/* Set a timeout symbol that works in both EVT21 and EVT3 */
-	write_reg64(dma, REG_TLAST_TIMEOUT_EVT_LSB, DEFAULT_MARKER);
 
 	/* Register a control to enable/disable timeout on transfers */
 	v4l2_ctrl_new_custom(ctrl_hdr, &timeout_enable_control, dma);
@@ -1071,11 +1065,11 @@ int psee_dma_init(struct psee_composite_device *psee_dev, struct psee_dma *dma,
 	return 0;
 
 error:
-	psee_dma_cleanup(dma);
+	evtdec_dma_cleanup(dma);
 	return ret;
 }
 
-void psee_dma_cleanup(struct psee_dma *dma)
+void evtdec_dma_cleanup(struct evtdec_dma *dma)
 {
 	if (video_is_registered(&dma->video))
 		video_unregister_device(&dma->video);

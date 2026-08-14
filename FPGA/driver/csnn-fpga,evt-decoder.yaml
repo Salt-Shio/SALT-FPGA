@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/csnn-fpga/csnn-fpga,evt-decoder.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: CSNN-FPGA Event Decoder
+
+maintainers:
+  - CSNN-FPGA project
+
+description: |
+  Adapted from Prophesee's psee,axi4s-packetizer binding. Replaces the
+  official ps_host_if AXI4-Stream packetizer with FsmEventExtractor
+  (FPGA/EvtDecoder): instead of just packetizing whatever AXI4-Stream
+  transfers it receives, this block decodes EVT2.1 events into
+  (x, y, type, t) tuples on the PL side (see FPGA/EvtDecoder/EvtDecoder.srcs
+  /sources_1/new/EventProcessor.sv) before handing them to the DMA engine,
+  and generates TLAST based on a timeout on real events, not on transfer
+  size or a synthetic heartbeat.
+
+properties:
+  compatible:
+    enum:
+      - csnn-fpga,evt-decoder
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    description: List of clock specifiers
+    items:
+      - description: AXI Stream clock (pl_clk0, ~125MHz)
+
+  clock-names:
+    items:
+      - const: aclk
+
+  dmas:
+    description: |
+      List of the DMA channels connected to the decoder.
+    maxItems: 1
+
+  dma-names:
+    description: |
+      Name of the DMA channel, used to map it to the decoder's output.
+      Shall be named "port" followed by the index of the port that will
+      feed it.
+    items:
+      - const: port0
+
+  ports:
+    $ref: /schemas/graph.yaml#/properties/ports
+
+    properties:
+      port@0:
+        $ref: /schemas/graph.yaml#/$defs/port-base
+        description: |
+          Input/sink port node, describing the connection to the
+          output of event_stream_smart_tracker (ESST) in the hardware
+          pipeline.
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - clock-names
+  - dmas
+  - dma-names
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    event_decoder@a0030000 {
+        compatible = "csnn-fpga,evt-decoder";
+        reg = <0xa0030000 0x80>;
+        clock-names = "aclk";
+        clocks = <&zynqmp_clk 71>;
+        dmas = <&axi_dma 1>;
+        dma-names = "port0";
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                /* Sink port */
+                reg = <0>;
+                evtdec_in: endpoint {
+                    remote-endpoint = <&esst_out>;
+                };
+            };
+        };
+    };
+...

@@ -1,5 +1,5 @@
-obj-m := psee-video.o
-psee-video-objs += psee-dma.o psee-composite.o
+obj-m := evtdec-video.o
+evtdec-video-objs += evtdec-dma.o evtdec-composite.o
 
 SRC := $(shell pwd)
 

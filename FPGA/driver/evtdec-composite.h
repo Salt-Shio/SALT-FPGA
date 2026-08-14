@@ -1,12 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Prophesee Video IP Composite Device
+ * CSNN-FPGA Event Decoder Composite Device
  *
+ * Adapted from Prophesee's psee-composite.c (zynq-video-drivers,
+ * kernel-5.15 branch, commit 22c8103d047cc7937960fd655d0c6869f745d76b).
  * Copyright (C) Prophesee S.A.
  */
 
-#ifndef PSEE_COMPOSITE_H
-#define PSEE_COMPOSITE_H
+#ifndef EVTDEC_COMPOSITE_H
+#define EVTDEC_COMPOSITE_H
 
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -16,7 +18,7 @@
 #include <media/v4l2-device.h>
 
 /**
- * struct psee_composite_device - Prophesee Video IP device structure
+ * struct evtdec_composite_device - Prophesee Video IP device structure
  * @v4l2_dev: V4L2 device
  * @media_dev: media device
  * @dev: (OF) device
@@ -25,7 +27,7 @@
  * @v4l2_caps: V4L2 capabilities of the whole device (see VIDIOC_QUERYCAP)
  * @lock: This is to ensure all dma path entities acquire same pipeline object
  */
-struct psee_composite_device {
+struct evtdec_composite_device {
 	struct v4l2_device v4l2_dev;
 	struct media_device media_dev;
 	struct platform_device *platform_dev;
@@ -37,7 +39,7 @@ struct psee_composite_device {
 	u32 v4l2_caps;
 };
 
-int psee_graph_pipeline_start_stop(struct psee_composite_device *pdev,
-				   struct psee_pipeline *pipe, bool on);
+int evtdec_graph_pipeline_start_stop(struct evtdec_composite_device *pdev,
+				   struct evtdec_pipeline *pipe, bool on);
 
-#endif /* PSEE_COMPOSITE_H */
+#endif /* EVTDEC_COMPOSITE_H */

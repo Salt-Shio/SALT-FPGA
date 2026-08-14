@@ -476,6 +476,87 @@ Range 要先設定好、再改 Base Address——順序反過來會出現「prop
 
 `FPGA/fpga-projects-1.0.0` 與 `FPGA/ip_repo` 原本整個被最外層 `.gitignore` 當「外部參考碼」忽略,今天在裡面建了實際的 kv260 專案跟封裝了自己的 IP 之後,這個假設不成立,已把這兩行從 `.gitignore` 移除。另外 `FPGA/fpga-projects-1.0.0/.gitignore`(官方原始碼自帶的)裡有一行 `build/`,會擋住 `kv260.bd` 這類我們自己產出的東西,也已移除,改交給外層通用的 Vivado 產物規則(`*.cache/`、`*.gen/`、`*.runs/` 等,不含路徑前綴,任何深度都適用)過濾——驗證過,拿掉這三行規則後只新增 224 個原始碼/設定檔(`.vhd`/`.tcl`/`.sv`/`.xci`/`.bd`/`component.xml` 等),沒有任何自動產生的大量檔案混進來。
 
+## Device tree binding:`psee,axi4s-packetizer`(待解決問題 1 的一部分,節點格式已查到,`xmutil loadapp` 打包格式仍未查)
+
+來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\zynq-video-drivers\Documentation\devicetree\bindings\media\prophesee\psee,axi4s-packetizer.yaml`(官方 driver repo 自帶的 DT schema,已讀完)。
+
+這是 `ps_host_if`(以後是我們的新模組)在 device tree 裡要出現的節點格式,`psee-composite.c` 就是綁定這個 `compatible` 字串來掃圖的:
+
+| 屬性 | 內容 | 對應到我們的設計 |
+|---|---|---|
+| `compatible` | `"psee,axi4s-packetizer"` | 新模組沿用這個字串的話,`psee-composite.c` 不用改;換新字串則要同步改它的 `of_device_id` 表 |
+| `reg` | 1 筆,AXI-Lite base+size | 對應 `0xA0030000`/range 128 |
+| `clocks`/`clock-names` | 1 條,名字固定 `aclk` | 對應 `pl_clk0`(~125MHz) |
+| `dmas`/`dma-names` | 1 筆,名字固定 `port0` | 對應 `axi_dma` 那個 channel,`psee-dma.c` 用 `dma_request_chan(dev, "port0")` 去要 |
+| `ports` → `port@0` | sink port,`remote-endpoint` 指到上游(ESST)輸出端點 | 對應 block design 裡 `event_stream_smart_t_0/m_axis → [新模組]/s_axis` 這條線在 DT 圖裡的表示 |
+
+**結論**:如果新模組沿用 `compatible = "psee,axi4s-packetizer"`,`psee-composite.c`(media graph 建構那層)完全不用改;`psee-dma.c` 也不用改動媒體圖相關的部分,只需要把裡面直接操作暫存器的那幾行(`REG_CONTROL`/`REG_CONFIG`/`REG_TLAST_TIMEOUT*` 的位址跟位元定義)換成 `FsmConfigSetter.sv` 的實際 register map。
+
+**這份 schema 只回答「這個節點本身怎麼寫」,沒有回答「怎麼包成 `xmutil loadapp` 認得的 app bundle(`.bit`/`.dtbo`/`shell.json` 那一整套)」**——待解決問題 1 只解決了一半,app 打包格式還是空白,這部分屬於 AMD Kria SOM 的通用機制(不是 Prophesee 專屬),公開文件應該查得到,不需要 Prophesee 帳號。
+
+## `xmutil loadapp` app bundle 打包格式、PetaLinux out-of-tree kernel module(待解決問題 1、2,查公開文件,非 Prophesee 專屬)
+
+來源:AMD 官方 Kria Apps 文件(`xilinx.github.io/kria-apps-docs`)、AMD 官方 PetaLinux Reference Guide(UG1144,`docs.amd.com`)、AMD Adaptive Computing Wiki。都是公開文件,沒有用到 Prophesee 帳號/token。
+
+### app bundle 結構(待解決問題 1)
+
+一個 accelerated application 在 target 上的實際樣子:`/lib/firmware/<company_name>/<app_name>/` 目錄下放 4 個檔案,其中 3 個**檔名主體要完全一致**(只有副檔名不同):
+
+| 檔案 | 內容 |
+|---|---|
+| `<name>.bit.bin` | bitstream(由 `.bit` 轉出) |
+| `<name>.dtbo` | device tree overlay(由 `.dtsi` 轉出,把新模組的 DT 節點——例如上一節的 `psee,axi4s-packetizer` 節點——包成 overlay) |
+| `<name>.xclbin` | metadata(Prophesee 這條路徑用不用得到 Vitis 加速流程、要不要這個檔案未查證) |
+| `shell.json` | 描述這個 app 的 design type(目前確認的值只有 `"XRT_FLAT"` 一種,其他可能值未查證) |
+
+**載入機制**:`dfx-mgr`(AMD 的 daemon)用 `inotify` 監控上面那個目錄,`xmutil loadapp`/`unloadapp`/`listapps` 實際上是呼叫 `dfx-mgr` 做事,不是 `xmutil` 自己直接操作硬體。
+
+**沒查到的部分**:兩份不同的官方文件對目錄路徑的寫法不完全一致(一份寫 `/lib/firmware/xilinx/<accelerator-dir>`,另一份寫 `/lib/firmware/<company_name>/<app_name>`),哪個是實際生效的路徑、`<company_name>` 是不是固定字串,沒有交叉核對到一致答案,等實際上板操作 `xmutil listapps` 看現有的 `prophesee-kv260-genx320` 目錄長怎樣再確認,不用猜。`shell.json` 完整欄位清單、`.xclbin` 是否必要,也還沒查到。
+
+### kernel driver 怎麼掛進 PetaLinux(待解決問題 2)
+
+`petalinux-create -t modules -n <name>` 在 PetaLinux 專案下產生範本,recipe 放在 `project-spec/meta-user/recipes-modules/<name>/`(含 `.bb`、Makefile、C 檔案範本),`rootfs config` 裡勾選啟用後會自動裝進 target rootfs;掛進 kernel 的路徑是 `/lib/modules/<kernel 版本>/extra`(out-of-tree module 固定放這裡,對照 `kernel` 子目錄放 in-tree module)。**如果 DT 節點的 `compatible` 對得上,開機時 `udev` 會自動載入對應 module,不用手動 `modprobe`**——這解釋了 `load-prophesee-kv260-genx320.sh` 裡那幾行 `modprobe psee-tkeep-handler`/`psee-event-stream-smart-tracker` 存在的理由(腳本註解寫「強制先載入,才不會被 pass-through driver 搶先 probe」,不是因為 udev 不會自動載入,是要控制載入順序)。
+
+`zynq-video-drivers/Makefile` 本身(見前一節)已經是標準 out-of-tree module 寫法,理論上可以直接被現成的 recipe 包起來,不用重寫成 PetaLinux 範本的樣子。
+
+**沒查到的部分**:`petalinux-create` 產生的是「從範本開始寫」的流程,我們的情況是**已經有一份完整原始碼**(`zynq-video-drivers` 這幾支 `.c`/`Makefile`),要怎麼把現成原始碼接進 `.bb` recipe(改 `SRC_URI` 指向既有原始碼、或整份複製進 `files/`)沒有查到官方文件給的具體範例,只是 BitBake 的通用模式(recipe 描述哪裡拿原始碼、`do_compile`/`do_install` 怎麼做),等真正動手接 PetaLinux 環境時要再核對,不能只憑這個通用模式直接照抄。
+
+## Prophesee 官方 PetaLinux 專案(`petalinux-projects`)——真實的 recipe 跟版本核對(2026-08-13)
+
+來源:`https://github.com/prophesee-ai/petalinux-projects`,分支 `kv260-2022.2`(公開 repo,不需要帳號),透過 GitHub API/raw 內容直接查證,不是猜測。
+
+### `pl-custom.dtsi` 是空的,PL 端真實 device tree 節點不在這個 base 專案裡
+
+`project-spec/meta-user/recipes-bsp/device-tree/files/pl-custom.dtsi` 內容只有空根節點加註解「這裡的改動只有開 FPGA manager/device tree overlay 才會生效」。**結論**:每顆 PL IP 真正的 device tree 節點(真實 `reg`/`clocks`/`dmas`/phandle 數值)不是寫死在這個 base PetaLinux 專案裡,是動態生成、包在 accelerated application(`xmutil loadapp` 的 bundle)裡——確切生成機制(是否靠 Vivado IP 自帶的 binding yaml 自動產生)未查證,不要當定論。**要拿到真實數值,最可靠的方法是板子連上、系統跑起來之後,直接 dump 即時 device tree**:`dtc -I fs -O dts /proc/device-tree`,不用等原始碼。
+
+### `psee-video` 的 BitBake recipe 已找到,回答了待解決問題 2
+
+`project-spec/meta-user/recipes-modules/psee-video/psee-video_2.0.0.bb` 全文:
+
+```
+SUMMARY = "Recipe to build an external psee-video Linux kernel module"
+SECTION = "PETALINUX/modules"
+LICENSE = "GPLv2"
+LIC_FILES_CHKSUM = "file://COPYING;md5=12f884d2ae1ff87c09e5b7ccc2c4ca7e"
+
+SRC_URI = "git://github.com/prophesee-ai/zynq-video-drivers;protocol=https;branch=kernel-5.15"
+SRCREV = "22c8103d047cc7937960fd655d0c6869f745d76b"
+SRC_URI += "file://avoid-descriptor-link-corruption.patch"
+
+S = "${WORKDIR}/git"
+inherit module
+```
+
+用標準 Yocto `module.bbclass`(`inherit module`),`SRC_URI` 直接指到 `zynq-video-drivers` 這個 git repo,`SRCREV` 釘死一個 commit,額外疊一個 patch。我們自己的 driver 要進 PetaLinux,大概率就是照這個模式寫一份類似的 recipe,只是 `SRC_URI` 換成我們自己的原始碼位置。
+
+### 版本核對:本地 `docs/FPGA/Reference/KV260/zynq-video-drivers` 剛好就是這個 recipe 釘死的版本
+
+跑 `git log`/`git branch` 確認:本地那份參考副本,分支是 `kernel-5.15`,HEAD 正好就是 `22c8103d047cc7937960fd655d0c6869f745d76b`——**跟上面 `.bb` recipe 的 `SRCREV` 完全一樣**。也就是說我們一直在讀、也已經複製進 `FPGA/driver/` 當起點的那份原始碼,版本上跟板子實際跑的東西是同一份,不是不同版本、不用擔心對不上。
+
+### 唯一的差異:一個額外的 patch,修 DMA 停止時的 descriptor 亂序問題
+
+`files/avoid-descriptor-link-corruption.patch` 內容:在 `stop_streaming()` 結尾多做「釋放 DMA channel 再重新 `dma_request_chan()` 要一次」(`psee-dma.c`),搭配 `psee-dma.h` 新增 `char name[16]` 欄位讓 channel 名字能在 `stop_streaming()` 裡重複使用。修的問題是「停止串流時 DMA buffer 偶爾會亂序」。**我們自己改 `psee-dma.c` 的時候,這個修法要一併帶上**,因為我們沿用同一套 `stop_streaming()`/`dma_request_chan()` 模式,會踩到同一個已知問題。
+
 ## 參考檔案索引
 
 | 主題 | 路徑 |
@@ -493,4 +574,5 @@ Range 要先設定好、再改 Base Address——順序反過來會出現「prop
 | PL 直連架構筆記(資源估算、事件速率規格) | `D:\Project\SNN\dev\references\hardware_platform.md` |
 | Prophesee driver 官方文件(psee-video.rst) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\zynq-video-drivers\Documentation\admin-guide\media\psee-video.rst` |
 | Prophesee EVT2.1 官方格式文件(已交叉核對 `vx_f`/`valid` 欄位) | https://docs.prophesee.ai/stable/data/encoding_formats/evt21.html |
+| Prophesee 官方 PetaLinux 專案(真實 `.bb` recipe、版本核對用) | https://github.com/prophesee-ai/petalinux-projects(分支 `kv260-2022.2`) |
 | zynq-video-drivers 原始碼(本機複本,含 `psee-event-stream-smart-tracker.c` 等) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\zynq-video-drivers` |
