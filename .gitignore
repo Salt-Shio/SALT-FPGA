@@ -30,6 +30,18 @@ dfx_runtime.txt
 */*/*.sim/sim_*/behav
 */*/*.sim/sim_*/synth
 
+# FPGA/driver:kernel module 編譯產物(FPGA/driver/Makefile 的 make/make clean 可重新產生),不進版控
+FPGA/driver/*.o
+FPGA/driver/*.ko
+FPGA/driver/*.mod
+FPGA/driver/*.mod.c
+FPGA/driver/.*.cmd
+FPGA/driver/Module.symvers
+FPGA/driver/Modules.symvers
+FPGA/driver/Module.markers
+FPGA/driver/modules.order
+FPGA/driver/.tmp_versions/
+
 # OS 產生的雜項檔案
 Thumbs.db
 .DS_Store
