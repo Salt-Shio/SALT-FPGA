@@ -1,4 +1,12 @@
-# Bug:`enable_pattern` 假資料模式收不到資料(真實感測器資料路徑正常)
+# Bug:`enable_pattern` 假資料模式收不到資料(真實感測器資料路徑正常)(已修復)
+
+## 2026-08-17 更新(2):已修復,上板驗證通過
+
+第 15 節的修法(pattern 模式下 `M_AXIS_TLAST` 改成 `pattern_ctr_q == 11'h7FF` 時掛一次,不再寫死 0)已重新合成、燒錄上板。
+
+`v4l2_reg set 0x4 0x1` 開 `enable_pattern` 後,`evt_dump /dev/video0 20` 正常收到遞增的假資料(`x=0,1,2...`),不再卡住。連續執行兩次 `evt_dump`,計數器從上次結束的地方接續(`4→23`),行為正常。
+
+`enable_pattern` 假資料模式確認修復完成,不再是已知問題。
 
 ## 2026-08-17 更新:核心功能已確認正常,問題範圍縮小到 `enable_pattern` 本身
 
@@ -148,13 +156,43 @@ sudo ~/csnn-fpga/v4l2_reg /dev/video0 set 0x4 0x0
 
 **代表**:M_AXIS→`axi_dma`→driver→V4L2 這整條共用路徑是通的、沒有問題。問題**精確定位在 `enable_pattern=1` 時的輸出邏輯**(`EventProcessor.sv:170-177` 那段 mux),不是更底層、更大範圍的東西。
 
-## 結論(2026-08-17 更新)
+### 15. 根本原因確認:`M_AXIS_TLAST` 在 pattern 模式下被寫死成 0
 
-**核心功能已驗證正常,不再需要緊急處理。** `enable_pattern` 本身還有 bug 沒修好,但只影響這個除錯用的假資料模式,優先度低,可以之後有空再查。
+`EventProcessor.sv:177`:
 
-如果之後要繼續查,範圍已經縮小很多,靜態檢查(讀原始碼)在原本「整條路徑不通」的假設下已經到極限,現在既然知道問題精確侷限在 pattern mode 的 mux 邏輯,值得優先嘗試:
-- 用 Vivado ILA 只需要盯 `fsm_event_extractor_0` 內部的 `pattern_ctr_q`、`M_AXIS_TVALID`、`M_AXIS_TREADY`,範圍比原本設想的小很多
-- 或者乾脆放棄目前這種「組合邏輯、完全獨立於真實輸入」的 pattern 模式設計,改成跟官方一樣「借用真實輸入的 valid 脈衝,只換內容」的做法——反正真實資料路徑已經證實沒問題,兩種做法擇一改寫都不難
+```systemverilog
+assign M_AXIS_TLAST  = cfg_enable_pattern ? 1'b0 : m_last_q;
+```
+
+`cfg_enable_pattern=1` 時,`M_AXIS_TLAST` 永遠是 `0`,不管跑多久都不會拉高。
+
+查證 AXI DMA S2MM 通道的完成條件(Linux `xilinx_dma.c` driver 原始碼 + 多篇 Xilinx 官方論壇討論,見下方 Sources):**S2MM 只認 `TLAST` 來判斷一次 transfer 是否完成、觸發 IOC 完成中斷,不會因為「dma->transfer_size(1MB)寫滿」就自動完成——沒有 `TLAST`,S2MM 硬體本身就是卡住等,永遠不會產生完成中斷。**
+
+這跟第 4 節查到的現象完全吻合:`enable_pattern` 卡住時 `xilinx-dma-controller` 中斷計數器恆為 0——資料確實有送進 DMA(`pattern_ctr_q` 有在跑、`M_AXIS_TVALID` 依 RTL 邏輯恆為 1),DMA 也確實有在收,但因為永遠等不到 `TLAST`,這筆 transfer 在硬體層面永遠處於「未完成」狀態,中斷永遠不會來,`evt_dump` 的 `VIDIOC_DQBUF` 自然永遠拿不到 buffer。
+
+跟第 11 節官方 `axi4s_packetizer.vhd` 的比對也對上了:官方假資料模式的 `tlast` 邏輯完全沒動,一樣搭配真實資料流程正常運作、正常掛 `tlast`;只有我們把 `M_AXIS_TLAST` 在 pattern 模式下整個關掉。第 14 節「真實資料路徑正常」也印證這點——真實路徑的 `M_AXIS_TLAST = m_last_q`,而 `m_last_q` 由 `tlast_due`(`flush_timer_q >= cfg_tlast_timeout`,預設 100us 逾時)週期性觸發,所以一定會定期掛 `tlast`,DMA 才能持續正常完成 transfer。
+
+**這就是根本原因,不是猜測——有 RTL 原始碼(第 177 行)、AXI DMA 硬體行為的外部佐證、以及本文件第 4、11、14 節已經蒐集到的實測資料三方吻合。**
+
+Sources:
+- [xilinx_dma.c](file:///home/salt/petalinux/linux-xlnx/drivers/dma/xilinx/xilinx_dma.c)(板子用的 kernel 原始碼):`xilinx_dma_irq_handler()` 只認硬體 `DMASR` 暫存器裡的 `FRM_CNT_IRQ` 位元來判斷完成,driver 本身不會因為位元組數到就自己判定完成——完成與否完全由 fabric 端的 AXI DMA IP 決定。
+- [Common AXI Themes on Xilinx's Forum(zipcpu.com)](https://zipcpu.com/blog/2021/03/20/xilinx-forums.html):「without the TLAST signal, the S2MM design will hang while waiting for it」,並說明這是 Xilinx AXI DMA 已知、被多次在官方論壇討論過的行為,不是 buffer 填滿就會自動完成。
+
+## 結論(2026-08-17 更新,已修復)
+
+**根本原因**(見第 15 節):`EventProcessor.sv:177` 在 `enable_pattern=1` 時把 `M_AXIS_TLAST` 寫死成 `0`,導致 AXI DMA S2MM 通道永遠等不到 `TLAST`、永遠無法完成一次 transfer、永遠不會觸發完成中斷。這是 pattern 模式獨有的問題,不影響真實資料路徑(真實路徑的 `TLAST` 由既有的 `tlast_due`/逾時機制正常驅動)。
+
+**修法**:不跟真實路徑共用 `tlast_due`/`flush_timer_q`(避免兩條路徑時序混在一起),改成 pattern 模式自己獨立、簡單的週期性 `tlast`,借 `pattern_ctr_q`(11-bit)每 2048 筆自然回捲一次掛一次:
+
+```systemverilog
+assign M_AXIS_TLAST  = cfg_enable_pattern
+	? (pattern_ctr_q == 11'h7FF)
+	: m_last_q;
+```
+
+`FPGA/EvtDecoder/EvtDecoder.srcs/sources_1/new/EventProcessor.sv` 跟 `FPGA/ip_repo/fsm_event_extractor/src/EventProcessor.sv` 兩份同步修改。用 xsim 補寫 `tb_event_processor.sv` Test 9 驗證(無 backpressure 精確驗證回捲週期、隨機 backpressure 驗證 AXI4-Stream 穩定性),7 個亂數種子全過。
+
+**已上板驗證**:重新合成/實作/產生 bitstream,更新 app bundle 後,`v4l2_reg set 0x4 0x1` 開 `enable_pattern`,`evt_dump` 正常收到遞增假資料,不再卡住。
 
 ## 尚未查證/可能值得後續檢查的方向(未深入,先記錄)
 

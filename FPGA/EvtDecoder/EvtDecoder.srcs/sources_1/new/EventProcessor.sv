@@ -174,5 +174,13 @@ module EventProcessor #(
 	assign M_AXIS_TVALID = cfg_enable_pattern ? cfg_enable : (m_valid_q && cfg_enable);
 	assign M_AXIS_TDATA  = cfg_enable_pattern ? pattern_data : m_data_q;
 	assign M_AXIS_TSTRB  = {(C_M_AXIS_TDATA_WIDTH/8){1'b1}};
-	assign M_AXIS_TLAST  = cfg_enable_pattern ? 1'b0 : m_last_q;
+	// pattern 模式沒有真實 FSM 的 m_last_q 可用:AXI DMA S2MM 只認 tlast 判斷 transfer
+	// 完成(見 FPGA/BUG/evtdec_pattern_no_dma_transfer.md #15),沒有 tlast 就永遠卡住等,
+	// 不會因為 buffer 填滿而自動完成。借 pattern_ctr_q(11-bit)每 2048 筆自然回捲一次
+	// 掛一次 tlast,讓 DMA 定期完成、觸發中斷。tlast 跟 tdata 一樣屬於這一拍的內容,
+	// 不能因為 TREADY 還沒來就改口:pattern_ctr_q 在被收走前本來就不會變,不用額外拿
+	// TREADY 鎖它。
+	assign M_AXIS_TLAST  = cfg_enable_pattern
+		? (pattern_ctr_q == 11'h7FF)
+		: m_last_q;
 endmodule

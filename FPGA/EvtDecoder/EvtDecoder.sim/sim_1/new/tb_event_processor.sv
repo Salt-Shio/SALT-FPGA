@@ -177,7 +177,9 @@ module tb_event_processor;
 	// ---------------- monitor / checker(跟 tick() 用同一個 1ns 安全點取樣)----------------
 	always @(posedge clk) begin
 		#1;
-		if (rstn && m_valid && m_ready) begin
+		// pattern 模式的輸出不是這個 scoreboard 管的範圍(Test 9 自己另外檢查),
+		// 不排除的話,pattern 模式每一筆都會被這裡誤判成「不在預期內的事件」。
+		if (rstn && m_valid && m_ready && !cfg_enable_pattern) begin
 			exp_evt_t e;
 			logic [TDATA_W-1:0] exp_data;
 			checked_count++;
@@ -250,6 +252,18 @@ module tb_event_processor;
 		logic [5:0]  r_tlo;
 		logic [10:0] r_x, r_y;
 		logic [31:0] r_mask;
+
+		// Test 9 用
+		logic [10:0] got_ctr;
+		logic [10:0] pat_prev_ctr;
+		logic pat_have_prev_ctr;
+		int pat_tlast_count;
+		int pat_beat_count;
+		int pat_stability_violations;
+		logic pat_prev_valid_stall;
+		logic pat_any_stall_seen;
+		logic [TDATA_W-1:0] pat_prev_data;
+		logic pat_prev_last;
 
 		do_reset();
 
@@ -331,6 +345,112 @@ module tb_event_processor;
 		end
 		bp_enable = 0;
 		wait_drain();
+
+		// --- Test 9: enable_pattern 模式 ---
+		// 1) tlast 應該每 2048 筆「真的被接受」的事件掛一次(pattern_ctr_q 回捲點)
+		// 2) AXI4-Stream 穩定性規則:TVALID=1 但 TREADY=0(還沒被接受)的那一拍,
+		//    下一拍如果還是沒被接受、或剛好被接受,tdata/tlast 都不能跟上一拍不一樣
+		//    ——這條專門盯 evtdec_pattern_no_dma_transfer.md #15 修過的那個 bug
+		//    (曾經把 TREADY 錯放進 tlast 的判斷式,導致卡住等待時 tlast 忽高忽低)。
+		// 拆兩段:9a 不開 backpressure(TREADY 恆 1),吞吐量固定,可以精確算出總筆數
+		// 該看到幾次 tlast;9b 才開隨機 backpressure,專門逼出停頓,測穩定性。
+		do_reset();
+		cfg_enable_pattern = 1'b1;
+		pat_tlast_count = 0;
+		pat_beat_count = 0;
+		pat_stability_violations = 0;
+		pat_prev_valid_stall = 1'b0;
+		pat_have_prev_ctr = 1'b0;
+
+		// --- Test 9a: 不開 backpressure,固定跑 4096 拍 = 精確 2 個回捲週期 ---
+		bp_enable = 1'b0;
+		for (i = 0; i < 4096; i++) begin
+			tick();
+
+			if (m_valid && m_ready) begin
+				got_ctr = m_data[56:46];
+
+				if ((got_ctr == 11'h7FF) != m_last) begin
+					$error("[%0t] tlast 跟 pattern counter 對不上: counter=%0d tlast=%b", $time, got_ctr, m_last);
+					error_count++;
+				end
+				if (m_last) pat_tlast_count++;
+
+				if (pat_have_prev_ctr && got_ctr !== (pat_prev_ctr + 11'd1)) begin
+					$error("[%0t] pattern counter 不連續: 上一筆=%0d 這一筆=%0d", $time, pat_prev_ctr, got_ctr);
+					error_count++;
+				end
+				pat_prev_ctr = got_ctr;
+				pat_have_prev_ctr = 1'b1;
+
+				pat_beat_count++;
+			end
+		end
+
+		if (pat_beat_count != 4096) begin
+			$error("Test 9a: 沒開 backpressure、TREADY 恆 1,4096 拍應該接受剛好 4096 筆,實際 %0d 筆", pat_beat_count);
+			error_count++;
+		end
+		if (pat_tlast_count != 2) begin
+			$error("Test 9a: 4096 筆應該精確對到 2 個 2048 回捲週期、掛 2 次 tlast,實際 %0d 次", pat_tlast_count);
+			error_count++;
+		end
+		$display("Test 9a(無 backpressure): 接受 %0d 筆、tlast 出現 %0d 次", pat_beat_count, pat_tlast_count);
+
+		// --- Test 9b: 開隨機 backpressure,專門測穩定性規則,不追求覆蓋完整週期 ---
+		bp_enable = 1'b1;
+		pat_prev_valid_stall = 1'b0;
+		pat_any_stall_seen = 1'b0;
+		for (i = 0; i < 3000; i++) begin
+			tick();
+
+			if (pat_prev_valid_stall) begin
+				if (m_data !== pat_prev_data || m_last !== pat_prev_last) begin
+					$error("[%0t] pattern 模式在 backpressure 期間 tdata/tlast 改變了,違反 AXI4-Stream 穩定性規則(got data=%h last=%b, 上一拍 data=%h last=%b)",
+						$time, m_data, m_last, pat_prev_data, pat_prev_last);
+					pat_stability_violations++;
+				end
+			end
+			pat_prev_valid_stall = m_valid && !m_ready;
+			if (pat_prev_valid_stall) pat_any_stall_seen = 1'b1;
+			pat_prev_data = m_data;
+			pat_prev_last = m_last;
+
+			if (m_valid && m_ready) begin
+				got_ctr = m_data[56:46];
+				if ((got_ctr == 11'h7FF) != m_last) begin
+					$error("[%0t] tlast 跟 pattern counter 對不上: counter=%0d tlast=%b", $time, got_ctr, m_last);
+					error_count++;
+				end
+				if (got_ctr !== (pat_prev_ctr + 11'd1)) begin
+					$error("[%0t] pattern counter 不連續: 上一筆=%0d 這一筆=%0d", $time, pat_prev_ctr, got_ctr);
+					error_count++;
+				end
+				pat_prev_ctr = got_ctr;
+			end
+		end
+		if (!pat_any_stall_seen) begin
+			// bp_enable=1 卻整段完全沒出現過一次停頓,代表這段測試沒有真的測到穩定性
+			// 規則要驗的情境,值得留意(但不當成失敗,隨機數値本來就有機率性)
+			$display("Test 9b 提醒: 3000 拍隨機 backpressure 期間沒有觀察到任何停頓,穩定性檢查這次沒被真的觸發到");
+		end
+
+		error_count += pat_stability_violations;
+		$display("Test 9b(隨機 backpressure): 穩定性違規 %0d 次", pat_stability_violations);
+
+		// 收尾:先把還卡著的最後一筆放行(TREADY 恆 1),不要在 pattern 模式還有
+		// 未完成 transfer 卡在半路時就切斷 cfg_enable_pattern——那本身就是另一種
+		// 協定違規,不是這個測試想驗證的東西,會汙染後面的收尾檢查。m_ready 本身是
+		// 「下一拍才生效」的暫存輸出,關掉 bp_enable 那一拍不保證馬上變 1,多留幾拍
+		// 確保真的穩定下來、卡住的那筆(如果有)確實被接受掉。
+		bp_enable = 1'b0;
+		repeat (3) tick();
+		// tick() 收尾點(edge 之後 #1)跟全域 monitor 對同一個 edge 的檢查是同一個模擬
+		// 時間點,兩個 process 誰先跑不保證——這裡多留 #2 錯開,monitor 對這個 edge
+		// 的檢查一定已經跑完(還看得到 cfg_enable_pattern=1),才輪到這裡切掉它,
+		// 不會有競態讓 monitor 誤判成 pattern 模式已經關閉。
+		#2;
+		cfg_enable_pattern = 1'b0;
 
 		repeat (10) tick();
 
