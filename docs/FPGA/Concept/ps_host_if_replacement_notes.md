@@ -641,3 +641,70 @@ ps_host_if@a0030000 {
 **額外確認**:`__symbols__` 區塊的 label 直接是 `ps_host_if_0`、`event_stream_smart_t_0`——跟 Vivado block design 裡的 instance 名稱完全一致,證實 PL 端節點是工具直接讀 block design 產生的,不是手寫,上一節「懷疑 device-tree-generator 讀 `.xsa`」的推論方向是對的(雖然還沒查到 UG1144 裡的具體工具操作步驟,但輸出結果已經證實走的是這條路)。
 
 **結論(給下一步用)**:因為我們的 `fsm_event_extractor` 接在完全相同的位置(同位址、同上游、同 DMA),自己的 device tree 節點理論上只需要改**節點名稱/instance 名**跟 **`compatible` 字串**(`"psee,axi4s-packetizer"` → `"csnn-fpga,evt-decoder"`),`reg`/`clocks`/`dmas`/`ports` 這些可以直接沿用這份反編譯出來的內容。具體做法:拿這份反編譯出的 `.dts` 當底稿,只改 `ps_host_if@a0030000` 這個節點,其餘(`axis_tkeep_handler`/`event_stream_smart_tracker`/`mipi_csi2_rx_subsystem`/`i2c`/`dma` 等,都是我們沒動過的 IP)整段保留,用 `dtc -@ -I dts -O dtb` 重新編譯成我們自己的 `.dtbo`。**還沒驗證過**:這樣編出來的 `.dtbo` 實際 `xmutil loadapp` 上板能不能正常運作,以及 `dtc -@` 這個 flag 的用法是否正確(`-@` 是保留 `__symbols__` 讓輸出仍是合法 overlay 的標準做法,但沒有實測驗證過)。
+
+## `evt_dump` 資料視覺化擷取:資料量/寫入速度查證(2026-08-17,SSH 進 KV260 唯讀查 `free`/`df` + 一次性 `dd` 寫入測速)
+
+目的:`evt_dump` 目前逐筆 `printf`,要改成把資料存下來做視覺化。決定「存去哪裡、能撐多久」之前,先查三件事:PL→PS 的 DMA buffer 架構、板子實際 RAM/儲存狀況、SD 卡實測寫入速度。
+
+### DMA buffer 架構(`FPGA/driver/evtdec-dma.c`)
+
+- 每個 V4L2 buffer 固定 **1 MiB**:`DEFAULT_PACKET_LENGTH = (1 << 20)`(`evtdec-dma.c:45`),`dma->transfer_size = DEFAULT_PACKET_LENGTH`(`evtdec-dma.c:958`),`queue_setup()`/`buffer_prepare()` 都用這個值。
+- `evt_dump.c:22` 跟 driver 要 `NUM_BUFFERS = 4` 個,合計 4 MB ≈ 524,288 筆事件(每筆固定 8 bytes,見 `evt_dump.c:46-56` 的 bit 排列)的緩衝空間。
+- 這是循環使用的 ring,不是累加緩衝池:`buffer_queue()`(`evtdec-dma.c:466`)只在 vb2 把 buffer 交回來時才呼叫 `dmaengine_prep_slave_single()` 排下一個 DMA descriptor(`evtdec-dma.c:498`)。PS 端 `DQBUF` 拿到滿的 buffer、處理完、`QBUF` 還回去的速度跟不上,下一個 descriptor 就排不進去,DMA 停住等。
+- DMA 停住的反壓會一路傳回 `FsmEventExtractor` 的 16 筆 FIFO,再傳回 ESST。ESST 的 `evt21_smart_drop`(見上面「掉包觸發條件」那節)只能容忍幾個 clock cycle 的反壓(125MHz 下一個 cycle 8ns),超過就開始永久丟包,不是排隊等待。
+
+### 填滿一個 1MB buffer 所需時間(換算 PS 端處理時限)
+
+事件率數字來源:`docs/FPGA/Reference/KV260/kv260_operation_notes/genx320_image_quality_debug.md`、`genx320_known_issues.md`(均為已實測/官方規格記載值,非推論)。
+
+| 事件率 | 來源 | 填滿 131,072 筆所需時間 |
+|---|---|---|
+| 30~50 萬 events/s | 一般場景背景雜訊(已實測) | ~260~440 ms |
+| 10 M events/s | MIPI STREAMING 官方規格上限 | ~13 ms |
+| 13.8 M events/s | 失焦誤觸發(已實測到的最壞情況) | ~9.5 ms |
+
+### 板子實際 RAM/儲存(`ssh kv260`,唯讀 `free -h`/`df -h`/`lsblk`)
+
+```
+Mem:  3.8Gi total, 3.5Gi available
+/dev/mmcblk1p2  3.8G  1.1G  2.6G 29%  /       ← 根分割區,SD 卡
+/tmp            2.0G tmpfs                    ← RAM-backed,不是 SD 卡
+/dev/shm        2.0G tmpfs
+```
+
+`/home/petalinux`(SSH 登入使用者的家目錄)掛在 `/dev/mmcblk1p2`,也就是 SD 卡,不是 RAM。`/tmp` 才是 RAM-backed。
+
+### SD 卡實測寫入速度(唯讀查證之外,唯一一次寫入測試,測完已刪除測試檔)
+
+```
+ssh kv260 "dd if=/dev/zero of=/home/petalinux/write_speed_test.bin bs=1M count=200 conv=fsync"
+209715200 bytes (210 MB, 200 MiB) copied, 19.8693 s, 10.6 MB/s
+```
+
+`conv=fsync` 確保量到的是實際落地到卡片的速度,不是只寫進 page cache。**結果:SD 卡持續寫入只有 10.6 MB/s**,對照上表:
+
+- 背景雜訊等級(2.4~4 MB/s)撐得住
+- 規格上限 10 Meps(80 MB/s)、已實測壞情況(110 MB/s)都**遠遠撐不住**,差 8~10 倍
+
+### openeb 參考:視覺化演算法、CSV 格式慣例(2026-08-17)
+
+`docs/FPGA/Reference/KV260/openeb` 裡查到兩個可以直接參考、不用自己重新設計的東西:
+
+- **CSV 格式慣例**(`sdk/modules/core/cpp/samples/metavision_csv_viewer/metavision_csv_viewer.cpp:29-33`,`parse_csv_header()`):官方工具的事件 CSV 是 `x,y,t,p` 一行一筆,可選 header `%geometry:<width>,<height>`。目前決定不轉 CSV,這條只在以後要跟官方工具互通時才用得到。
+- **視覺化演算法**(`sdk/modules/core/cpp/include/metavision/sdk/core/algorithms/periodic_frame_generation_algorithm.h`):`PeriodicFrameGenerationAlgorithm` 用固定 `accumulation_time_us`(官方預設 10000,即 10ms)當窗口,窗口內每個像素記錄最後一筆事件的時間戳跟極性(`time_surface_`,`process_event_buffer()` 第 182-186 行),依極性畫 on/off 兩色 + 背景色(`base_frame_generation_algorithm.h:58-61`,`on_color_default()`/`off_color_default()`,預設 `ColorPalette::Dark`)輸出一張影像。本機視覺化腳本要照這個邏輯做(累積視窗→畫幀→串成動畫),不是單純畫 x-y 散點圖。
+
+### 事件率:文件查到的數字是極端值,不是子彈飛行場景的實測值
+
+上面表格列的 10 Meps(規格上限)、13.8 Mev/s(失焦壞情況)都是**其他情境**下查到/實測到的數字,不代表子彈飛行這個實際使用場景會碰到。SD 卡瓶頸(10.6 MB/s)分析結論成立與否,取決於實際場景的事件率——這需要之後實測才能定案,不能拿極端值直接當設計依據。
+
+### 結論(給下一步用)
+
+擷取資料**不能直接寫到 SD 卡**(`/home/petalinux` 這個掛載點),SD 卡是明確瓶頸。應該寫到 `/tmp`(tmpfs,RAM),事後再從 `/tmp` 搬到 SD 卡或直接 `scp` 回本機,把「即時路徑」跟「慢速儲存媒介」解耦。`/tmp` 2GB 容量換算:
+
+| 事件率 | 2GB 可錄的時長 |
+|---|---|
+| 13.8 Mev/s(已實測最壞情況) | ~19.4 秒 |
+| 10 Meps(規格上限) | ~26.8 秒 |
+| 30~50 萬/s(背景雜訊) | 遠超過需要 |
+
+子彈飛行這類場景抓 1~2 秒窗口,2GB tmpfs 容量非常寬裕。另外 `evt_dump` 目前逐筆 `printf` 這個做法在高事件率下必然來不及(字串格式化 I/O 遠慢於 9~13ms 的處理時限),真要落地存檔要整塊 buffer 一次 `write()`,不能逐筆處理。**還沒做**:改寫 `evt_dump` 支援存檔(寫到 `/tmp`、整塊 `write()`、加時間/筆數上限)、本機視覺化腳本。
