@@ -1,0 +1,604 @@
+/*
+ * csnn-fpga-evtdec:device tree overlay,取代官方 prophesee-kv260-genx320 裡的 ps_host_if 節點。
+ *
+ * 底稿來源:docs/FPGA/Reference/KV260/prophesee-kv260-genx320-decompiled.dts
+ *   (板子上 /lib/firmware/xilinx/prophesee-kv260-genx320/prophesee-kv260-genx320.dtbo 反編譯結果,
+ *    2026-08-14,dtc -I dtb -O dts,唯讀,不需要 root)
+ *
+ * 跟底稿的差異,只有以下幾處(其餘節點——axi_bram_ctrl/dma@a1000000/gpio/i2c/
+ * axis_tkeep_handler/event_stream_smart_tracker/mipi_csi2_rx_subsystem——完全沒動,
+ * 因為本專案沒有更改這些 IP,位址、接線都跟官方設計相同):
+ *
+ *   1. fragment@0/__overlay__/firmware-name:
+ *        "prophesee-kv260-genx320.bit.bin" → "csnn-fpga-evtdec.bit.bin"
+ *        (改成我們自己的 bitstream 檔名,同資料夾底下那顆)
+ *
+ *   2. 節點改名 + compatible 字串:
+ *        ps_host_if@a0030000 → evtdec@a0030000
+ *        compatible = "psee,axi4s-packetizer" → compatible = "csnn-fpga,evt-decoder"
+ *        (跟 FPGA/driver/evtdec-composite.c 的 of_match_table 對上)
+ *        reg / clocks / dmas / dma-names / ports 完全沒動——因為 fsm_event_extractor
+ *        接在跟 ps_host_if_0 完全相同的位置(同位址 0xa0030000、range 0x80、
+ *        同上游 event_stream_smart_tracker、同 axi_dma),這些欄位描述的是「接線關係」,
+ *        不是 ps_host_if 內部的暫存器語意,不受換 IP 影響。
+ *        clocks = <0xffffffff 0x47> 保留:0x47(hex)=71(十進位)=PL0_REF,
+ *        已在 docs/FPGA/Concept/ps_host_if_replacement_notes.md 查證過是對的值。
+ *
+ *   3. __symbols__ 裡對應這個節點的兩筆 symbol 改名跟著改路徑:
+ *        ps_host_if_0 → evtdec_0
+ *        packetizer_in → evtdec_in
+ *
+ *   4. __fixups__ 的 zynqmp_clk 那條長字串裡,指到這個節點的那一段路徑跟著改名
+ *      (其餘 fpga_full/zynqmp_reset/amba/gic 完全沒動,跟我們的節點無關)
+ *
+ *   5. __local_fixups__/fragment@2/__overlay__ 底下,節點名稱跟著改,內容(dmas/
+ *      ports/port@0/endpoint 的 remote-endpoint 位置標記)不變
+ *
+ * 還沒驗證的部分:
+ *   - 這份 .dts 還沒用 `dtc -@ -I dts -O dtb` 實際編譯過,語法是否完全正確未確認
+ *   - 編出來的 .dtbo 還沒上板測試,`xmutil loadapp` 能不能正常吃這份 overlay 未驗證
+ *   - csnn-fpga-evtdec.bit.bin 是直接複製 Vivado `write_bitstream -bin_file` 產物
+ *     (FPGA/fpga-projects-1.0.0/build/projects/kv260/kv260.runs/impl_1/kv260_v1_0_0.bin)
+ *     改檔名而來,檔頭是標準 bitstream sync word(0xFF 開頭),格式上看起來跟
+ *     prophesee-kv260-genx320.bit.bin 一致,但沒有找到 AMD 官方文件逐條確認
+ *     Kria Apps 打包規格是不是就是這個直出格式(沒有另外 bootgen 轉換),
+ *     只是根據檔案特徵判斷,不是查證過的定論
+ */
+/dts-v1/;
+
+/ {
+
+	fragment@0 {
+		target = <0xffffffff>;
+
+		__overlay__ {
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			firmware-name = "csnn-fpga-evtdec.bit.bin";
+			pid = <0x00>;
+			resets = <0xffffffff 0x74>;
+			uid = <0x00>;
+			phandle = <0x10>;
+		};
+	};
+
+	fragment@1 {
+		target = <0xffffffff>;
+
+		__overlay__ {
+			phandle = <0x11>;
+
+			afi0 {
+				compatible = "xlnx,afi-fpga";
+				config-afi = <0x00 0x00 0x01 0x00 0x02 0x00 0x03 0x00 0x04 0x00 0x05 0x00 0x06 0x00 0x07 0x00 0x08 0x00 0x09 0x00 0x0a 0x00 0x0b 0x00 0x0c 0x00 0x0d 0x00 0x0e 0x800 0x0f 0x00>;
+				phandle = <0x12>;
+			};
+
+			clocking0 {
+				#clock-cells = <0x00>;
+				assigned-clock-rates = <0x773545d>;
+				assigned-clocks = <0xffffffff 0x47>;
+				clock-output-names = "fabric_clk";
+				clocks = <0xffffffff 0x47>;
+				compatible = "xlnx,fclk";
+				phandle = <0x13>;
+			};
+		};
+	};
+
+	fragment@2 {
+		target = <0xffffffff>;
+
+		__overlay__ {
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			phandle = <0x14>;
+
+			axi_bram_ctrl@a0000000 {
+				clock-names = "s_axi_aclk";
+				clocks = <0xffffffff 0x47>;
+				compatible = "xlnx,axi-bram-ctrl-4.1";
+				reg = <0x00 0xa0000000 0x00 0x10000>;
+				xlnx,bram-addr-width = <0x0e>;
+				xlnx,bram-inst-mode = "EXTERNAL";
+				xlnx,ecc = <0x00>;
+				xlnx,ecc-onoff-reset-value = <0x00>;
+				xlnx,ecc-type = <0x00>;
+				xlnx,fault-inject = <0x00>;
+				xlnx,memory-depth = <0x4000>;
+				xlnx,rd-cmd-optimization = <0x00>;
+				xlnx,read-latency = <0x01>;
+				xlnx,s-axi-ctrl-addr-width = <0x20>;
+				xlnx,s-axi-ctrl-data-width = <0x20>;
+				xlnx,s-axi-id-width = <0x01>;
+				xlnx,s-axi-supports-narrow-burst = <0x00>;
+				xlnx,single-port-bram = <0x01>;
+				phandle = <0x15>;
+			};
+
+			dma@a1000000 {
+				#dma-cells = <0x01>;
+				clock-names = "s_axi_lite_aclk\0m_axi_sg_aclk\0m_axi_s2mm_aclk";
+				clocks = <0xffffffff 0x47 0xffffffff 0x47 0xffffffff 0x47>;
+				compatible = "xlnx,axi-dma-7.1\0xlnx,axi-dma-1.00.a";
+				interrupt-names = "s2mm_introut";
+				interrupt-parent = <0xffffffff>;
+				interrupts = <0x00 0x5a 0x04>;
+				reg = <0x00 0xa1000000 0x00 0x1000>;
+				xlnx,addrwidth = <0x21>;
+				xlnx,include-sg;
+				xlnx,sg-length-width = <0x1a>;
+				phandle = <0x0d>;
+
+				dma-channel@a1000030 {
+					compatible = "xlnx,axi-dma-s2mm-channel";
+					dma-channels = <0x01>;
+					interrupts = <0x00 0x5a 0x04>;
+					xlnx,datawidth = <0x40>;
+					xlnx,device-id = <0x00>;
+				};
+			};
+
+			gpio@a0020000 {
+				#gpio-cells = <0x02>;
+				clock-names = "s_axi_aclk";
+				clocks = <0xffffffff 0x47>;
+				compatible = "xlnx,axi-gpio-2.0\0xlnx,xps-gpio-1.00.a";
+				gpio-controller;
+				reg = <0x00 0xa0020000 0x00 0x10000>;
+				xlnx,all-inputs = <0x00>;
+				xlnx,all-inputs-2 = <0x00>;
+				xlnx,all-outputs = <0x01>;
+				xlnx,all-outputs-2 = <0x00>;
+				xlnx,dout-default = <0x00>;
+				xlnx,dout-default-2 = <0x00>;
+				xlnx,gpio-width = <0x02>;
+				xlnx,gpio2-width = <0x20>;
+				xlnx,interrupt-present = <0x00>;
+				xlnx,is-dual = <0x00>;
+				xlnx,tri-default = <0xffffffff>;
+				xlnx,tri-default-2 = <0xffffffff>;
+				phandle = <0x05>;
+			};
+
+			i2c@a1010000 {
+				#address-cells = <0x01>;
+				#size-cells = <0x00>;
+				clock-names = "s_axi_aclk";
+				clocks = <0xffffffff 0x47>;
+				compatible = "xlnx,axi-iic-2.1\0xlnx,xps-iic-2.00.a";
+				interrupt-names = "iic2intc_irpt";
+				interrupt-parent = <0xffffffff>;
+				interrupts = <0x00 0x5b 0x04>;
+				reg = <0x00 0xa1010000 0x00 0x10000>;
+				phandle = <0x16>;
+
+				i2c-mux@74 {
+					compatible = "nxp,pca9546";
+					#address-cells = <0x01>;
+					#size-cells = <0x00>;
+					reg = <0x74>;
+
+					i2c@0 {
+						#address-cells = <0x01>;
+						#size-cells = <0x00>;
+						reg = <0x00>;
+					};
+
+					i2c@2 {
+						#address-cells = <0x01>;
+						#size-cells = <0x00>;
+						reg = <0x02>;
+
+						sensor@3c {
+							compatible = "psee,genx320";
+							reg = <0x3c>;
+							clocks = <0x01>;
+							vadd-supply = <0x02>;
+							vddd1-supply = <0x03>;
+							vddd2-supply = <0x04>;
+							nreset-gpio = <0x05 0x01 0x00>;
+
+							port {
+
+								endpoint {
+									remote-endpoint = <0x06>;
+									data-lanes = <0x01>;
+									link-frequencies = <0x00 0x2faf0800>;
+									phandle = <0x0c>;
+								};
+							};
+						};
+					};
+				};
+			};
+
+			axis_tkeep_handler@a0040000 {
+				clock-names = "aclk";
+				clocks = <0xffffffff 0x47>;
+				compatible = "psee,axis-tkeep-handler\0psee,passthrough";
+				reg = <0x00 0xa0040000 0x00 0x80>;
+				phandle = <0x17>;
+
+				ports {
+					#address-cells = <0x01>;
+					#size-cells = <0x00>;
+
+					port@0 {
+						reg = <0x00>;
+
+						endpoint {
+							remote-endpoint = <0x07>;
+							phandle = <0x0b>;
+						};
+					};
+
+					port@1 {
+						reg = <0x01>;
+
+						endpoint {
+							remote-endpoint = <0x08>;
+							phandle = <0x18>;
+						};
+					};
+				};
+			};
+
+			event_stream_smart_tracker@a0050000 {
+				clock-names = "aclk";
+				clocks = <0xffffffff 0x47>;
+				compatible = "psee,event-stream-smart-tracker\0psee,passthrough";
+				reg = <0x00 0xa0050000 0x00 0x10000>;
+				phandle = <0x19>;
+
+				ports {
+					#address-cells = <0x01>;
+					#size-cells = <0x00>;
+
+					port@0 {
+						reg = <0x00>;
+						direction = "input";
+
+						endpoint {
+							remote-endpoint = <0x07>;
+							phandle = <0x08>;
+						};
+					};
+
+					port@1 {
+						reg = <0x01>;
+
+						endpoint {
+							remote-endpoint = <0x09>;
+							phandle = <0x0e>;
+						};
+					};
+				};
+			};
+
+			mipi_csi2_rx_subsystem@a0010000 {
+				clock-names = "lite_aclk\0dphy_clk_200M\0video_aclk";
+				clocks = <0xffffffff 0x47 0x0a 0xffffffff 0x47>;
+				compatible = "xlnx,mipi-csi2-rx-subsystem-5.2\0xlnx,mipi-csi2-rx-subsystem-5.0";
+				interrupt-names = "csirxss_csi_irq";
+				interrupt-parent = <0xffffffff>;
+				interrupts = <0x00 0x5c 0x04>;
+				reg = <0x00 0xa0010000 0x00 0x2000>;
+				xlnx,axis-tdata-width = <0x40>;
+				xlnx,csi-pxl-format = <0x2a>;
+				xlnx,dphy-present;
+				xlnx,en-active-lanes;
+				xlnx,max-lanes = <0x02>;
+				xlnx,ppc = <0x01>;
+				xlnx,vc = <0x04>;
+				phandle = <0x1a>;
+
+				ports {
+					#address-cells = <0x01>;
+					#size-cells = <0x00>;
+					phandle = <0x1b>;
+
+					port@1 {
+						reg = <0x01>;
+						xlnx,cfa-pattern = "rggb";
+						xlnx,video-format = <0x0c>;
+						xlnx,video-width = <0x08>;
+						phandle = <0x1c>;
+
+						endpoint {
+							remote-endpoint = <0x0b>;
+							phandle = <0x07>;
+						};
+					};
+
+					port@0 {
+						reg = <0x00>;
+						xlnx,cfa-pattern = "rggb";
+						xlnx,video-format = <0x0c>;
+						xlnx,video-width = <0x08>;
+						phandle = <0x1d>;
+
+						endpoint {
+							data-lanes = <0x01 0x02>;
+							remote-endpoint = <0x0c>;
+							phandle = <0x06>;
+						};
+					};
+				};
+			};
+
+			misc_clk_0 {
+				#clock-cells = <0x00>;
+				clock-frequency = <0xbebba2e>;
+				compatible = "fixed-clock";
+				phandle = <0x0a>;
+			};
+
+			evtdec@a0030000 {
+				clock-names = "aclk";
+				clocks = <0xffffffff 0x47>;
+				compatible = "csnn-fpga,evt-decoder";
+				reg = <0x00 0xa0030000 0x00 0x80>;
+				dmas = <0x0d 0x01>;
+				dma-names = "port0";
+				phandle = <0x1e>;
+
+				ports {
+					#address-cells = <0x01>;
+					#size-cells = <0x00>;
+
+					port@0 {
+						reg = <0x00>;
+
+						endpoint {
+							remote-endpoint = <0x0e>;
+							phandle = <0x09>;
+						};
+					};
+				};
+			};
+		};
+	};
+
+	fragment@3 {
+		target = <0xffffffff>;
+
+		__overlay__ {
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			phandle = <0x1f>;
+
+			ccam5-3v3 {
+				compatible = "regulator-fixed";
+				regulator-name = "3v3";
+				regulator-min-microvolt = <0x325aa0>;
+				regulator-max-microvolt = <0x325aa0>;
+				gpio = <0x05 0x00 0x00>;
+				startup-delay-us = <0x7a120>;
+				enable-active-high;
+				phandle = <0x0f>;
+			};
+
+			ccam5-3v0 {
+				compatible = "regulator-fixed";
+				regulator-name = "vadd";
+				regulator-min-microvolt = <0x2dc6c0>;
+				regulator-max-microvolt = <0x2dc6c0>;
+				vin-supply = <0x0f>;
+				phandle = <0x02>;
+			};
+
+			ccam5-2v5 {
+				compatible = "regulator-fixed";
+				regulator-name = "2v5";
+				regulator-min-microvolt = <0x2625a0>;
+				regulator-max-microvolt = <0x2625a0>;
+				vin-supply = <0x0f>;
+				phandle = <0x20>;
+			};
+
+			ccam5-1v8 {
+				compatible = "regulator-fixed";
+				regulator-name = "vddd1";
+				regulator-min-microvolt = <0x1b7740>;
+				regulator-max-microvolt = <0x1b7740>;
+				vin-supply = <0x0f>;
+				phandle = <0x03>;
+			};
+
+			ccam5-1v1 {
+				compatible = "regulator-fixed";
+				regulator-name = "vddd2";
+				regulator-min-microvolt = <0x10c8e0>;
+				regulator-max-microvolt = <0x10c8e0>;
+				vin-supply = <0x0f>;
+				phandle = <0x04>;
+			};
+
+			ccam5_clk_U9 {
+				compatible = "fixed-clock";
+				#clock-cells = <0x00>;
+				clock-frequency = <0x1312d00>;
+				clock-accuracy = <0x19>;
+				phandle = <0x01>;
+			};
+		};
+	};
+
+	__symbols__ {
+		overlay0 = "/fragment@0/__overlay__";
+		overlay1 = "/fragment@1/__overlay__";
+		afi0 = "/fragment@1/__overlay__/afi0";
+		clocking0 = "/fragment@1/__overlay__/clocking0";
+		overlay2 = "/fragment@2/__overlay__";
+		axi_bram_ctrl_0 = "/fragment@2/__overlay__/axi_bram_ctrl@a0000000";
+		axi_dma = "/fragment@2/__overlay__/dma@a1000000";
+		axi_gpio_0 = "/fragment@2/__overlay__/gpio@a0020000";
+		axi_iic_0 = "/fragment@2/__overlay__/i2c@a1010000";
+		genx320 = "/fragment@2/__overlay__/i2c@a1010000/i2c-mux@74/i2c@2/sensor@3c/port/endpoint";
+		axis_tkeep_handler_0 = "/fragment@2/__overlay__/axis_tkeep_handler@a0040000";
+		axis_tkeep_handler_0mipi_csi2_rx_subsyst_0 = "/fragment@2/__overlay__/axis_tkeep_handler@a0040000/ports/port@0/endpoint";
+		tkeep_handler_out = "/fragment@2/__overlay__/axis_tkeep_handler@a0040000/ports/port@1/endpoint";
+		event_stream_smart_t_0 = "/fragment@2/__overlay__/event_stream_smart_tracker@a0050000";
+		smart_tracker_in = "/fragment@2/__overlay__/event_stream_smart_tracker@a0050000/ports/port@0/endpoint";
+		smart_tracker_out = "/fragment@2/__overlay__/event_stream_smart_tracker@a0050000/ports/port@1/endpoint";
+		mipi_csi2_rx_subsyst_0 = "/fragment@2/__overlay__/mipi_csi2_rx_subsystem@a0010000";
+		mipi_csi_portsmipi_csi2_rx_subsyst_0 = "/fragment@2/__overlay__/mipi_csi2_rx_subsystem@a0010000/ports";
+		mipi_csi_port1mipi_csi2_rx_subsyst_0 = "/fragment@2/__overlay__/mipi_csi2_rx_subsystem@a0010000/ports/port@1";
+		mipi_csirx_outmipi_csi2_rx_subsyst_0 = "/fragment@2/__overlay__/mipi_csi2_rx_subsystem@a0010000/ports/port@1/endpoint";
+		mipi_csi_port0mipi_csi2_rx_subsyst_0 = "/fragment@2/__overlay__/mipi_csi2_rx_subsystem@a0010000/ports/port@0";
+		mipi_csi_inmipi_csi2_rx_subsyst_0 = "/fragment@2/__overlay__/mipi_csi2_rx_subsystem@a0010000/ports/port@0/endpoint";
+		misc_clk_0 = "/fragment@2/__overlay__/misc_clk_0";
+		evtdec_0 = "/fragment@2/__overlay__/evtdec@a0030000";
+		evtdec_in = "/fragment@2/__overlay__/evtdec@a0030000/ports/port@0/endpoint";
+		overlay3 = "/fragment@3/__overlay__";
+		ccam5_3v3 = "/fragment@3/__overlay__/ccam5-3v3";
+		ccam5_3v0 = "/fragment@3/__overlay__/ccam5-3v0";
+		ccam5_2v5 = "/fragment@3/__overlay__/ccam5-2v5";
+		ccam5_1v8 = "/fragment@3/__overlay__/ccam5-1v8";
+		ccam5_1v1 = "/fragment@3/__overlay__/ccam5-1v1";
+		genx320_clk = "/fragment@3/__overlay__/ccam5_clk_U9";
+	};
+
+	__fixups__ {
+		fpga_full = "/fragment@0:target:0";
+		zynqmp_reset = "/fragment@0/__overlay__:resets:0";
+		amba = "/fragment@1:target:0\0/fragment@2:target:0\0/fragment@3:target:0";
+		zynqmp_clk = "/fragment@1/__overlay__/clocking0:assigned-clocks:0\0/fragment@1/__overlay__/clocking0:clocks:0\0/fragment@2/__overlay__/axi_bram_ctrl@a0000000:clocks:0\0/fragment@2/__overlay__/dma@a1000000:clocks:0\0/fragment@2/__overlay__/dma@a1000000:clocks:8\0/fragment@2/__overlay__/dma@a1000000:clocks:16\0/fragment@2/__overlay__/gpio@a0020000:clocks:0\0/fragment@2/__overlay__/i2c@a1010000:clocks:0\0/fragment@2/__overlay__/axis_tkeep_handler@a0040000:clocks:0\0/fragment@2/__overlay__/event_stream_smart_tracker@a0050000:clocks:0\0/fragment@2/__overlay__/mipi_csi2_rx_subsystem@a0010000:clocks:0\0/fragment@2/__overlay__/mipi_csi2_rx_subsystem@a0010000:clocks:12\0/fragment@2/__overlay__/evtdec@a0030000:clocks:0";
+		gic = "/fragment@2/__overlay__/dma@a1000000:interrupt-parent:0\0/fragment@2/__overlay__/i2c@a1010000:interrupt-parent:0\0/fragment@2/__overlay__/mipi_csi2_rx_subsystem@a0010000:interrupt-parent:0";
+	};
+
+	__local_fixups__ {
+
+		fragment@2 {
+
+			__overlay__ {
+
+				i2c@a1010000 {
+
+					i2c-mux@74 {
+
+						i2c@2 {
+
+							sensor@3c {
+								clocks = <0x00>;
+								vadd-supply = <0x00>;
+								vddd1-supply = <0x00>;
+								vddd2-supply = <0x00>;
+								nreset-gpio = <0x00>;
+
+								port {
+
+									endpoint {
+										remote-endpoint = <0x00>;
+									};
+								};
+							};
+						};
+					};
+				};
+
+				axis_tkeep_handler@a0040000 {
+
+					ports {
+
+						port@0 {
+
+							endpoint {
+								remote-endpoint = <0x00>;
+							};
+						};
+
+						port@1 {
+
+							endpoint {
+								remote-endpoint = <0x00>;
+							};
+						};
+					};
+				};
+
+				event_stream_smart_tracker@a0050000 {
+
+					ports {
+
+						port@0 {
+
+							endpoint {
+								remote-endpoint = <0x00>;
+							};
+						};
+
+						port@1 {
+
+							endpoint {
+								remote-endpoint = <0x00>;
+							};
+						};
+					};
+				};
+
+				mipi_csi2_rx_subsystem@a0010000 {
+					clocks = <0x08>;
+
+					ports {
+
+						port@1 {
+
+							endpoint {
+								remote-endpoint = <0x00>;
+							};
+						};
+
+						port@0 {
+
+							endpoint {
+								remote-endpoint = <0x00>;
+							};
+						};
+					};
+				};
+
+				evtdec@a0030000 {
+					dmas = <0x00>;
+
+					ports {
+
+						port@0 {
+
+							endpoint {
+								remote-endpoint = <0x00>;
+							};
+						};
+					};
+				};
+			};
+		};
+
+		fragment@3 {
+
+			__overlay__ {
+
+				ccam5-3v3 {
+					gpio = <0x00>;
+				};
+
+				ccam5-3v0 {
+					vin-supply = <0x00>;
+				};
+
+				ccam5-2v5 {
+					vin-supply = <0x00>;
+				};
+
+				ccam5-1v8 {
+					vin-supply = <0x00>;
+				};
+
+				ccam5-1v1 {
+					vin-supply = <0x00>;
+				};
+			};
+		};
+	};
+};

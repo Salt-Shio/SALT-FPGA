@@ -576,3 +576,68 @@ inherit module
 | Prophesee EVT2.1 官方格式文件(已交叉核對 `vx_f`/`valid` 欄位) | https://docs.prophesee.ai/stable/data/encoding_formats/evt21.html |
 | Prophesee 官方 PetaLinux 專案(真實 `.bb` recipe、版本核對用) | https://github.com/prophesee-ai/petalinux-projects(分支 `kv260-2022.2`) |
 | zynq-video-drivers 原始碼(本機複本,含 `psee-event-stream-smart-tracker.c` 等) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\zynq-video-drivers` |
+
+## 板子唯讀查證(2026-08-14,SSH 進 KV260 直接看,唯讀不改狀態)
+
+### App bundle 路徑寫法,兩份官方文件不一致的問題已解決
+
+上面「app bundle 結構」那節提到兩種路徑寫法(`/lib/firmware/xilinx/<accelerator-dir>` vs `/lib/firmware/<company_name>/<app_name>`)沒交叉核對出來。直接上板看 `ls -la /lib/firmware/xilinx/prophesee-kv260-genx320/`,答案是**前者**:`/lib/firmware/xilinx/<app_name>/`,`xilinx` 是固定字串,不是 company name 變數。目錄下確認只有三個檔案:
+
+```
+prophesee-kv260-genx320.bit.bin   (7.8MB)
+prophesee-kv260-genx320.dtbo      (11970 bytes)
+shell.json                        → {"shell_type":"XRT_FLAT","num_slots":"1"}
+```
+
+**沒有 `.xclbin`**——上面表格列的第三個檔案這個案例用不到,`shell.json` 完整欄位目前確認的就是這兩個 key。
+
+### Clock phandle:`<&zynqmp_clk 71>` 這個值是對的,已查證不是示意值
+
+上面「Device tree binding」那節寫 `clocks = <&zynqmp_clk 71>` 是「照抄官方範例的示意數字」,這次實際查證下來,**這個值本身是正確的**,查證過程:
+
+1. `dtc -I dtb -O dts /boot/system.dtb`(板子開機用的基礎 device tree,唯讀 dump,不用 root)—— `/aliases` 節點裡有 `zynqmp_clk = "/firmware/zynqmp-firmware/clock-controller";`,證實 `zynqmp_clk` 這個 label 在這個平台上真實存在、指向正確的 clock provider 節點。
+2. `linux-xlnx`(WSL 裡 checkout 的那份,commit `19984dd147fa7fbb7cb14b17400263ad0925c189`)的 `include/dt-bindings/clock/xlnx-zynqmp-clk.h` 第 83 行:`#define PL0_REF 71`——`71` 就是 `pl_clk0` 在 ZynqMP firmware clock 表裡的官方編號。
+
+兩者對上,`<&zynqmp_clk 71>` 可以直接沿用,不用再查。
+
+### 已解決:直接反編譯官方 `.dtbo`,拿到 `ps_host_if` 真實節點內容(2026-08-14)
+
+板子上 `/lib/firmware/xilinx/prophesee-kv260-genx320/prophesee-kv260-genx320.dtbo` 是全域可讀的檔案(`-rw-r--r--`,不用 root),直接 `dtc -I dtb -O dts` 反編譯即可看到完整內容,不用等 root 權限、也不用真的去載入 prophesee app。查證方式全程唯讀,沒有動到板子任何狀態。完整反編譯結果已存成本機副本:[`docs/FPGA/Reference/KV260/prophesee-kv260-genx320-decompiled.dts`](../Reference/KV260/prophesee-kv260-genx320-decompiled.dts)。
+
+`ps_host_if` 在這份官方 overlay 裡的真實節點(`fragment@2/__overlay__/ps_host_if@a0030000`):
+
+```dts
+ps_host_if@a0030000 {
+    clock-names = "aclk";
+    clocks = <0xffffffff 0x47>;
+    compatible = "psee,axi4s-packetizer";
+    reg = <0x00 0xa0030000 0x00 0x80>;
+    dmas = <0x0d 0x01>;
+    dma-names = "port0";
+    phandle = <0x1e>;
+
+    ports {
+        #address-cells = <0x01>;
+        #size-cells = <0x00>;
+        port@0 {
+            reg = <0x00>;
+            endpoint {
+                remote-endpoint = <0x0e>;
+                phandle = <0x09>;
+            };
+        };
+    };
+};
+```
+
+**核對結果**:
+
+- `clocks = <0xffffffff 0x47>`:`0xffffffff` 是 overlay 機制的 phandle 占位符(實際指向誰,記在檔案尾端的 `__fixups__`/`__local_fixups__` 區塊,合併進即時系統時才解析),`0x47`(hex)= `71`(十進位)——跟上一節從 `xlnx-zynqmp-clk.h` 查到的 `PL0_REF 71` **完全對上**,雙重確認 `<&zynqmp_clk 71>` 這個值是對的。
+- `reg = <0x00 0xa0030000 0x00 0x80>`:跟我們 block design 設定的 AXI-Lite 位址(`0xA0030000`)、range(128 = `0x80`)**完全一致**——因為 Todo「已定案」段落寫的,我們刻意讓 `fsm_event_extractor` 接在 `ps_host_if_0` 原本的位置,位址沒有換過。
+- `dmas = <0x0d 0x01>`:`phandle = <0x0d>` 反查是 `dma@a1000000`(`compatible = "xlnx,axi-dma-7.1"`)這個節點,就是我們仍在用的 `axi_dma`,沒有被換掉,理論上也一樣。
+- `remote-endpoint = <0x0e>`:反查是 `event_stream_smart_tracker@a0050000/ports/port@1/endpoint`,也就是 ESST 的輸出端口,我們的模組接的也是同一個上游。
+- **沒有 `interrupts` 屬性**——`ps_host_if` 是純 AXI-Lite 輪詢介面,沒有中斷線,跟我們的 `FsmConfigSetter` 設計一致,不用額外處理中斷相關的 device tree 欄位。
+
+**額外確認**:`__symbols__` 區塊的 label 直接是 `ps_host_if_0`、`event_stream_smart_t_0`——跟 Vivado block design 裡的 instance 名稱完全一致,證實 PL 端節點是工具直接讀 block design 產生的,不是手寫,上一節「懷疑 device-tree-generator 讀 `.xsa`」的推論方向是對的(雖然還沒查到 UG1144 裡的具體工具操作步驟,但輸出結果已經證實走的是這條路)。
+
+**結論(給下一步用)**:因為我們的 `fsm_event_extractor` 接在完全相同的位置(同位址、同上游、同 DMA),自己的 device tree 節點理論上只需要改**節點名稱/instance 名**跟 **`compatible` 字串**(`"psee,axi4s-packetizer"` → `"csnn-fpga,evt-decoder"`),`reg`/`clocks`/`dmas`/`ports` 這些可以直接沿用這份反編譯出來的內容。具體做法:拿這份反編譯出的 `.dts` 當底稿,只改 `ps_host_if@a0030000` 這個節點,其餘(`axis_tkeep_handler`/`event_stream_smart_tracker`/`mipi_csi2_rx_subsystem`/`i2c`/`dma` 等,都是我們沒動過的 IP)整段保留,用 `dtc -@ -I dts -O dtb` 重新編譯成我們自己的 `.dtbo`。**還沒驗證過**:這樣編出來的 `.dtbo` 實際 `xmutil loadapp` 上板能不能正常運作,以及 `dtc -@` 這個 flag 的用法是否正確(`-@` 是保留 `__symbols__` 讓輸出仍是合法 overlay 的標準做法,但沒有實測驗證過)。
