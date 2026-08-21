@@ -5,7 +5,7 @@ PS 端驗證/量測程式:`open` V4L2 capture 裝置 → `mmap` → 依 `EventPr
 兩種輸出模式:
 
 - 預設(不加 `-o`):逐筆 `printf` 到 stdout,適合少量資料肉眼看,對應 TODO 步驟 10(上板驗證)的原始用途。
-- `-o <path>`:整塊 DMA buffer 直接 `write()` 成原始二進位(8 bytes/筆,不逐筆解析成文字),事件率高時也來得及寫,配合 `docs/FPGA/Todo/ps_host_if_replacement_todo.md` 項目 5(資料視覺化)使用。檔案內容跟裝置 mmap 出來的 buffer 逐 byte 相同,本機端用 `numpy.fromfile(dtype=np.uint64)` 讀回即可,每個 word 依同一份 bit 排列拆出 x/y/type/t。
+- `-o <path>`:整塊 DMA buffer 直接 `write()` 成原始二進位(8 bytes/筆,不逐筆解析成文字),事件率高時也來得及寫,配合 `docs/GENX320/Todo/ps_host_if_replacement_todo.md` 項目 5(資料視覺化)使用。檔案內容跟裝置 mmap 出來的 buffer 逐 byte 相同,本機端用 `numpy.fromfile(dtype=np.uint64)` 讀回即可,每個 word 依同一份 bit 排列拆出 x/y/type/t。
 
 不管哪種模式,都會每秒印一行事件率統計(events/s、MB/s)到 stderr,結束時印總結(總筆數、總耗時、平均事件率)——這是量測實際場景事件率的主要用途,不用另外寫量測工具。
 
@@ -18,11 +18,11 @@ evt_dump [-n count] [-t seconds] [-o path] /dev/videoN
   -o path     存成原始二進位檔;省略則逐筆印到 stdout
 ```
 
-沒有 `-n`/`-t` 時用 Ctrl+C 結束。存檔位置建議用 `/tmp` 下的路徑(RAM,tmpfs),不要直接寫 SD 卡的掛載點——SD 卡實測持續寫入只有 10.6 MB/s,細節見 `docs/FPGA/Concept/ps_host_if_replacement_notes.md`「`evt_dump` 資料視覺化擷取」那節。
+沒有 `-n`/`-t` 時用 Ctrl+C 結束。存檔位置建議用 `/tmp` 下的路徑(RAM,tmpfs),不要直接寫 SD 卡的掛載點——SD 卡實測持續寫入只有 10.6 MB/s,細節見 `docs/GENX320/Concept/ps_host_if_replacement_notes.md`「`evt_dump` 資料視覺化擷取」那節。
 
 ## 依賴
 
-- 需要 `FPGA/driver/` 那份 kernel driver 先 `probe()` 成功、生出一個 V4L2 capture 裝置節點,這支程式才有東西可以 `open`。已在板子上驗證可行,見 `docs/FPGA/Todo/ps_host_if_replacement_todo.md` 項目 10/11。
+- 需要 `GENX320/driver/` 那份 kernel driver 先 `probe()` 成功、生出一個 V4L2 capture 裝置節點,這支程式才有東西可以 `open`。已在板子上驗證可行,見 `docs/GENX320/Todo/ps_host_if_replacement_todo.md` 項目 10/11。
 - 裝置節點路徑當參數傳(`evt_dump /dev/videoN`),不寫死 `/dev/video0`——實際編號要看 `probe()` 順序,`video_register_device()` 用的是自動分配(`-1`),不保證每次都是 0。
 
 ## 先用假資料驗證

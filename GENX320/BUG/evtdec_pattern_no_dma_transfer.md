@@ -21,7 +21,7 @@ genx320 → mipi_csi2_rx_subsystem → axis_tkeep_handler → event_stream_smart
 
 ## 症狀
 
-上板測試(`FPGA/app_bundle/deploy_manual.md` 步驟 6a)照順序執行到底:app 載入成功、`media-ctl -p` 顯示整條 media graph 五個 entity 全部 `[ENABLED]`、格式統一 `PSEE_EVT21/320x320`、`REG_CONFIG.enable_pattern` 用 `v4l2_reg` 寫入確認生效。但執行 `evt_dump /dev/video0 20` 後,程式卡住不動,沒有印出任何 `x=... y=... type=... t=...`,一直到手動 `Ctrl+C` 都沒有收到任何一筆資料。
+上板測試(`GENX320/app_bundle/deploy_manual.md` 步驟 6a)照順序執行到底:app 載入成功、`media-ctl -p` 顯示整條 media graph 五個 entity 全部 `[ENABLED]`、格式統一 `PSEE_EVT21/320x320`、`REG_CONFIG.enable_pattern` 用 `v4l2_reg` 寫入確認生效。但執行 `evt_dump /dev/video0 20` 後,程式卡住不動,沒有印出任何 `x=... y=... type=... t=...`,一直到手動 `Ctrl+C` 都沒有收到任何一筆資料。
 
 ## 查證過程(依時間順序)
 
@@ -54,9 +54,9 @@ sudo ~/csnn-fpga/v4l2_reg /dev/video0 get 0x4   # REG_CONFIG
 
 **結果**:`REG_CONTROL = 0x1`(`enable`=1,bit0),`REG_CONFIG = 0x3`(`enable_pattern`=1 bit0、`enable_tlast_timeout`=1 bit1)。
 
-**代表**:`enable` 跟 `enable_pattern` 在真正串流的當下都確認是 1,driver 端該寫的暫存器都寫對了。`enable_tlast_timeout` 被打開不是我們手動設的,推測是 driver 的 V4L2 control(`V4L2_CID_XFER_TIMEOUT_ENABLE`,`FPGA/driver/evtdec-dma.c` 附近定義)在初始化時自己寫的,跟本次問題無關,未深究。
+**代表**:`enable` 跟 `enable_pattern` 在真正串流的當下都確認是 1,driver 端該寫的暫存器都寫對了。`enable_tlast_timeout` 被打開不是我們手動設的,推測是 driver 的 V4L2 control(`V4L2_CID_XFER_TIMEOUT_ENABLE`,`GENX320/driver/evtdec-dma.c` 附近定義)在初始化時自己寫的,跟本次問題無關,未深究。
 
-照 RTL(`FPGA/EvtDecoder/EvtDecoder.srcs/sources_1/new/EventProcessor.sv:174`)的邏輯:
+照 RTL(`GENX320/EvtDecoder/EvtDecoder.srcs/sources_1/new/EventProcessor.sv:174`)的邏輯:
 
 ```systemverilog
 assign M_AXIS_TVALID = cfg_enable_pattern ? cfg_enable : (m_valid_q && cfg_enable);
@@ -85,7 +85,7 @@ cat /proc/interrupts
 
 ### 5. 確認 buffer 大小、`tlast` 在 pattern 模式下的行為
 
-`FPGA/driver/evtdec-dma.c:958`:`dma->transfer_size = DEFAULT_PACKET_LENGTH = (1 << 20)`(1MB)。
+`GENX320/driver/evtdec-dma.c:958`:`dma->transfer_size = DEFAULT_PACKET_LENGTH = (1 << 20)`(1MB)。
 
 `EventProcessor.sv:177`:`M_AXIS_TLAST = cfg_enable_pattern ? 1'b0 : m_last_q`——**pattern 模式下 `tlast` 永遠是 0**,DMA 只能靠「整個 1MB buffer 填滿」才會觸發一次傳輸完成,沒有提前結束的機制。
 
@@ -93,7 +93,7 @@ cat /proc/interrupts
 
 ### 6. 檢查 `evtdec-dma.c` 的 `start_streaming()`/`buffer_queue()` 邏輯本身
 
-檔案:`FPGA/driver/evtdec-dma.c:446-575` 左右。
+檔案:`GENX320/driver/evtdec-dma.c:446-575` 左右。
 
 **結果**:`dmaengine_prep_slave_single()` 準備描述子 → `dmaengine_submit()` 送出 → `start_streaming()` 裡 `dma_async_issue_pending()`(在啟動 pipeline、寫 `REG_CONTROL.enable=1` **之前**)啟動 DMA engine → 才寫 `enable=1`。中間有 `verify_format()` 檢查格式是否匹配,若不符會讓 `STREAMON` 直接失敗回傳錯誤。
 
@@ -101,7 +101,7 @@ cat /proc/interrupts
 
 ### 7. 檢查 Vivado block design 接線
 
-檔案:`FPGA/fpga-projects-1.0.0/build/projects/kv260/kv260.srcs/sources_1/bd/kv260/kv260.bd`
+檔案:`GENX320/fpga-projects-1.0.0/build/projects/kv260/kv260.srcs/sources_1/bd/kv260/kv260.bd`
 
 **結果**:第 5796-5799 行確認 `fsm_event_extractor_0/M_AXIS` 接到 `axi_dma/S_AXIS_S2MM`,接線存在。
 
@@ -117,17 +117,17 @@ cat /proc/interrupts
 
 ### 10. 檢查 IP 封裝(`component.xml`)的 `M_AXIS` bus interface 定義
 
-檔案:`FPGA/ip_repo/fsm_event_extractor/component.xml`
+檔案:`GENX320/ip_repo/fsm_event_extractor/component.xml`
 
 **結果**:`M_AXIS` 正確標記為 `xilinx.com:interface:axis:1.0` / `axis_rtl:1.0`、`spirit:master`,`TDATA`/`TSTRB`/`TLAST`/`TVALID`/`TREADY` 五個訊號的 `portMap` 都正確對應到 `M_AXIS_TDATA` 等實際埠名。看不出封裝層級的問題。
 
 ## 重要參考點:`axi_dma` 本身跟 PS 端這套 DMA 使用模式,已知是能動的
 
-`docs/FPGA/Reference/KV260/kv260_operation_notes/genx320_sensor_startup.md` 記錄過:用**官方** `ps_host_if` + `axi_dma` + 官方 PS driver 這條路徑,曾經成功讓 `metavision_viewer` 即時顯示 320x320 事件畫面。代表 `axi_dma` 這顆 IP、以及「driver 呼叫 `dma_request_chan()`+`dmaengine_prep_slave_single()` 這套標準用法」本身是驗證過可以動的,問題範圍可以縮小到:**我們自己的 `fsm_event_extractor`/`FsmEventExtractor.sv` 這顆 IP,或它跟 `axi_dma` 之間的實際硬體行為,而不是 `axi_dma` 或 driver 的 DMA 處理邏輯本身。**
+`docs/GENX320/Reference/KV260/kv260_operation_notes/genx320_sensor_startup.md` 記錄過:用**官方** `ps_host_if` + `axi_dma` + 官方 PS driver 這條路徑,曾經成功讓 `metavision_viewer` 即時顯示 320x320 事件畫面。代表 `axi_dma` 這顆 IP、以及「driver 呼叫 `dma_request_chan()`+`dmaengine_prep_slave_single()` 這套標準用法」本身是驗證過可以動的,問題範圍可以縮小到:**我們自己的 `fsm_event_extractor`/`FsmEventExtractor.sv` 這顆 IP,或它跟 `axi_dma` 之間的實際硬體行為,而不是 `axi_dma` 或 driver 的 DMA 處理邏輯本身。**
 
 ### 11. 對照官方 `ps_host_if` 的 pattern 模式怎麼做(`axi4s_packetizer.vhd`)
 
-檔案:`FPGA/fpga-projects-1.0.0/ip/ps_host_if_3_0/hdl/axi4s_packetizer.vhd`
+檔案:`GENX320/fpga-projects-1.0.0/ip/ps_host_if_3_0/hdl/axi4s_packetizer.vhd`
 
 **結果**:官方的 pattern 模式**只替換資料內容,不是獨立的資料來源**——`m_axis_tvalid_mux_s <= buffer_valid_q or s_axis_tvalid`(line 105),整個輸出暫存器的更新(含 pattern counter 遞增)都掛在 `m_axis_tvalid_mux_s = '1'` 這個條件下(line 182),也就是說**官方的假資料一樣要靠真實上游輸入才會被觸發輸出**,不是憑空吐資料。而且官方原本想過的優化(「pattern 模式時 ready 強制拉高避免對 MIPI 反壓」,line 97-98)是被**註解掉、沒有採用**的。
 
@@ -190,7 +190,7 @@ assign M_AXIS_TLAST  = cfg_enable_pattern
 	: m_last_q;
 ```
 
-`FPGA/EvtDecoder/EvtDecoder.srcs/sources_1/new/EventProcessor.sv` 跟 `FPGA/ip_repo/fsm_event_extractor/src/EventProcessor.sv` 兩份同步修改。用 xsim 補寫 `tb_event_processor.sv` Test 9 驗證(無 backpressure 精確驗證回捲週期、隨機 backpressure 驗證 AXI4-Stream 穩定性),7 個亂數種子全過。
+`GENX320/EvtDecoder/EvtDecoder.srcs/sources_1/new/EventProcessor.sv` 跟 `GENX320/ip_repo/fsm_event_extractor/src/EventProcessor.sv` 兩份同步修改。用 xsim 補寫 `tb_event_processor.sv` Test 9 驗證(無 backpressure 精確驗證回捲週期、隨機 backpressure 驗證 AXI4-Stream 穩定性),7 個亂數種子全過。
 
 **已上板驗證**:重新合成/實作/產生 bitstream,更新 app bundle 後,`v4l2_reg set 0x4 0x1` 開 `enable_pattern`,`evt_dump` 正常收到遞增假資料,不再卡住。
 

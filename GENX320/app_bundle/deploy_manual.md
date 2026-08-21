@@ -76,4 +76,4 @@ media-ctl -e "evtdec output 0"
 ~/csnn-fpga/evt_dump -n 20 /dev/videoN
 ```
 
-`evt_dump` 現在的完整選項見 `FPGA/tools/evt_dump/README.md`(`-n`/`-t`/`-o`,加事件率統計),不是這裡列的最小用法。
+`evt_dump` 現在的完整選項見 `GENX320/tools/evt_dump/README.md`(`-n`/`-t`/`-o`,加事件率統計),不是這裡列的最小用法。

@@ -4,7 +4,7 @@
 
 所有結論都標明來源檔案與查證方式。沒有查證過的部分明確標示為「未查證」,不補完、不用推論代替查證結果。
 
-外部原始碼已複製到本專案 `docs/FPGA/Reference/KV260/` 底下,以下所有路徑都指向這個本機複本,不是原始位置(`D:\FPGA\KV260_bringup`)。
+外部原始碼已複製到本專案 `docs/GENX320/Reference/KV260/` 底下,以下所有路徑都指向這個本機複本,不是原始位置(`D:\FPGA\KV260_bringup`)。
 
 ## 展開狀態機:架構圖與 FSM(定案)
 
@@ -431,11 +431,11 @@ driver 透過 V4L2 subdev core/video/pad ops 暴露的暫存器只有三個:
 
 ### 建置環境
 
-baseline 專案(含 `ps_host_if_0`、`axi_dma` 等官方接線)用 `FPGA/fpga-projects-1.0.0/projects/kv260/scripts/kv260_patched_2025_2.tcl`(針對 Vivado 2025.2 修過的版本,原始 `kv260.tcl` 是 2022.2.1 產生的)在 Vivado Tcl Console 用 `source` 建出來,輸出在 `FPGA/fpga-projects-1.0.0/build/projects/kv260/`。這個路徑是實際建置用的,`docs/FPGA/Reference/` 底下那份 `fpga-projects-1.0.0` 只是給查證用的參考副本,兩者是分開的兩份複本。
+baseline 專案(含 `ps_host_if_0`、`axi_dma` 等官方接線)用 `GENX320/fpga-projects-1.0.0/projects/kv260/scripts/kv260_patched_2025_2.tcl`(針對 Vivado 2025.2 修過的版本,原始 `kv260.tcl` 是 2022.2.1 產生的)在 Vivado Tcl Console 用 `source` 建出來,輸出在 `GENX320/fpga-projects-1.0.0/build/projects/kv260/`。這個路徑是實際建置用的,`docs/GENX320/Reference/` 底下那份 `fpga-projects-1.0.0` 只是給查證用的參考副本,兩者是分開的兩份複本。
 
 ### `FsmEventExtractor` 封裝成 IP
 
-用 Vivado「Package IP」(Tools → Create and Package New IP → Package your current project,來源是 `FPGA/EvtDecoder/EvtDecoder.xpr`)封裝,VLNV `csnn-fpga.local:ip:fsm_event_extractor:1.0`,輸出到 `FPGA/ip_repo/fsm_event_extractor/`(這個資料夾是容器,以後其他自封裝 IP 也放在同一層,不綁版本號進資料夾名字——資料夾名字跟 `component.xml` 內部的版本號是各自獨立的兩件事,不需要每次改版就開新資料夾,除非要故意讓新舊版本並存,那才用 Vivado 的「Create a New IP Version」功能)。
+用 Vivado「Package IP」(Tools → Create and Package New IP → Package your current project,來源是 `GENX320/EvtDecoder/EvtDecoder.xpr`)封裝,VLNV `csnn-fpga.local:ip:fsm_event_extractor:1.0`,輸出到 `GENX320/ip_repo/fsm_event_extractor/`(這個資料夾是容器,以後其他自封裝 IP 也放在同一層,不綁版本號進資料夾名字——資料夾名字跟 `component.xml` 內部的版本號是各自獨立的兩件事,不需要每次改版就開新資料夾,除非要故意讓新舊版本並存,那才用 Vivado 的「Create a New IP Version」功能)。
 
 Compatibility 頁只留 `zynquplus`(跟官方 `ps_host_if_3_0` 一致,`zynq`/`azynq` 這種沒驗證過的 family 不要宣告),「Package for Vitis」「Package for IPI」都不勾(官方也沒用,這兩個是給不同流程用的功能,不影響一般手動接線的 Block Design 使用方式)。
 
@@ -474,7 +474,7 @@ Range 要先設定好、再改 Base Address——順序反過來會出現「prop
 
 ### 專案檔案配置調整:`.gitignore`
 
-`FPGA/fpga-projects-1.0.0` 與 `FPGA/ip_repo` 原本整個被最外層 `.gitignore` 當「外部參考碼」忽略,今天在裡面建了實際的 kv260 專案跟封裝了自己的 IP 之後,這個假設不成立,已把這兩行從 `.gitignore` 移除。另外 `FPGA/fpga-projects-1.0.0/.gitignore`(官方原始碼自帶的)裡有一行 `build/`,會擋住 `kv260.bd` 這類我們自己產出的東西,也已移除,改交給外層通用的 Vivado 產物規則(`*.cache/`、`*.gen/`、`*.runs/` 等,不含路徑前綴,任何深度都適用)過濾——驗證過,拿掉這三行規則後只新增 224 個原始碼/設定檔(`.vhd`/`.tcl`/`.sv`/`.xci`/`.bd`/`component.xml` 等),沒有任何自動產生的大量檔案混進來。
+`GENX320/fpga-projects-1.0.0` 與 `GENX320/ip_repo` 原本整個被最外層 `.gitignore` 當「外部參考碼」忽略,今天在裡面建了實際的 kv260 專案跟封裝了自己的 IP 之後,這個假設不成立,已把這兩行從 `.gitignore` 移除。另外 `GENX320/fpga-projects-1.0.0/.gitignore`(官方原始碼自帶的)裡有一行 `build/`,會擋住 `kv260.bd` 這類我們自己產出的東西,也已移除,改交給外層通用的 Vivado 產物規則(`*.cache/`、`*.gen/`、`*.runs/` 等,不含路徑前綴,任何深度都適用)過濾——驗證過,拿掉這三行規則後只新增 224 個原始碼/設定檔(`.vhd`/`.tcl`/`.sv`/`.xci`/`.bd`/`component.xml` 等),沒有任何自動產生的大量檔案混進來。
 
 ## Device tree binding:`psee,axi4s-packetizer`(待解決問題 1 的一部分,節點格式已查到,`xmutil loadapp` 打包格式仍未查)
 
@@ -549,9 +549,9 @@ inherit module
 
 用標準 Yocto `module.bbclass`(`inherit module`),`SRC_URI` 直接指到 `zynq-video-drivers` 這個 git repo,`SRCREV` 釘死一個 commit,額外疊一個 patch。我們自己的 driver 要進 PetaLinux,大概率就是照這個模式寫一份類似的 recipe,只是 `SRC_URI` 換成我們自己的原始碼位置。
 
-### 版本核對:本地 `docs/FPGA/Reference/KV260/zynq-video-drivers` 剛好就是這個 recipe 釘死的版本
+### 版本核對:本地 `docs/GENX320/Reference/KV260/zynq-video-drivers` 剛好就是這個 recipe 釘死的版本
 
-跑 `git log`/`git branch` 確認:本地那份參考副本,分支是 `kernel-5.15`,HEAD 正好就是 `22c8103d047cc7937960fd655d0c6869f745d76b`——**跟上面 `.bb` recipe 的 `SRCREV` 完全一樣**。也就是說我們一直在讀、也已經複製進 `FPGA/driver/` 當起點的那份原始碼,版本上跟板子實際跑的東西是同一份,不是不同版本、不用擔心對不上。
+跑 `git log`/`git branch` 確認:本地那份參考副本,分支是 `kernel-5.15`,HEAD 正好就是 `22c8103d047cc7937960fd655d0c6869f745d76b`——**跟上面 `.bb` recipe 的 `SRCREV` 完全一樣**。也就是說我們一直在讀、也已經複製進 `GENX320/driver/` 當起點的那份原始碼,版本上跟板子實際跑的東西是同一份,不是不同版本、不用擔心對不上。
 
 ### 唯一的差異:一個額外的 patch,修 DMA 停止時的 descriptor 亂序問題
 
@@ -602,7 +602,7 @@ shell.json                        → {"shell_type":"XRT_FLAT","num_slots":"1"}
 
 ### 已解決:直接反編譯官方 `.dtbo`,拿到 `ps_host_if` 真實節點內容(2026-08-14)
 
-板子上 `/lib/firmware/xilinx/prophesee-kv260-genx320/prophesee-kv260-genx320.dtbo` 是全域可讀的檔案(`-rw-r--r--`,不用 root),直接 `dtc -I dtb -O dts` 反編譯即可看到完整內容,不用等 root 權限、也不用真的去載入 prophesee app。查證方式全程唯讀,沒有動到板子任何狀態。完整反編譯結果已存成本機副本:[`docs/FPGA/Reference/KV260/prophesee-kv260-genx320-decompiled.dts`](../Reference/KV260/prophesee-kv260-genx320-decompiled.dts)。
+板子上 `/lib/firmware/xilinx/prophesee-kv260-genx320/prophesee-kv260-genx320.dtbo` 是全域可讀的檔案(`-rw-r--r--`,不用 root),直接 `dtc -I dtb -O dts` 反編譯即可看到完整內容,不用等 root 權限、也不用真的去載入 prophesee app。查證方式全程唯讀,沒有動到板子任何狀態。完整反編譯結果已存成本機副本:[`docs/GENX320/Reference/KV260/prophesee-kv260-genx320-decompiled.dts`](../Reference/KV260/prophesee-kv260-genx320-decompiled.dts)。
 
 `ps_host_if` 在這份官方 overlay 裡的真實節點(`fragment@2/__overlay__/ps_host_if@a0030000`):
 
@@ -646,7 +646,7 @@ ps_host_if@a0030000 {
 
 目的:`evt_dump` 目前逐筆 `printf`,要改成把資料存下來做視覺化。決定「存去哪裡、能撐多久」之前,先查三件事:PL→PS 的 DMA buffer 架構、板子實際 RAM/儲存狀況、SD 卡實測寫入速度。
 
-### DMA buffer 架構(`FPGA/driver/evtdec-dma.c`)
+### DMA buffer 架構(`GENX320/driver/evtdec-dma.c`)
 
 - 每個 V4L2 buffer 固定 **1 MiB**:`DEFAULT_PACKET_LENGTH = (1 << 20)`(`evtdec-dma.c:45`),`dma->transfer_size = DEFAULT_PACKET_LENGTH`(`evtdec-dma.c:958`),`queue_setup()`/`buffer_prepare()` 都用這個值。
 - `evt_dump.c:22` 跟 driver 要 `NUM_BUFFERS = 4` 個,合計 4 MB ≈ 524,288 筆事件(每筆固定 8 bytes,見 `evt_dump.c:46-56` 的 bit 排列)的緩衝空間。
@@ -655,7 +655,7 @@ ps_host_if@a0030000 {
 
 ### 填滿一個 1MB buffer 所需時間(換算 PS 端處理時限)
 
-事件率數字來源:`docs/FPGA/Reference/KV260/kv260_operation_notes/genx320_image_quality_debug.md`、`genx320_known_issues.md`(均為已實測/官方規格記載值,非推論)。
+事件率數字來源:`docs/GENX320/Reference/KV260/kv260_operation_notes/genx320_image_quality_debug.md`、`genx320_known_issues.md`(均為已實測/官方規格記載值,非推論)。
 
 | 事件率 | 來源 | 填滿 131,072 筆所需時間 |
 |---|---|---|
@@ -688,7 +688,7 @@ ssh kv260 "dd if=/dev/zero of=/home/petalinux/write_speed_test.bin bs=1M count=2
 
 ### openeb 參考:視覺化演算法、CSV 格式慣例(2026-08-17)
 
-`docs/FPGA/Reference/KV260/openeb` 裡查到兩個可以直接參考、不用自己重新設計的東西:
+`docs/GENX320/Reference/KV260/openeb` 裡查到兩個可以直接參考、不用自己重新設計的東西:
 
 - **CSV 格式慣例**(`sdk/modules/core/cpp/samples/metavision_csv_viewer/metavision_csv_viewer.cpp:29-33`,`parse_csv_header()`):官方工具的事件 CSV 是 `x,y,t,p` 一行一筆,可選 header `%geometry:<width>,<height>`。目前決定不轉 CSV,這條只在以後要跟官方工具互通時才用得到。
 - **視覺化演算法**(`sdk/modules/core/cpp/include/metavision/sdk/core/algorithms/periodic_frame_generation_algorithm.h`):`PeriodicFrameGenerationAlgorithm` 用固定 `accumulation_time_us`(官方預設 10000,即 10ms)當窗口,窗口內每個像素記錄最後一筆事件的時間戳跟極性(`time_surface_`,`process_event_buffer()` 第 182-186 行),依極性畫 on/off 兩色 + 背景色(`base_frame_generation_algorithm.h:58-61`,`on_color_default()`/`off_color_default()`,預設 `ColorPalette::Dark`)輸出一張影像。本機視覺化腳本要照這個邏輯做(累積視窗→畫幀→串成動畫),不是單純畫 x-y 散點圖。
@@ -711,7 +711,7 @@ ssh kv260 "dd if=/dev/zero of=/home/petalinux/write_speed_test.bin bs=1M count=2
 
 ## bias 設定工具:上板驗證與除錯(2026-08-21)
 
-`FPGA/tools/v4l2_bias/` 寫完、WSL 交叉編譯乾淨無警告、`.bias` 檔案解析邏輯本機 unit test 通過之後,上板驗證一度卡住:改 `bias_refr`(範圍 `[0, 127]`)不管怎麼調(0、127 兩端都試過),`evt_dump` 量到的事件率一直停在 ~130,000~140,000 events/s 附近,看起來像是寫入完全沒生效。
+`GENX320/tools/v4l2_bias/` 寫完、WSL 交叉編譯乾淨無警告、`.bias` 檔案解析邏輯本機 unit test 通過之後,上板驗證一度卡住:改 `bias_refr`(範圍 `[0, 127]`)不管怎麼調(0、127 兩端都試過),`evt_dump` 量到的事件率一直停在 ~130,000~140,000 events/s 附近,看起來像是寫入完全沒生效。
 
 ### 排查過程與逐一排除的假設
 

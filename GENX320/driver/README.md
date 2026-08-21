@@ -2,7 +2,7 @@
 
 現狀:`evtdec-composite.c`/`evtdec-dma.c`(+ 對應的 `.h`)已經從 `zynq-video-drivers` 的 `psee-composite.c`/`psee-dma.c` 改名、改內容成我們自己的版本,對應官方的 `ps_host_if`。改動細節:
 
-- **暫存器對照 `FsmConfigSetter.sv`**(`FPGA/EvtDecoder`),不是官方 `ps_host_if` 的配置:`REG_CONTROL(0x0)` bit 位置沒變,`REG_CONFIG(0x4)` 的 `enable_pattern`/`enable_tlast_timeout` bit 位置往前移一位,`REG_TLAST_TIMEOUT` 位址從 `0x18` 改成 `0x8`
+- **暫存器對照 `FsmConfigSetter.sv`**(`GENX320/EvtDecoder`),不是官方 `ps_host_if` 的配置:`REG_CONTROL(0x0)` bit 位置沒變,`REG_CONFIG(0x4)` 的 `enable_pattern`/`enable_tlast_timeout` bit 位置往前移一位,`REG_TLAST_TIMEOUT` 位址從 `0x18` 改成 `0x8`
 - **移除**:`REG_PACKET_LENGTH`(我們不用固定封包長度框架)、`REG_VERSION`(FsmConfigSetter 沒有版本暫存器)、`REG_TLAST_TIMEOUT_EVT_LSB/MSB` + `DEFAULT_MARKER` 心跳機制(TODO 已定案:完全靜默期一直等沒關係,不合成 filler event)
 - **套用了** Prophesee 官方 PetaLinux recipe 裡的 `avoid-descriptor-link-corruption.patch`(`petalinux-projects` repo):`stop_streaming()` 結尾釋放並重新 `dma_request_chan()` 同一個 DMA channel,修「停止串流時 DMA descriptor 偶爾亂序」的已知問題
 - **新的 V4L2 pixel format**:`evtdec-format.h` 定義 `V4L2_PIX_FMT_CSNN_XYT`,`__get_format()` 不再像官方那樣把上游 subdev(ESST)的 media bus 格式轉譯成輸出格式(我們的輸出是 PL 端已經解碼好的 `(x,y,type,t)`,跟上游格式完全不同),固定回報這個新格式
@@ -59,7 +59,7 @@ make modules_prepare   # 生出 Module.symvers(這裡是空的,見下方說明)�
 **編這個 driver 本身**(`ARCH`/`CROSS_COMPILE` 沿用上面,額外指定 `KERNEL_SRC`):
 
 ```bash
-cd FPGA/driver   # 這個專案目錄,WSL 下用 /mnt/d/... 路徑存取
+cd GENX320/driver   # 這個專案目錄,WSL 下用 /mnt/d/... 路徑存取
 export KERNEL_SRC=~/petalinux/linux-xlnx
 make
 ```
@@ -80,4 +80,4 @@ make
 - 還沒真的接進 PetaLinux(`.bb` recipe 還沒寫,可以照 `petalinux-projects` 裡 `psee-video_2.0.0.bb` 的模式改)
 - 板子上目前登入帳號 `petalinux` 沒有 sudo 密碼可用(這是這台板子本身的環境限制,不是專案程式碼問題),需要 root 權限的操作(`xmutil loadapp` 切換 accelerated application 等)還沒能做
 
-下一步待辦記在 [`docs/FPGA/Todo/ps_host_if_replacement_todo.md`](../../docs/FPGA/Todo/ps_host_if_replacement_todo.md)。
+下一步待辦記在 [`docs/GENX320/Todo/ps_host_if_replacement_todo.md`](../../docs/GENX320/Todo/ps_host_if_replacement_todo.md)。

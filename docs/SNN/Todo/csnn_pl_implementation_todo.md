@@ -4,7 +4,7 @@
 
 `D:\Project\SNN` 訓練出來的 CSNN,之後要讓 PL 端直接跑膜電位更新邏輯,不繞 PS,理由是低延遲、省資源。這個分支要解決的問題:PL 端具體怎麼實作膜電位更新,才能跟訓練出來的模型行為一致,同時功耗打贏對應的 ANN 版本。
 
-**這是未來工作,不是現在要做的事**——現在做的是 [`FPGA/Todo/ps_host_if_replacement_todo.md`](../../FPGA/Todo/ps_host_if_replacement_todo.md)。
+**這是未來工作,不是現在要做的事**——現在做的是 [`GENX320/Todo/ps_host_if_replacement_todo.md`](../../GENX320/Todo/ps_host_if_replacement_todo.md)。
 
 ## 已經決定的設計
 

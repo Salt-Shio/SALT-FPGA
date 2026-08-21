@@ -6,7 +6,7 @@
 #
 # 用法: bash scripts/kv260_connect.sh
 #
-# 前提(見 docs/FPGA/Reference/KV260/kv260_operation_notes/network_ssh_access.md):
+# 前提(見 docs/GENX320/Reference/KV260/kv260_operation_notes/network_ssh_access.md):
 #   - VcXsrv 已裝在 D:\VcXsrv
 #   - ~/.ssh/config 已設好 Host kv260(含 XAuthLocation 指到 xauth.exe)
 

@@ -1,6 +1,6 @@
 # 外部參考原始碼(複製進來或 clone 的第三方專案,不是本專案產出)
-FPGA/zipcpu
-docs/FPGA/Reference
+GENX320/zipcpu
+docs/GENX320/Reference
 
 # Claude Code 本機設定(跟機器/使用者綁定,不共用)
 .claude/settings.local.json
@@ -26,34 +26,34 @@ dfx_runtime.txt
 
 # *.sim/ 底下只有 sim_1/new/ 是手寫的 testbench 原始碼,要進版控;
 # 其餘(sim_1/behav/ 之類)是跑模擬產生的執行期產物,不進版控
-# FPGA/EvtDecoder/EvtDecoder.sim/sim_*/behav/
+# GENX320/EvtDecoder/EvtDecoder.sim/sim_*/behav/
 */*/*.sim/sim_*/behav
 */*/*.sim/sim_*/synth
 
-# FPGA/driver:kernel module 編譯產物(FPGA/driver/Makefile 的 make/make clean 可重新產生),不進版控
-FPGA/driver/*.o
-FPGA/driver/*.ko
-FPGA/driver/*.mod
-FPGA/driver/*.mod.c
-FPGA/driver/.*.cmd
-FPGA/driver/Module.symvers
-FPGA/driver/Modules.symvers
-FPGA/driver/Module.markers
-FPGA/driver/modules.order
-FPGA/driver/.tmp_versions/
+# GENX320/driver:kernel module 編譯產物(GENX320/driver/Makefile 的 make/make clean 可重新產生),不進版控
+GENX320/driver/*.o
+GENX320/driver/*.ko
+GENX320/driver/*.mod
+GENX320/driver/*.mod.c
+GENX320/driver/.*.cmd
+GENX320/driver/Module.symvers
+GENX320/driver/Modules.symvers
+GENX320/driver/Module.markers
+GENX320/driver/modules.order
+GENX320/driver/.tmp_versions/
 
-# FPGA/tools/evt_dump、FPGA/tools/v4l2_reg、FPGA/tools/v4l2_bias:編譯產物(各自 Makefile 的 make/make clean 可重新產生),不進版控
-FPGA/tools/evt_dump/evt_dump
-FPGA/tools/v4l2_reg/v4l2_reg
-FPGA/tools/v4l2_bias/v4l2_bias
+# GENX320/tools/evt_dump、GENX320/tools/v4l2_reg、GENX320/tools/v4l2_bias:編譯產物(各自 Makefile 的 make/make clean 可重新產生),不進版控
+GENX320/tools/evt_dump/evt_dump
+GENX320/tools/v4l2_reg/v4l2_reg
+GENX320/tools/v4l2_bias/v4l2_bias
 
-# FPGA/app_bundle:.dtbo 可由 .dts 用 dtc -@ 重新編譯,.bit.bin 是 Vivado 合成產物(從 .srcs 重跑可重新產生),不進版控
-FPGA/app_bundle/csnn-fpga-evtdec/csnn-fpga-evtdec.dtbo
-FPGA/app_bundle/csnn-fpga-evtdec/csnn-fpga-evtdec.bit.bin
+# GENX320/app_bundle:.dtbo 可由 .dts 用 dtc -@ 重新編譯,.bit.bin 是 Vivado 合成產物(從 .srcs 重跑可重新產生),不進版控
+GENX320/app_bundle/csnn-fpga-evtdec/csnn-fpga-evtdec.dtbo
+GENX320/app_bundle/csnn-fpga-evtdec/csnn-fpga-evtdec.bit.bin
 
-# FPGA/scratch:從板子抓回來的原始事件資料(evt_dump -o 存的 .bin),
+# GENX320/scratch:從板子抓回來的原始事件資料(evt_dump -o 存的 .bin),
 # 純測試資料不是原始碼,體積大,不進版控
-FPGA/scratch/
+GENX320/scratch/
 
 # Python 快取
 __pycache__/

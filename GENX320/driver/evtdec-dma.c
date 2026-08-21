@@ -4,7 +4,7 @@
  *
  * Adapted from Prophesee's psee-dma.c (zynq-video-drivers, kernel-5.15
  * branch, commit 22c8103d047cc7937960fd655d0c6869f745d76b), with the
- * register map changed to match FsmConfigSetter.sv (FPGA/EvtDecoder)
+ * register map changed to match FsmConfigSetter.sv (GENX320/EvtDecoder)
  * instead of the official ps_host_if, and the
  * avoid-descriptor-link-corruption.patch fix folded in.
  * Copyright (C) Prophesee S.A.
@@ -45,7 +45,7 @@
 #define DEFAULT_PACKET_LENGTH		(1 << 20)
 
 /*
- * Register map matches FsmConfigSetter.sv (FPGA/EvtDecoder), not the
+ * Register map matches FsmConfigSetter.sv (GENX320/EvtDecoder), not the
  * official ps_host_if. There is no REG_VERSION, no REG_PACKET_LENGTH
  * (we don't frame on a fixed packet length) and no marker/heartbeat
  * mechanism (TODO: 已定案,完全靜默期一直等沒關係,不合成 filler event).
@@ -664,7 +664,7 @@ static int
 __get_format(struct evtdec_dma *dma, struct v4l2_pix_format *pix)
 {
 	/* Our output is always (x,y,type,t) tuples, decoded on the PL side
-	 * (FPGA/EvtDecoder's EventProcessor.sv). It never matches whatever
+	 * (GENX320/EvtDecoder's EventProcessor.sv). It never matches whatever
 	 * media bus format the upstream subdev (ESST) reports, so unlike
 	 * the official ps_host_if driver we don't translate the upstream
 	 * format into our pixelformat, we always report our own fixed one.

@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "d:/Project/CSNN-FPGA/FPGA/driver",
-      "program": "d:/Project/CSNN-FPGA/FPGA/driver/build/Debug/outDebug",
+      "cwd": "d:/Project/CSNN-FPGA/GENX320/driver",
+      "program": "d:/Project/CSNN-FPGA/GENX320/driver/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

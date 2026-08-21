@@ -1,7 +1,7 @@
 /*
  * csnn-fpga-evtdec:device tree overlay,取代官方 prophesee-kv260-genx320 裡的 ps_host_if 節點。
  *
- * 底稿來源:docs/FPGA/Reference/KV260/prophesee-kv260-genx320-decompiled.dts
+ * 底稿來源:docs/GENX320/Reference/KV260/prophesee-kv260-genx320-decompiled.dts
  *   (板子上 /lib/firmware/xilinx/prophesee-kv260-genx320/prophesee-kv260-genx320.dtbo 反編譯結果,
  *    2026-08-14,dtc -I dtb -O dts,唯讀,不需要 root)
  *
@@ -16,13 +16,13 @@
  *   2. 節點改名 + compatible 字串:
  *        ps_host_if@a0030000 → evtdec@a0030000
  *        compatible = "psee,axi4s-packetizer" → compatible = "csnn-fpga,evt-decoder"
- *        (跟 FPGA/driver/evtdec-composite.c 的 of_match_table 對上)
+ *        (跟 GENX320/driver/evtdec-composite.c 的 of_match_table 對上)
  *        reg / clocks / dmas / dma-names / ports 完全沒動——因為 fsm_event_extractor
  *        接在跟 ps_host_if_0 完全相同的位置(同位址 0xa0030000、range 0x80、
  *        同上游 event_stream_smart_tracker、同 axi_dma),這些欄位描述的是「接線關係」,
  *        不是 ps_host_if 內部的暫存器語意,不受換 IP 影響。
  *        clocks = <0xffffffff 0x47> 保留:0x47(hex)=71(十進位)=PL0_REF,
- *        已在 docs/FPGA/Concept/ps_host_if_replacement_notes.md 查證過是對的值。
+ *        已在 docs/GENX320/Concept/ps_host_if_replacement_notes.md 查證過是對的值。
  *
  *   3. __symbols__ 裡對應這個節點的兩筆 symbol 改名跟著改路徑:
  *        ps_host_if_0 → evtdec_0
@@ -38,7 +38,7 @@
  *   - 這份 .dts 還沒用 `dtc -@ -I dts -O dtb` 實際編譯過,語法是否完全正確未確認
  *   - 編出來的 .dtbo 還沒上板測試,`xmutil loadapp` 能不能正常吃這份 overlay 未驗證
  *   - csnn-fpga-evtdec.bit.bin 是直接複製 Vivado `write_bitstream -bin_file` 產物
- *     (FPGA/fpga-projects-1.0.0/build/projects/kv260/kv260.runs/impl_1/kv260_v1_0_0.bin)
+ *     (GENX320/fpga-projects-1.0.0/build/projects/kv260/kv260.runs/impl_1/kv260_v1_0_0.bin)
  *     改檔名而來,檔頭是標準 bitstream sync word(0xFF 開頭),格式上看起來跟
  *     prophesee-kv260-genx320.bit.bin 一致,但沒有找到 AMD 官方文件逐條確認
  *     Kria Apps 打包規格是不是就是這個直出格式(沒有另外 bootgen 轉換),

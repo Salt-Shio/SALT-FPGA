@@ -4,7 +4,7 @@
 <!-- Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.                   -->
 <!-- Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.   -->
 
-<Project Product="Vivado" Version="7" Minor="71" Path="D:/Project/CSNN-FPGA/FPGA/EvtDecoder/EvtDecoder.xpr">
+<Project Product="Vivado" Version="7" Minor="71" Path="D:/Project/CSNN-FPGA/GENX320/EvtDecoder/EvtDecoder.xpr">
   <DefaultLaunch Dir="$PRUNDIR"/>
   <Configuration>
     <Option Name="Id" Val="2f60c4fffe3144689afb676ea36b9e21"/>

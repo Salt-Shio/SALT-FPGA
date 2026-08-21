@@ -2,7 +2,7 @@
  * v4l2_reg — 板子上的 v4l2-ctl 沒編進 --get-register/--set-register 功能
  * (v4l2-ctl --help-all 查不到任何 register 相關選項),改直接呼叫
  * driver 本來就實作好的 VIDIOC_DBG_G_REGISTER / VIDIOC_DBG_S_REGISTER
- * (對應 FPGA/driver/evtdec-dma.c 的 g_register()/s_register())。
+ * (對應 GENX320/driver/evtdec-dma.c 的 g_register()/s_register())。
  *
  * 用法:
  *   v4l2_reg /dev/videoN get <hex位址>

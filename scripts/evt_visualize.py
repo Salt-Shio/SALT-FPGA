@@ -13,7 +13,7 @@ metavision_viewer.cpp:set_display_accumulation_time_us(10000))。
 播放採真實時間:每張圖在畫面上停留的時間等於它代表的 accum-us 長度,
 播放總長度自然等於原始擷取時長(錄 10 秒,播放也是 10 秒)。
 
-事件 bit 排列來源:EventProcessor.sv:143(跟 FPGA/tools/evt_dump/evt_dump.c
+事件 bit 排列來源:EventProcessor.sv:143(跟 GENX320/tools/evt_dump/evt_dump.c
 的 print_event() 是同一份定義):
   m_data_q <= {td_x + x_offset, td_y, td_type[0], time_high_q, td_time};
   [63:57] 未使用  [56:46] x(11)  [45:35] y(11)  [34] type(1)  [33:0] t(34,微秒)

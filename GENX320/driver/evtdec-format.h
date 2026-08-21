@@ -3,7 +3,7 @@
 #include <linux/videodev2.h>
 
 /* Our output is a raw (x,y,type,t) event stream decoded on the PL side
- * (FPGA/EvtDecoder), not any of the EVTx formats the official Prophesee
+ * (GENX320/EvtDecoder), not any of the EVTx formats the official Prophesee
  * driver stack uses — so unlike psee-format.h (which this file replaces),
  * there is no MEDIA_BUS_FMT_* counterpart: nothing upstream ever produces
  * this format, our module is the one that creates it.
