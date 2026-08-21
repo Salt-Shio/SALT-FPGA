@@ -42,9 +42,10 @@ FPGA/driver/Module.markers
 FPGA/driver/modules.order
 FPGA/driver/.tmp_versions/
 
-# FPGA/tools/evt_dump、FPGA/tools/v4l2_reg:編譯產物(各自 Makefile 的 make/make clean 可重新產生),不進版控
+# FPGA/tools/evt_dump、FPGA/tools/v4l2_reg、FPGA/tools/v4l2_bias:編譯產物(各自 Makefile 的 make/make clean 可重新產生),不進版控
 FPGA/tools/evt_dump/evt_dump
 FPGA/tools/v4l2_reg/v4l2_reg
+FPGA/tools/v4l2_bias/v4l2_bias
 
 # FPGA/app_bundle:.dtbo 可由 .dts 用 dtc -@ 重新編譯,.bit.bin 是 Vivado 合成產物(從 .srcs 重跑可重新產生),不進版控
 FPGA/app_bundle/csnn-fpga-evtdec/csnn-fpga-evtdec.dtbo

@@ -18,7 +18,7 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 
 1. **解碼模組**(已完成、已上板驗證):輸入 ESST 的 AXI4-Stream(64-bit,EVT2.1),輸出 `(x,y,type,t)`,`t` 微秒。`type_f==0x0/0x1` 是 TD,展開;`0x8` 只更新內部時間、不輸出;`0xE` 丟棄。
 2. **PL→PS 傳輸介面**(已完成、已上板驗證):AXI DMA + kernel driver(`FPGA/driver/`),細節見下方項目 11。
-3. **bias 設定工具**(**尚未開始**):獨立小程式,對 sensor subdev 下 `VIDIOC_S_CTRL`,不依賴 `metavision_viewer`。`FPGA/tools/` 底下目前只有 `evt_dump`、`v4l2_reg`,還沒有這支。
+3. **bias 設定工具**(**已完成,已上板驗證通過**):`FPGA/tools/v4l2_bias/`,獨立小程式,對 sensor subdev(`/dev/v4l-subdevN`)列舉並讀寫 `bias_*` 這類自訂 V4L2 control(`VIDIOC_QUERY_EXT_CTRL` 列舉、`VIDIOC_G/S_EXT_CTRLS` 讀寫,不是官方原本用的 `VIDIOC_S_CTRL`),支援 `list`(列出目前所有 bias 名稱/數值/範圍)、`load <path.bias>`(讀取 `.bias` 檔案批次套用,先驗證全部項目存在且在範圍內才寫入,all-or-nothing),不依賴 `metavision_viewer`。2026-08-21 上板驗證:先用 `v4l2-ctl` reset 回預設值確認 baseline(132217 events/s),再單獨用 `v4l2_bias load` 套用 `genx320es_CD_standard.bias`,事件率獨立掉到 32011 events/s,跟同一組設定用官方 `v4l2-ctl`/`metavision_viewer` 測出來的量級一致,確認寫入真的到達硬體、工具行為正確。除錯過程與關鍵發現(單一 bias 微調的訊號可能被場景雜訊蓋掉,不能當作「寫入失效」的證據)見 Concept 筆記「bias 設定工具:上板驗證與除錯」那節。
 4. **事件讀取驗證程式**(已完成、已上板驗證):`FPGA/tools/evt_dump/`,`open`/`mmap` V4L2 capture 裝置,依 `EventProcessor.sv:143` 的實際 bit 排列印出 `(x,y,type,t)`,不做 EVT2.1 解碼(PL 端已解碼完)。細節見 `FPGA/tools/evt_dump/README.md`。
 5. **evt_dump 資料視覺化**(**已完成,(a)(b)(c) 都驗證過**):原本只 `printf` 純文字,看不出事件在畫面上的空間/時間分布是否合理。已定案:不轉 CSV(PL 端輸出本來就是固定 8 bytes/筆的二進位格式),整塊 buffer 直接 `write()` 存成原始二進位;存檔位置寫 `/tmp`(RAM,tmpfs)不寫 SD 卡(`/home/petalinux` 那個掛載點)——SD 卡實測持續寫入只有 10.6 MB/s,查到的文件極端值(規格上限 10 Meps=80 MB/s、失焦壞情況 13.8 Mev/s=110 MB/s)都超過這個速度,但**子彈飛行這種實際場景會落在哪個量級還沒實測,不能拿極端值當定案依據**——先寫 `/tmp` 這個決定本身成本是零(反正哪裡都要寫),但存檔上限(時間/筆數)、要不要擔心 SD 卡瓶頸,等實測出真實場景事件率再定。視覺化演算法參考 `docs/FPGA/Reference/KV260/openeb` 官方作法(`PeriodicFrameGenerationAlgorithm`:固定時間窗口內累積事件、依極性畫兩色+背景色成一張影像,串起來看軌跡),不用自己從頭設計。查證細節見 Concept 筆記「`evt_dump` 資料視覺化擷取」那節。進度:(b) 已改完 `evt_dump.c`——加 `-o <path>`(整塊 `write()` 存原始二進位)、`-t <seconds>`(時間上限,沿用既有 `-n <count>`)、每秒事件率統計 + 結束總結(events/s、MB/s),WSL 交叉編譯 `-Wall -Wextra` 乾淨無警告,**已上板實測跑過,功能正常**(細節見 `FPGA/tools/evt_dump/README.md`)。
 
@@ -33,7 +33,7 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 
 ## 解碼模組實作步驟(依序做,由使用者實作,這裡只列順序跟每步的驗收標準)
 
-目前進度:1~11 全部完成,已上板驗證通過(含 `enable_pattern` bug 修復)。**核心目標已達成**,剩下的開放項目見「具體任務」第 3 項(bias 設定工具,尚未開始)。
+目前進度:1~11 全部完成,已上板驗證通過(含 `enable_pattern` bug 修復)。**核心目標已達成**,「具體任務」列的四項(解碼模組、PL→PS 傳輸、bias 設定工具、事件讀取驗證程式)也都已完成、上板驗證通過。
 
 kernel driver 這塊的工作在獨立的 `ps-driver` git 分支上進行,原始碼位置開在 `FPGA/driver/`(跟 PL 端的 `FPGA/EvtDecoder` 平行),已把 `psee-composite.c`/`psee-dma.c` 這對(對應官方 `psee-video.ko`)原封不動複製進去當起點,還沒開始改暫存器配置,細節見 `FPGA/driver/README.md`。編譯規劃:本機(Windows)只寫程式碼,原本規劃實際編譯用 WSL(Ubuntu-22.04)交叉編譯,PetaLinux SDK 目前裝在 KV260 板子上、板子還沒接上。**已查證(2026-08-14)**:WSL 裡有裝 `aarch64-linux-gnu-gcc`,但沒有任何完整 kernel source tree(`/lib/modules/$(uname -r)/build` 不存在、`/usr/src` 是空的、`$KERNEL_SRC` 未設),driver Makefile 是標準 Kbuild 模式(`make -C $(KERNEL_SRC) M=$(SRC)`),沒有 kernel source tree 跑不起來。而且就算裝 Ubuntu 通用的 `linux-headers-$(uname -r)` 也沒用——`evtdec-dma.c` 用到 `<linux/dma/xilinx_dma.h>`,這是 Xilinx `linux-xlnx` fork 專屬的 header,不在主線 kernel 裡。**結論**:WSL 目前這個環境編不出來,語法檢查/編譯得等板子連上、直接用板子上的 PetaLinux SDK,或另外拉一份跟板子版本一致的 `linux-xlnx`(`kv260-2022.2` 對應 tag)在 WSL 裡搭出 Kbuild 環境,兩條路都還沒做。
 
