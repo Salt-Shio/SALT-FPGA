@@ -128,18 +128,28 @@ class EventPlayer:
                 self.play_loop()
 
     def play_loop(self):
-        # 真實時間播放:每張圖停留時間等於它代表的窗口長度,扣掉重繪本身
-        # 花的時間做粗略補償,避免每張圖都比真實時間多拖一點
+        # 真實時間播放:每次迴圈直接算「現在真實經過了多少時間」該對應到
+        # 哪一張 frame,直接跳過去,不是固定每次前進 1 張。matplotlib 單次
+        # 重繪常常就超過 accum-us(例如 10ms)的預算,固定前進 1 張的話追
+        # 不上,總長度會被拖慢成慢動作;跳著顯示才能保證總長度對齊真實
+        # 擷取時長,犧牲的是「每張都畫到」,不是總時長。
         frame_dt = self.accum_us / 1e6
+        play_start_wall = time.perf_counter()
+        play_start_frame = int(self.slider.val)
+
         while self.is_playing[0] and plt.fignum_exists(self.fig.number):
-            f = int(self.slider.val)
-            if f >= self.n_frames - 1:
+            elapsed_wall = time.perf_counter() - play_start_wall
+            target_frame = play_start_frame + int(elapsed_wall / frame_dt)
+
+            if target_frame >= self.n_frames - 1:
+                self.slider.set_val(self.n_frames - 1)
                 self.is_playing[0] = False
                 break
-            start = time.perf_counter()
-            self.slider.set_val(f + 1)
-            elapsed = time.perf_counter() - start
-            plt.pause(max(frame_dt - elapsed, 0.001))
+
+            if target_frame != int(self.slider.val):
+                self.slider.set_val(target_frame)
+
+            plt.pause(0.005)
 
     def start(self):
         print("提示:")
