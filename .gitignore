@@ -50,6 +50,10 @@ FPGA/tools/v4l2_reg/v4l2_reg
 FPGA/app_bundle/csnn-fpga-evtdec/csnn-fpga-evtdec.dtbo
 FPGA/app_bundle/csnn-fpga-evtdec/csnn-fpga-evtdec.bit.bin
 
+# FPGA/scratch:從板子抓回來的原始事件資料(evt_dump -o 存的 .bin),
+# 純測試資料不是原始碼,體積大,不進版控
+FPGA/scratch/
+
 # OS 產生的雜項檔案
 Thumbs.db
 .DS_Store
