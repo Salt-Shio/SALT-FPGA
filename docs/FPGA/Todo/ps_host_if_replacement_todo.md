@@ -20,7 +20,7 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 2. **PL→PS 傳輸介面**(已完成、已上板驗證):AXI DMA + kernel driver(`FPGA/driver/`),細節見下方項目 11。
 3. **bias 設定工具**(**尚未開始**):獨立小程式,對 sensor subdev 下 `VIDIOC_S_CTRL`,不依賴 `metavision_viewer`。`FPGA/tools/` 底下目前只有 `evt_dump`、`v4l2_reg`,還沒有這支。
 4. **事件讀取驗證程式**(已完成、已上板驗證):`FPGA/tools/evt_dump/`,`open`/`mmap` V4L2 capture 裝置,依 `EventProcessor.sv:143` 的實際 bit 排列印出 `(x,y,type,t)`,不做 EVT2.1 解碼(PL 端已解碼完)。細節見 `FPGA/tools/evt_dump/README.md`。
-5. **evt_dump 資料視覺化**(**尚未開始**):目前只 `printf` 純文字,看不出事件在畫面上的空間/時間分布是否合理。已定案:不轉 CSV(PL 端輸出本來就是固定 8 bytes/筆的二進位格式),整塊 buffer 直接 `write()` 存成原始二進位;存檔位置寫 `/tmp`(RAM,tmpfs)不寫 SD 卡(`/home/petalinux` 那個掛載點)——SD 卡實測持續寫入只有 10.6 MB/s,查到的文件極端值(規格上限 10 Meps=80 MB/s、失焦壞情況 13.8 Mev/s=110 MB/s)都超過這個速度,但**子彈飛行這種實際場景會落在哪個量級還沒實測,不能拿極端值當定案依據**——先寫 `/tmp` 這個決定本身成本是零(反正哪裡都要寫),但存檔上限(時間/筆數)、要不要擔心 SD 卡瓶頸,等實測出真實場景事件率再定。視覺化演算法參考 `docs/FPGA/Reference/KV260/openeb` 官方作法(`PeriodicFrameGenerationAlgorithm`:固定時間窗口內累積事件、依極性畫兩色+背景色成一張影像,串起來看軌跡),不用自己從頭設計。查證細節見 Concept 筆記「`evt_dump` 資料視覺化擷取」那節。進度:(b) 已改完 `evt_dump.c`——加 `-o <path>`(整塊 `write()` 存原始二進位)、`-t <seconds>`(時間上限,沿用既有 `-n <count>`)、每秒事件率統計 + 結束總結(events/s、MB/s),WSL 交叉編譯 `-Wall -Wextra` 乾淨無警告,**已上板實測跑過,功能正常**(細節見 `FPGA/tools/evt_dump/README.md`)。
+5. **evt_dump 資料視覺化**(**已完成,(a)(b)(c) 都驗證過**):原本只 `printf` 純文字,看不出事件在畫面上的空間/時間分布是否合理。已定案:不轉 CSV(PL 端輸出本來就是固定 8 bytes/筆的二進位格式),整塊 buffer 直接 `write()` 存成原始二進位;存檔位置寫 `/tmp`(RAM,tmpfs)不寫 SD 卡(`/home/petalinux` 那個掛載點)——SD 卡實測持續寫入只有 10.6 MB/s,查到的文件極端值(規格上限 10 Meps=80 MB/s、失焦壞情況 13.8 Mev/s=110 MB/s)都超過這個速度,但**子彈飛行這種實際場景會落在哪個量級還沒實測,不能拿極端值當定案依據**——先寫 `/tmp` 這個決定本身成本是零(反正哪裡都要寫),但存檔上限(時間/筆數)、要不要擔心 SD 卡瓶頸,等實測出真實場景事件率再定。視覺化演算法參考 `docs/FPGA/Reference/KV260/openeb` 官方作法(`PeriodicFrameGenerationAlgorithm`:固定時間窗口內累積事件、依極性畫兩色+背景色成一張影像,串起來看軌跡),不用自己從頭設計。查證細節見 Concept 筆記「`evt_dump` 資料視覺化擷取」那節。進度:(b) 已改完 `evt_dump.c`——加 `-o <path>`(整塊 `write()` 存原始二進位)、`-t <seconds>`(時間上限,沿用既有 `-n <count>`)、每秒事件率統計 + 結束總結(events/s、MB/s),WSL 交叉編譯 `-Wall -Wextra` 乾淨無警告,**已上板實測跑過,功能正常**(細節見 `FPGA/tools/evt_dump/README.md`)。
 
 (a) 已量到兩組真實數字:
 
@@ -29,7 +29,7 @@ GenX320 → MIPI CSI-2 RX → axis_tkeep_handler → ESST →
 
 兩組數字量級一致(數十萬到約 1M events/s,換算 1~8 MB/s),**都在 SD 卡實測寫入速度(10.6 MB/s)範圍內**,確認 SD 卡瓶頸在正常場景下不成立,不需要额外做記憶體緩衝那層。**這兩組都是人體動作、不是子彈飛行**,子彈更小更快、事件會更集中在短暫瞬間,瞬時峰值可能比這裡量到的更高,但已經有兩個獨立管線、不同 bias 條件量到的數字互相印證同一個量級,不算是孤例。之後如果真的用子彈飛行場景驗證,重點看瞬間峰值(`evt_dump` 的 `[rate]` 那行)而不是平均值。
 
-**還沒做**:(c) 本機視覺化腳本(累積視窗成影像,參考 openeb `PeriodicFrameGenerationAlgorithm`)。
+(c) 已完成、使用者已上機確認可用:`scripts/evt_visualize.py`(本機端,`snn` conda 環境)。讀 `evt_dump -o` 存的 `.bin`,numpy 向量化拆 x/y/type/t,依 `--accum-us`(預設 10000,跟官方 `metavision_viewer` 寫死的累積窗口一致)切非重疊時間窗口,同像素多筆事件時間序覆寫(last-write-wins),渲染成 320×320 影像(ON=紅、OFF=藍、背景=白)。播放邏輯照抄 `D:\Project\SNN\main\debug.py` 的 `Slider` + 方向鍵單步 + 空白鍵播放/暫停寫法(不是 `FuncAnimation`),真實時間播放——每張圖停留時間等於它代表的 `accum-us` 長度,總長度等於原始擷取時長。用實際錄到的 7,236,879 筆事件(9.999568 秒)測過,讀檔 0.1 秒、切 1000 張 frame 只要 0.12 秒。MP4 存檔功能討論過,決定先不做,之後真有需要再加(`matplotlib` 已確認能抓到系統 `ffmpeg.exe`,不用額外裝套件)。
 
 ## 解碼模組實作步驟(依序做,由使用者實作,這裡只列順序跟每步的驗收標準)
 

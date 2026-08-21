@@ -54,6 +54,9 @@ FPGA/app_bundle/csnn-fpga-evtdec/csnn-fpga-evtdec.bit.bin
 # 純測試資料不是原始碼,體積大,不進版控
 FPGA/scratch/
 
+# Python 快取
+__pycache__/
+
 # OS 產生的雜項檔案
 Thumbs.db
 .DS_Store
