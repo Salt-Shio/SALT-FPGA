@@ -2,6 +2,9 @@
 GENX320/zipcpu
 docs/GENX320/Reference
 
+# 付費論文 PDF(僅供本機參考,不進版控)
+docs/SNN/Concept/reference/*.pdf
+
 # Claude Code 本機設定(跟機器/使用者綁定,不共用)
 .claude/settings.local.json
 
