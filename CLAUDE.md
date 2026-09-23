@@ -4,15 +4,15 @@
 
 把 GenX320 事件相機的資料直連 KV260 的 PL(FPGA),取代官方的 `ps_host_if` + AXI DMA + PS 軟體解碼路徑,目標是低延遲、省資源。這個專案是三個相關目錄裡負責「FPGA 端實作」的那一個。
 
-## 上層應用目標
+## 目前目標
 
-完整脈絡記在 `D:\Project\SNN\CLAUDE.md`:DVS(事件相機)偵測 Nerf 子彈飛向由馬達控制的攔截板,目標是把 CSNN(脈衝卷積神經網路)搬上 FPGA,即時預測子彈落點並控制馬達移動板子攔截。本專案是這個大目標底下,「感測器資料怎麼從 PL 拿出來」這一段的實作。
+不綁定特定下游應用。目前階段的目標是把 Conv 層的事件驅動 RTL 做出來,驗證這個運作方式實際可不可行、邏輯對不對得上,建立一個可用的基礎。
 
 ## 三個目錄的分工
 
 | 目錄 | 職責 |
 |---|---|
-| `D:\Project\SNN` | CSNN 模型訓練、量化、剪枝,產出 weight。也是理解 spikingjelly 運算邏輯(LIF 神經元、conv 層行為)的參考實作。**不是**本專案要修改的對象,只讀不寫。 |
+| `D:\Project\Spiking-Affine-Lazy-Training` | CSNN 模型訓練,目前進度是 N-MNIST。事件驅動 LIF 的數學規格參考來源(`docs/SNN/Concept/model_operation.md` 要跟這邊保持一致)。**不是**本專案要修改的對象,只讀不寫。舊專案 `D:\Project\SNN` 已棄用(最後 commit 2026-07-17),不再參考。 |
 | `D:\FPGA\KV260_bringup` | KV260 板子的通用 bring-up 學習記錄(Vivado、PetaLinux、AXI 基礎),含官方 GenX320 pipeline 的原始碼查證筆記。本專案用到的部分已複製到 `docs/GENX320/Reference/KV260/`,見下方說明,不會修改原始目錄。 |
 | `D:\Project\CSNN-FPGA`(本專案) | 把 GenX320 事件資料直連 PL、取代官方 `ps_host_if`、送資料給 PS 端這件事的實作與規劃。融合上面兩個專案的內容。 |
 
