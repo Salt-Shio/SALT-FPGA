@@ -22,12 +22,12 @@
 
 | 資料夾 | 內容 |
 |---|---|
-| `docs/GENX320/` | `ps_host_if` 替換與 PL→PS 傳輸,**目前實際在做的範圍** |
-| `docs/SNN/` | CSNN 在 PL 端運算的規劃,**未來分支,理論階段,現在不用做** |
+| `docs/GENX320/` | `ps_host_if` 替換與 PL→PS 傳輸,目前實際在做的範圍之一 |
+| `docs/SNN/` | CSNN 在 PL 端運算,Conv 層事件驅動 RTL 已進入 Vivado 實作階段(2026-09-23 起),跟 `docs/GENX320/` 平行進行 |
 
 `docs/GENX320/Reference/` 放複製進來的外部原始碼與操作筆記(`kv260_operation_notes`、`openeb`、`fpga-projects-1.0.0`、`zynq-video-drivers`),不用再去 `D:\FPGA\KV260_bringup` 找。
 
 每個資料夾底下再分兩層:`Todo/` 放「要做什麼/卡在哪」,`Concept/` 放查證過程、原始碼引用、數學證明。Todo 檔案只留結論跟待辦,不放大段引用。目前的入口:
 
-- 現在要做的事:[`docs/GENX320/Todo/ps_host_if_replacement_todo.md`](docs/GENX320/Todo/ps_host_if_replacement_todo.md)
-- 未來分支規劃:[`docs/SNN/Todo/csnn_pl_implementation_todo.md`](docs/SNN/Todo/csnn_pl_implementation_todo.md)
+- `ps_host_if` 替換:[`docs/GENX320/Todo/ps_host_if_replacement_todo.md`](docs/GENX320/Todo/ps_host_if_replacement_todo.md)
+- Conv 層 RTL 實作(Vivado 專案 `SaltConv`):[`docs/SNN/Todo/csnn_pl_implementation_todo.md`](docs/SNN/Todo/csnn_pl_implementation_todo.md)
