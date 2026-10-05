@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * CSNN-FPGA Event Decoder Composite Device
+ * SALT-FPGA Event Decoder Composite Device
  *
  * Adapted from Prophesee's psee-composite.c (zynq-video-drivers,
  * kernel-5.15 branch, commit 22c8103d047cc7937960fd655d0c6869f745d76b).

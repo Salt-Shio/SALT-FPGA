@@ -1,6 +1,6 @@
 ---
 name: vivado-usage
-description: 本專案(CSNN-FPGA/EvtDecoder)實測過的 Vivado 2025.2 操作注意事項與已知陷阱。任何要跑 synth_design、xsim/xelab、IP 管理、或懷疑 sim/synth 行為不一致時,先讀這份。
+description: 本專案(SALT-FPGA/EvtDecoder)實測過的 Vivado 2025.2 操作注意事項與已知陷阱。任何要跑 synth_design、xsim/xelab、IP 管理、或懷疑 sim/synth 行為不一致時,先讀這份。
 license: MIT
 ---
 

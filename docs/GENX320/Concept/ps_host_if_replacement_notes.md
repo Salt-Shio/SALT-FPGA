@@ -71,7 +71,7 @@ FSM,2 個狀態(`S_FETCH`/`S_EXPAND`,1 bit 編碼)。mermaid 對 self-loop 的�
 
 ## EVT2.1 事件格式:64-bit 一筆,逐 bit 對照表
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\fpga-projects-1.0.0\ip\event_stream_smart_tracker_2_0\hdl\ccam_evt_type_v2_1_pkg.vhd`(已讀 1–620 行,共 761 行;621 行後是模擬用 ASCII 除錯函式,與解碼邏輯無關)。每個欄位對應的常數(`_LSB`/`_BITS`/`_MSB`)都是原始碼裡直接定義的,不是推算。`vx_f`/`valid` 欄位另外交叉核對過 Prophesee 官方 EVT2.1 文件(<https://docs.prophesee.ai/stable/data/encoding_formats/evt21.html>,用 curl 抓原始 HTML 逐字核對,不是 WebFetch 摘要)。
+來源:`docs/GENX320/Reference/KV260/fpga-projects-1.0.0/ip/event_stream_smart_tracker_2_0/hdl/ccam_evt_type_v2_1_pkg.vhd`(已讀 1–620 行,共 761 行;621 行後是模擬用 ASCII 除錯函式,與解碼邏輯無關)。每個欄位對應的常數(`_LSB`/`_BITS`/`_MSB`)都是原始碼裡直接定義的,不是推算。`vx_f`/`valid` 欄位另外交叉核對過 Prophesee 官方 EVT2.1 文件(<https://docs.prophesee.ai/stable/data/encoding_formats/evt21.html>,用 curl 抓原始 HTML 逐字核對,不是 WebFetch 摘要)。
 
 ### type 欄位:[63:60],4-bit,決定下面怎麼解讀
 
@@ -204,7 +204,7 @@ FSM,2 個狀態(`S_FETCH`/`S_EXPAND`,1 bit 編碼)。mermaid 對 self-loop 的�
 
 ## 封包解析目前 100% 在 PS 端軟體做,`ps_host_if` 完全不碰
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\openeb\hal\cpp\include\metavision\hal\decoders\evt21\evt21_decoder.h`(281 行,已讀完)、同目錄 `evt21_event_types.h`(型別列舉部分已讀)。
+來源:`docs/GENX320/Reference/KV260/openeb/hal/cpp/include/metavision/hal/decoders/evt21/evt21_decoder.h`(281 行,已讀完)、同目錄 `evt21_event_types.h`(型別列舉部分已讀)。
 
 這是官方目前的分工:`ps_host_if`(PL)只做 framing,不解讀內容(見上一節);`type_f` 判斷、`vx_f` 展開、時間戳重組,全部在這支 PS 端 C++ decoder 裡完成。本專案的目標就是把這段邏輯從 PS 軟體搬進 PL 硬體,所以這支 decoder 是解碼模組 RTL 設計時的直接參考演算法,不只是背景資訊。
 
@@ -238,7 +238,7 @@ while (vector_mask) {
 
 ## `ps_host_if` 完全不解讀事件內容,只做封包框架
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\fpga-projects-1.0.0\ip\ps_host_if_3_0\hdl\ps_host_if.vhd`(389 行,已讀完)、同目錄 `axi4s_packetizer.vhd`(250 行,已讀完)。
+來源:`docs/GENX320/Reference/KV260/fpga-projects-1.0.0/ip/ps_host_if_3_0/hdl/ps_host_if.vhd`(389 行,已讀完)、同目錄 `axi4s_packetizer.vhd`(250 行,已讀完)。
 
 `tdata` 的 bit 內容原封不動從輸入傳到輸出(`axi4s_packetizer.vhd` 第 204 行:`m_axis_tdata_q <= m_axis_tdata_mux_s`)。這顆 IP 實際做的三件事,全部是為了配合 DMA 搬到 PS 這個目的存在,新模組不需要理會這些語意:
 
@@ -250,7 +250,7 @@ while (vector_mask) {
 
 ## 上游資料流可能丟包,不是無損的
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\fpga-projects-1.0.0\ip\event_stream_smart_tracker_2_0\hdl\evt21_smart_drop.vhd`,只讀了前 120 行(port 宣告 + 狀態機骨架),`RECOVERY_ST`/`REDUCE_EVT_ST` 的細節轉移條件未讀完。
+來源:`docs/GENX320/Reference/KV260/fpga-projects-1.0.0/ip/event_stream_smart_tracker_2_0/hdl/evt21_smart_drop.vhd`,只讀了前 120 行(port 宣告 + 狀態機骨架),`RECOVERY_ST`/`REDUCE_EVT_ST` 的細節轉移條件未讀完。
 
 壅塞時這個模組會主動丟棄真實事件,並插入一筆 `MASTER_EVT_DROP_EVENT` 合成事件通知。新模組不應假設收到的事件流連續、無損。
 
@@ -268,7 +268,7 @@ while (vector_mask) {
 
 ## bias 設定與 `ps_host_if` 替換完全無關,兩者走不同裝置節點
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\openeb`(對應 tag `5.2.0`,原始碼逐檔讀過):
+來源:`docs/GENX320/Reference/KV260/openeb`(對應 tag `5.2.0`,原始碼逐檔讀過):
 
 | 檔案 | 確認的內容 |
 |---|---|
@@ -283,12 +283,12 @@ while (vector_mask) {
 
 - bias 寫入路徑:`/dev/v4l-subdevN`(sensor entity)→ `VIDIOC_S_CTRL` → kernel 裡的 genx320 sensor driver → I2C 寫入感測器晶片暫存器,完全不經過 `ps_host_if`、`/dev/video0`
 - 事件擷取路徑:`/dev/video0`(video entity,`psee-dma` 建立)→ 經過 `ps_host_if`,**只有這條路徑會被本專案的改動影響**
-- 感測器要保持通電(`echo on > /sys/class/video4linux/v4l-subdevN/device/power/control`,不要設成 `auto`),bias 寫入後才會持續生效,即使寫 bias 的程式已經結束、換另一支程式接手擷取資料。此結論來自 `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\kv260_operation_notes\genx320_sensor_startup.md` 第 3 步的既有操作紀錄
+- 感測器要保持通電(`echo on > /sys/class/video4linux/v4l-subdevN/device/power/control`,不要設成 `auto`),bias 寫入後才會持續生效,即使寫 bias 的程式已經結束、換另一支程式接手擷取資料。此結論來自 `docs/GENX320/Reference/KV260/kv260_operation_notes/genx320_sensor_startup.md` 第 3 步的既有操作紀錄
 - 官方筆記指令裡的環境變數 `V4L2_SENSOR_PATH`,在這份原始碼(`main`/`5.2.0`)裡全 repo 搜尋零命中,sensor 是自動掃 `/dev/media*` 找出來的,不需要這個變數。這個變數可能屬於板子上實際跑的、版本不同的 modified 版 OpenEB(`psee-video.rst` 提到官方用的是「modified version of OpenEB」),未進一步查證,見下方「未解決的矛盾」
 
 ## 現有 PL→PS DMA 驅動架構:兩層,DMA 底層不用自己刻
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\zynq-video-drivers\psee-dma.c`(1096 行,已讀完)、`psee-dma.h`(99 行,已讀完)、`psee-composite.c`(668 行,已讀完)。
+來源:`docs/GENX320/Reference/KV260/zynq-video-drivers/psee-dma.c`(1096 行,已讀完)、`psee-dma.h`(99 行,已讀完)、`psee-composite.c`(668 行,已讀完)。
 
 ### 兩層架構
 
@@ -324,7 +324,7 @@ while (vector_mask) {
 
 ## Vivado block design:`axi_dma` 已經接好,clock 是 125MHz,新模組直接接在 `ps_host_if_0` 原本的位置
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\fpga-projects-1.0.0\projects\kv260\scripts\kv260.tcl`。
+來源:`docs/GENX320/Reference/KV260/fpga-projects-1.0.0/projects/kv260/scripts/kv260.tcl`。
 
 ### Clock:全部同一個 domain,~125MHz
 
@@ -390,13 +390,13 @@ axi_dma/s2mm_introut          → PL_PS_IRQ                 (第 1940 行)
 
 ## `t` 的時間單位:硬體原生刻度是 1 微秒
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\openeb\sdk\modules\base\cpp\include\metavision\sdk\base\utils\timestamp.h` 第 17 行,註解:「Type to represent time in microseconds」。
+來源:`docs/GENX320/Reference/KV260/openeb/sdk/modules/base/cpp/include/metavision/sdk/base/utils/timestamp.h` 第 17 行,註解:「Type to represent time in microseconds」。
 
 同目錄 `hal\cpp\include\metavision\hal\decoders\evt21\evt21_decoder.h` 的解碼邏輯(第 143 行)把 TD 事件的 6-bit `ts` 欄位直接位元拼接進累積的 timestamp,沒有做任何縮放。硬體最小時間刻度本身就是 1 微秒,不是 SDK 額外加的轉換。
 
 ## ESST driver 只開放 3 個暫存器,沒有掉包門檻/TIME_HIGH 復原設定的控制介面
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\zynq-video-drivers\psee-event-stream-smart-tracker.c`(424 行,已讀完)。
+來源:`docs/GENX320/Reference/KV260/zynq-video-drivers/psee-event-stream-smart-tracker.c`(424 行,已讀完)。
 
 driver 透過 V4L2 subdev core/video/pad ops 暴露的暫存器只有三個:
 
@@ -412,7 +412,7 @@ driver 透過 V4L2 subdev core/video/pad ops 暴露的暫存器只有三個:
 
 ## PS 端現有控制流程(健檢用途的實際操作,非本專案自訂)
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\kv260_operation_notes\genx320_sensor_startup.md`、同目錄 `load-prophesee-kv260-genx320.sh`。
+來源:`docs/GENX320/Reference/KV260/kv260_operation_notes/genx320_sensor_startup.md`、同目錄 `load-prophesee-kv260-genx320.sh`。
 
 完整鏈路,從載入 bitstream 到抓到資料:
 
@@ -478,7 +478,7 @@ Range 要先設定好、再改 Base Address——順序反過來會出現「prop
 
 ## Device tree binding:`psee,axi4s-packetizer`(待解決問題 1 的一部分,節點格式已查到,`xmutil loadapp` 打包格式仍未查)
 
-來源:`D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\zynq-video-drivers\Documentation\devicetree\bindings\media\prophesee\psee,axi4s-packetizer.yaml`(官方 driver repo 自帶的 DT schema,已讀完)。
+來源:`docs/GENX320/Reference/KV260/zynq-video-drivers/Documentation/devicetree/bindings/media/prophesee/psee,axi4s-packetizer.yaml`(官方 driver repo 自帶的 DT schema,已讀完)。
 
 這是 `ps_host_if`(以後是我們的新模組)在 device tree 裡要出現的節點格式,`psee-composite.c` 就是綁定這個 `compatible` 字串來掃圖的:
 
@@ -561,21 +561,21 @@ inherit module
 
 | 主題 | 路徑 |
 |---|---|
-| EVT2.1 格式定義原始碼(VHDL,PL 端) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\fpga-projects-1.0.0\ip\event_stream_smart_tracker_2_0\hdl\ccam_evt_type_v2_1_pkg.vhd` |
-| EVT2.1 解碼邏輯(C++,PS 端軟體,目前唯一的解析實作,vx_f 展開演算法在此) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\openeb\hal\cpp\include\metavision\hal\decoders\evt21\evt21_decoder.h` |
-| EVT2.1 型別列舉(PS 端軟體) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\openeb\hal\cpp\include\metavision\hal\decoders\evt21\evt21_event_types.h` |
-| EVT2.1 格式查證筆記(表格化,舊版,已被本文件取代) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\kv260_operation_notes\evt21_format_and_stream_behavior.md` |
-| `ps_host_if` 原始碼 | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\fpga-projects-1.0.0\ip\ps_host_if_3_0\hdl\` |
-| ESST 掉包狀態機 | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\fpga-projects-1.0.0\ip\event_stream_smart_tracker_2_0\hdl\evt21_smart_drop.vhd` |
-| GenX320 sensor 官方 bring-up 操作紀錄(已實測驗證) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\kv260_operation_notes\genx320_sensor_startup.md` |
-| KV260 連線/環境設定 | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\kv260_operation_notes\network_ssh_access.md` |
+| EVT2.1 格式定義原始碼(VHDL,PL 端) | `docs/GENX320/Reference/KV260/fpga-projects-1.0.0/ip/event_stream_smart_tracker_2_0/hdl/ccam_evt_type_v2_1_pkg.vhd` |
+| EVT2.1 解碼邏輯(C++,PS 端軟體,目前唯一的解析實作,vx_f 展開演算法在此) | `docs/GENX320/Reference/KV260/openeb/hal/cpp/include/metavision/hal/decoders/evt21/evt21_decoder.h` |
+| EVT2.1 型別列舉(PS 端軟體) | `docs/GENX320/Reference/KV260/openeb/hal/cpp/include/metavision/hal/decoders/evt21/evt21_event_types.h` |
+| EVT2.1 格式查證筆記(表格化,舊版,已被本文件取代) | `docs/GENX320/Reference/KV260/kv260_operation_notes/evt21_format_and_stream_behavior.md` |
+| `ps_host_if` 原始碼 | `docs/GENX320/Reference/KV260/fpga-projects-1.0.0/ip/ps_host_if_3_0/hdl/` |
+| ESST 掉包狀態機 | `docs/GENX320/Reference/KV260/fpga-projects-1.0.0/ip/event_stream_smart_tracker_2_0/hdl/evt21_smart_drop.vhd` |
+| GenX320 sensor 官方 bring-up 操作紀錄(已實測驗證) | `docs/GENX320/Reference/KV260/kv260_operation_notes/genx320_sensor_startup.md` |
+| KV260 連線/環境設定 | `docs/GENX320/Reference/KV260/kv260_operation_notes/network_ssh_access.md` |
 | KV260 bring-up 學習計畫主 TODO(含 RTL 學習進度,未複製,仍在原專案) | `D:\FPGA\KV260_bringup\TODO.md` |
-| OpenEB 原始碼(本機複本,對應 tag 5.2.0) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\openeb` |
+| OpenEB 原始碼(本機複本,對應 tag 5.2.0) | `docs/GENX320/Reference/KV260/openeb` |
 | PL 直連架構筆記(資源估算、事件速率規格) | `D:\Project\SNN\dev\references\hardware_platform.md` |
-| Prophesee driver 官方文件(psee-video.rst) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\zynq-video-drivers\Documentation\admin-guide\media\psee-video.rst` |
+| Prophesee driver 官方文件(psee-video.rst) | `docs/GENX320/Reference/KV260/zynq-video-drivers/Documentation/admin-guide/media/psee-video.rst` |
 | Prophesee EVT2.1 官方格式文件(已交叉核對 `vx_f`/`valid` 欄位) | https://docs.prophesee.ai/stable/data/encoding_formats/evt21.html |
 | Prophesee 官方 PetaLinux 專案(真實 `.bb` recipe、版本核對用) | https://github.com/prophesee-ai/petalinux-projects(分支 `kv260-2022.2`) |
-| zynq-video-drivers 原始碼(本機複本,含 `psee-event-stream-smart-tracker.c` 等) | `D:\Project\CSNN-FPGA\docs\FPGA\Reference\KV260\zynq-video-drivers` |
+| zynq-video-drivers 原始碼(本機複本,含 `psee-event-stream-smart-tracker.c` 等) | `docs/GENX320/Reference/KV260/zynq-video-drivers` |
 
 ## 板子唯讀查證(2026-08-14,SSH 進 KV260 直接看,唯讀不改狀態)
 

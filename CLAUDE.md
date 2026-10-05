@@ -1,4 +1,4 @@
-# CSNN-FPGA 專案說明
+# SALT-FPGA 專案說明
 
 ## 這是什麼專案
 
@@ -14,7 +14,7 @@
 |---|---|
 | `D:\Project\Spiking-Affine-Lazy-Training` | CSNN 模型訓練,目前進度是 N-MNIST。事件驅動 LIF 的數學規格參考來源(`docs/SNN/Concept/model_operation_float.md`、`model_operation_quant.md` 要跟這邊保持一致,符號也照訓練端)。**不是**本專案要修改的對象,只讀不寫。舊專案 `D:\Project\SNN` 已棄用(最後 commit 2026-07-17),不再參考。 |
 | `D:\FPGA\KV260_bringup` | KV260 板子的通用 bring-up 學習記錄(Vivado、PetaLinux、AXI 基礎),含官方 GenX320 pipeline 的原始碼查證筆記。本專案用到的部分已複製到 `docs/GENX320/Reference/KV260/`,見下方說明,不會修改原始目錄。 |
-| `D:\Project\CSNN-FPGA`(本專案) | 把 GenX320 事件資料直連 PL、取代官方 `ps_host_if`、送資料給 PS 端這件事的實作與規劃。融合上面兩個專案的內容。 |
+| `D:\Project\SALT-FPGA`(本專案) | 把 GenX320 事件資料直連 PL、取代官方 `ps_host_if`、送資料給 PS 端這件事的實作與規劃。融合上面兩個專案的內容。 |
 
 ## docs/ 資料夾組織
 

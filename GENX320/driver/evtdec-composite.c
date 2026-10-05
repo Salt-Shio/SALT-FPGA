@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * CSNN-FPGA Event Decoder Composite Device
+ * SALT-FPGA Event Decoder Composite Device
  *
  * Adapted from Prophesee's psee-composite.c (zynq-video-drivers,
  * kernel-5.15 branch, commit 22c8103d047cc7937960fd655d0c6869f745d76b).
@@ -573,7 +573,7 @@ static int evtdec_composite_v4l2_init(struct evtdec_composite_device *pdev)
 	int ret;
 
 	pdev->media_dev.dev = pdev->dev;
-	strscpy(pdev->media_dev.model, "CSNN-FPGA Event Decoder Pipeline",
+	strscpy(pdev->media_dev.model, "SALT-FPGA Event Decoder Pipeline",
 		sizeof(pdev->media_dev.model));
 	pdev->media_dev.hw_revision = 0;
 
@@ -666,5 +666,5 @@ static struct platform_driver evtdec_composite_driver = {
 module_platform_driver(evtdec_composite_driver);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("CSNN-FPGA project, adapted from Prophesee zynq-video-drivers");
-MODULE_DESCRIPTION("evtdec-video - media/v4l2 driver for the CSNN-FPGA event decoder");
+MODULE_AUTHOR("SALT-FPGA project, adapted from Prophesee zynq-video-drivers");
+MODULE_DESCRIPTION("evtdec-video - media/v4l2 driver for the SALT-FPGA event decoder");

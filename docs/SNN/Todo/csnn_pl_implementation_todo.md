@@ -18,7 +18,7 @@
 
 ## Conv IP(SaltConv)實作進度
 
-- Vivado 專案:`D:\Project\CSNN-FPGA\SaltConv`,module 名稱 `SaltConv`
+- Vivado 專案:`SaltConv/`,module 名稱 `SaltConv`
 - **Part 0(介面規格:parameter list、port list)已定案**,規格本體就是 [`SaltConv.sv`](../../../SaltConv/SaltConv.srcs/sources_1/new/SaltConv.sv) 本身,不在文件裡重複貼一份維護兩處。module 本體目前空白,待後續 part 依序填入,parameter 預設值都是佔位數字,不代表定案數值。
     - 2026-10-05:依量化完成的整數規格重新定案(待決事項第 14 條),`xvlog` 語法檢查通過。
     - parameter 預設值只是佔位,每個 layer 例化時都會傳入完整參數,預設值不跟著目前訓練端的設定走。
