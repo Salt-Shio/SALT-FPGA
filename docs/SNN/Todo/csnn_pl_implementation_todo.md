@@ -23,14 +23,15 @@
     - 2026-10-05:依量化完成的整數規格重新定案(待決事項第 14 條),`xvlog` 語法檢查通過。
     - parameter 預設值只是佔位,每個 layer 例化時都會傳入完整參數,預設值不跟著目前訓練端的設定走。
 - 關鍵決策:
-    - 輸入輸出事件介面用**分欄位**(`s_x/s_y/s_c/s_t` 各自獨立 port),不是打包成單一 `TDATA`——跟 `EvtDecoder` 對 PS 端的做法不同,因為 `EvtDecoder` 那樣是受 PS AXI DMA 規格所迫,`SaltConv` 沒有這個限制
-    - 量化參數(2026-10-05):`Q_WIDTH`($b$)、`I_V`、`F_V`、`F_A`、`DT_MAX`,`V_WIDTH` 改成 `localparam`,由 `I_V+F_V` 推出。
+    - 輸入輸出事件介面用**分欄位**(`in_x/in_y/in_channel/in_time` 各自獨立 port),不是打包成單一 `TDATA`——跟 `EvtDecoder` 對 PS 端的做法不同,因為 `EvtDecoder` 那樣是受 PS AXI DMA 規格所迫,`SaltConv` 沒有這個限制
+    - 量化參數(2026-10-05):`WEIGHT_WIDTH`($b$)、`MEMBRANE_INT_WIDTH`($i_V$)、`MEMBRANE_FRAC_WIDTH`($f_V$)、`DECAY_FRAC_WIDTH`($f_a$)、`DECAY_TABLE_DEPTH`($\Delta t_{\max}$),`MEMBRANE_WIDTH`($w$)是 `localparam`,由整數位加小數位推出。
         - 捨入規則、溢位處理還沒選定,做成 `parameter bit ROUND`、`SATURATE`,兩種行為都要能合成。
         - `TAU` 拿掉:$\tau$ 不進硬體,只透過衰減表 $A[\Delta t]$ 出現。
-    - 訓練出來的三份資料(權重寬字、$\hat v_{th}[o_c]$、$A[\Delta t]$)都不佔 port,用 `$readmemh` 從檔案載入,檔名是 parameter `Q_FILE`、`VTH_FILE`、`A_FILE`。
+    - 訓練出來的三份資料(權重寬字、$\hat v_{th}[o_c]$、$A[\Delta t]$)都不佔 port,用 `$readmemh` 從檔案載入,檔名是 parameter `WEIGHT_FILE`、`THRESHOLD_FILE`、`DECAY_FILE`。
         - 檔名參數不寫型別:UG901 不支援 SystemVerilog `string` 型別參數,也不支援空字串參數。
         - $\hat v_{th}$ 逐 output channel 一份(per-channel 權重量化下 $\hat v_{th}$ 逐 channel 不同),從檔案載入後仍是編譯期常數,合成成 mux,不用額外配置記憶體。
-    - 神經元記憶體清除不另開 port(2026-10-05):`rst_n` 釋放後逐位址寫 0,清完才拉高 `s_ready`,細節見 Conv.md 第 2 節「清除」。
+    - RTL 命名(2026-10-06):parameter/port 一律用描述性完整名稱,不用 `K`、`S`、`P`、`OC` 這類數學單字母,行尾註解標 Conv.md 的數學符號;`_WIDTH` 專指位元寬,影像尺寸用 `OUT_ROWS`/`OUT_COLS`;事件介面前綴用 `in_`/`out_`。
+    - 神經元記憶體清除不另開 port(2026-10-05):`rst_n` 釋放後逐位址寫 0,清完才拉高 `in_ready`,細節見 Conv.md 第 2 節「清除」。
 - **輸入 FIFO 決策**:
     - 只有輸入端有 FIFO;輸出端沒有獨立 FIFO,靠 Conv.md 第 4 節的 bitmask 機制排序送出,下游 `ready=0` 時直接反壓卡住整條內部 pipeline(Conv.md 5.4 節)
     - FIFO 本體要獨立成一個參數化寬度的可重用子模組(暫定名 `EventFifo`),自己寫 RTL,不用 Xilinx IP——深度小(現行 `FIFO_DEPTH=16`)用不到 BRAM 管理能力,且介面已決定分欄位,套 Xilinx AXI4-Stream IP 反而要多包一層 pack/unpack
@@ -40,8 +41,15 @@
     - `conv → conv`:兩邊都是分欄位、欄位意義直接對應($o_c\to c$、$o_y\to y$、$o_x\to x$、$t\to t$),不需要轉接模組,直接欄位對欄位接線(位寬一致是上下層 parameter 配置要對齊的責任)
     - `conv → FC`:之後再處理,FC 要攤平索引 $i$,轉換需要實際運算,等 `FC.md` 定案
 - **2026-09-24 暫停 Part 2,先去完成訓練端量化**:討論 Part 2 介面時發現量化會影響 Part 0 的 `V_TH`(見上方 2026-09-24 修正),為避免同類問題重複發生、做白工,先去 `Spiking-Affine-Lazy-Training` 把量化方案(per-channel/per-tensor 定案、$V\_WIDTH$ 整數位小數位)做完,再回來繼續 Part 2。
-    - Part 2 介面討論已有的初步共識,回來時可以直接接著用:候選計算拆成單軸子模組(暫名 `CandidateAxis`,參數 $K,S,P,O_{max}$,對 $y$、$x$ 各自實例化一次重用同一份 RTL),輸出 $M$ 組 $\{valid,\ o,\ o\bmod M,\ \lfloor o/M\rfloor\}$;上層做 $M\times M$ 外積合併。
-    - 還沒定案的問題:候選輸出介面要用 SystemVerilog struct array 還是展開成獨立訊號,這是回來後第一個要決定的。
+    - (2026-10-05 已決定)候選計算拆成單軸子模組 `CandidateAxis`(參數 $K,S,P,O_{max}$),對 $y$、$x$ 各自實例化一次重用同一份 RTL;上層做 $M\times M$ 配對跟 bank 內位址攤平。
+        - 理由:候選條件兩軸獨立,只有 bank 內位址攤平要兩軸合併;單軸可窮舉驗證;非正方形 kernel 只要兩個實例傳不同參數。
+        - 輸出 $M$ 組,第 $r$ 組就是 bank $r$($o\bmod M=r$)的候選,每組帶 $\{valid,\ o,\ \lfloor o/M\rfloor,\ k\}$;$o\bmod M$ 就是組的編號,不另外輸出。
+        - $k$ 一起在這裡算好,給 Part 3 選權重 tap 用。
+        - 除以 $S$、對 $M$ 取模/相除不是 2 的次方時,UG901 沒寫會用 LUT 還是 DSP,合成後看 utilization 確認,必要時加 `USE_DSP="no"`。
+    - (2026-10-05 已決定)`CandidateAxis` 輸出 port 用「每個欄位各自一個 unpacked array」:`valid`、`out_coord`、`bank_offset`、`tap`,每個長度 `BANK_COUNT`,位寬直接用模組參數算。
+        - 不用 struct:實測(Vivado 2025.2)參數化位寬的 struct array 當 port 可以模擬也可以合成,但要多一個共用巨集 `.svh`,上層兩軸位寬不同還要各開 generate block;專案其他地方沒用 struct,單獨用顯得突兀,複雜度換不到足夠的好處。
+        - 同一次實測:`-lint` 對「上層 unpacked array 由子模組 output port 驅動」會報 ASSIGN-5(宣告了沒賦值),struct 跟一般陣列都會報,是誤報;模擬、合成結果都正確。
+        - 同一次實測:$K=3,S=1$ 時除以 $M=3$ 合成成 LUT,0 DSP。
 - **2026-10-05 訓練端量化已完成,Part 2 可以繼續**:整數規格見 [`Concept/model_operation_quant.md`](../Concept/model_operation_quant.md),Conv.md 符號已對齊這份。現行兩版的實際數值見下方待決事項第 4、5 條。
 - **實作 part 拆分**(Part 0 已完成,之後依序進行,每個 part 都要過目確認才進下一個):
     1. `EventFifo` 子模組(輸入端)
@@ -62,14 +70,14 @@
     - 繞回版:conv1 12 bits、conv2 14 bits,test 0.9222。驗證跟 test 都沒碰到暫存器範圍,繞回不會真的發生。
     - 飽和版:conv1 9 bits、conv2 11 bits,test 0.9229。幾乎每筆樣本都會碰到範圍,硬體要照飽和逐位元夾住。
     - 兩版的權重碼、衰減表、門檻完全相同($b=7$、$f_a=6$、$f_V=0$、捨入用 `round`),只差 $i_V$ 跟溢位處理。
-    - `SaltConv.sv` 的 `I_V`、`F_V` 預設值只是佔位,選定版本後由例化端傳入。
+    - `SaltConv.sv` 的 `MEMBRANE_INT_WIDTH`、`MEMBRANE_FRAC_WIDTH` 預設值只是佔位,選定版本後由例化端傳入。
 5. **衰減查表 $A[\Delta t]$ 的 ROM 深度**:兩版共用同一張表,深度 $\Delta t_{\max}=75$ 格,每格 $f_a=6$ bits 無號,值 $60,56,53,\dots,1$。
     - 同一拍 $M\times M$ 個候選要同時查表(Conv.md 第 3 節 ①)。2026-10-05 決定用 LUT 做的 ROM,組合邏輯讀取,由綜合工具生成 $M\times M$ 份查表電路;實際 LUT 用量等合成後確認,吃太多再回頭檢討。
 6. **`FIFO_DEPTH` 數字未定**:反壓、不丟事件的策略已經決定,但實際深度要看目標 clock 頻率、conv2/compress 的實際輸入事件率,這兩個事實還缺。
 7. **事件間 pipeline overlap(讓不同 $oc$ 的讀跟算/寫重疊)**:已評估,結論是**目前不做**——省下的量是固定 2~3 拍、不隨 $OC$ 變大,理論吞吐量餘裕已經很大,複雜度換不到有意義的提升。保留當優化方向,等實測吞吐量真的不夠再重新評估。
 8. **`EvtDecoder → conv1` 轉接模組還沒設計**:需要先查證 `EvtDecoder` 目前 `M_AXIS_TDATA` 實際打包的欄位配置(EVT2.1 格式),才能寫對應的 unpack 邏輯。
 9. **(2026-10-05 已決定)樣本邊界怎麼重置神經元記憶體**:換樣本時所有層的 $\hat V$、$t_{last}$ 都要回到 0。
-    - 決定:不開 port,`rst_n` 釋放後逐位址寫 0,清除期間 `s_ready=0`(Conv.md 第 2 節「清除」)。
+    - 決定:不開 port,`rst_n` 釋放後逐位址寫 0,清除期間 `in_ready=0`(Conv.md 第 2 節「清除」)。
     - 清除只用在剛開機跟實驗重來;實際應用是連續事件流,沒有樣本邊界。
     - `rst_n` 會丟掉 FIFO、pipeline 裡還沒處理完的事件,實驗時要等上一個樣本處理完才 reset;「怎麼知道處理完」是驅動實驗那一端的事。
 10. **權重匯出格式**:訓練端 `model.npz` 存的是 $q$、`decay_table_int`、`v_th_int`($\hat v_{th}$ 逐神經元存,同一個輸出 channel 值相同)。
