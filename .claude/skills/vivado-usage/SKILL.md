@@ -76,6 +76,46 @@ CONFIG 參數名稱、port 名稱不要用猜的或抄舊版文件,直接去 `<V
 
 ## 7. Testbench 撰寫上跟 Vivado XSim 有關的坑
 
-- 不要在裸的 `@(posedge clk)` 之後立刻驅動/取樣訊號,會跟 DUT 自己 `always_ff` 的 NBA 更新競態(race)。統一用 `tick()`(`@(posedge clk); #1;`)當作驅動/取樣的唯一入口。
-- 檢查「握手是否成立」要在**跨越那個 clock edge 之前**取樣 ready 訊號,不要事後才看——事後看到 ready 掉下來,無法分辨是「因為剛被吃掉了」還是「其他原因本來就要掉」。
 - 對下游長時間持有 `tready=0` 同時又要送一長串資料時,不要用單一 loop 從頭做到尾(送到 FIFO 滿會死鎖),改用 `fork...join`:一支負責送、一支平行觀察反壓再放行 `tready`。
+
+### 7.1 驅動/取樣時機:`negedge` 驅動輸入、`posedge` 之後取樣輸出,`tick()=@(posedge clk);#1;` 這條舊規則不夠
+
+**背景(`EventFIFO` scoreboard 真實踩過的坑)**:一開始用「不要裸的 `@(posedge clk)` 之後立刻驅動/取樣,統一用 `tick()`(`@(posedge clk); #1;`)當唯一入口」這條規則,以為這樣就安全。但寫 scoreboard 判斷 push/pop 有沒有發生時,用 `always @(posedge clk) begin #1; if(wr_valid&&wr_ready) ... end` 這個獨立 process,跟另一個負責驅動 `wr_valid` 的 `initial` 流程,兩者都在同一個 `#1` 之後的時間點要動作——**誰先執行,SystemVerilog 標準沒有規定順序,是模擬器自己決定(implementation-defined)**。實測發現這次 xsim 剛好都讓驅動 `initial` 流程先跑完、scoreboard 才讀,所以讀到的常常是「已經被改成下一次 edge 準備用的新值」,不是「這次 edge 真正發生的事」。
+
+用探針量過:9 個 Stage 的完整測試裡,這種「edge 之前的真實判斷」跟「`#1` 之後重新算一次」兩者不一致發生了 571 次,但最後兩套獨立統計出來的結果剛好一致——**這是巧合,不是這個寫法真的安全**。它依賴兩個沒有任何規範保證的前提:驅動 task 只用「設定→等待→撤回」這種單純節奏、模擬器剛好排出「驅動先跑完」的順序。換一種更複雜的並行驅動、換一顆模擬引擎,任何一個前提垮掉,scoreboard 就會真的記錯資料,而且不會有任何警訊告訴你。
+
+**正確做法**:
+
+```systemverilog
+task automatic tick();
+    @(negedge clk); // 輸入訊號在這裡改,離下一個 posedge 還有半個週期的安全間隔
+    // wr_valid、rd_ready、wr_data 這些「驅動」動作寫在這裡
+    @(posedge clk); // DUT 在這裡取樣輸入、跑 always_ff
+    #1;              // 等這次 edge 的 NBA、組合邏輯傳播都穩定
+    // wr_ready、rd_valid、rd_data 這些「讀取判斷」動作寫在這裡
+endtask
+```
+
+原則:輸入訊號一旦在 `negedge` 設好,到下一個 `posedge` 之前有整整半個時鐘週期不會再被改——不管 DUT 自己的 `always_ff`,還是任何獨立的 scoreboard process,在這段安全期間內任何時間點讀,結果都一樣,不會因為「哪個 process 先執行」而讀到不同的值。這比舊版「統一用 `tick()` 當唯一入口」更徹底:舊規則只處理了「訊號本身穩不穩定」,沒處理「多個獨立 process 同時要在同一個時間點動作,誰先誰後沒有保證」這個更根本的問題。
+
+**檢查「握手是否成立」的原則不變,但現在有更可靠的做法**:要在**跨越那個 clock edge 之前**取樣 ready 訊號,不要事後才看——事後看到 ready 掉下來,無法分辨是「因為剛被吃掉了」還是「其他原因本來就要掉」。`negedge` 驅動、`posedge` 後取樣這個結構,天然滿足這個原則,不用再額外費心思考「這次讀的時機對不對」。
+
+### 7.2 self-checking 要印具體數值,不要只印「一致/不一致」這種摘要
+
+診斷 7.1 那個坑時,一開始只印 `mismatch_count`(一個抽象的不一致次數),自己也看不出問題出在哪,直到把 `wr_data` 這種具體數值印出來對照程式碼行號,才真正對齊到根因。以後 scoreboard 報錯,一律印 `$time`(或 cycle 數)、預期值、實際值,不要只印布林判斷結果或籠統的計數。
+
+### 7.3 寫 testbench 之前,先用 cycle-by-cycle 表格列出預期行為
+
+不要邊寫程式碼邊設計時序。先把「哪個 cycle 輸入什麼、哪個 cycle 輸出該是什麼」列成表格,過一遍邏輯、讓人確認後再動手寫——這樣問題會在寫程式碼之前就被抓到,不是寫完跑出來才發現時序想錯了。
+
+### 7.4 預設用單一 process 驅動,只有「事件流彼此獨立但要同時發生」才上多 process
+
+7.1 那個坑的更根本解法,不是「改用 `negedge`」這個表層規則,是**整份 testbench 只用一個 `initial` 流程,把驅動跟判斷做進同一個 task、同一個線性執行序列裡**——`EventFIFO` 的 `step` task 就是這樣寫的(`negedge` 讀 `pre_*` 值 → 驅動輸入 → `posedge`+`#1` → 用 `pre_*` 值判斷 `did_push`/`did_pop`),整份 testbench 沒有第二個獨立的 `always @(posedge/negedge clk)` 進程存在,所以根本不存在「兩個 process 同時要在同一個時間點動作,誰先誰後沒有保證」這個結構性風險。valid/ready 這種驅動-響應式介面,操作本質上是一步接一步、有明確先後依賴,單一 process 應該是預設選項。
+
+**必須用多 process(`fork...join`、獨立 `always` 監控)的情況,只有「多個事件流彼此獨立、不互相等待,但要同時發生」**,具體三類:
+
+1. DUT 有多個獨立、不同步的介面要同時驗證交互——例如 `EvtDecoder` 的 AXI4-Stream(收資料)跟 AXI4-Lite(PS 控制),兩條協定節奏互不相干,單一 process 輪流做測不出兩者真正同時發生的情境。
+2. 長時間持續送一長串資料,同時中途要觀察某個條件並介入——`tb_fsm_event_extractor.sv` 的做法:對下游長時間 `tready=0` 又要送一長串資料,單一 loop 會死鎖(送到 FIFO 滿卡住、沒人放開 `tready`),要用 `fork...join`:一支負責送、一支平行觀察反壓再放行。
+3. 需要貫穿全程的被動監控(某個不變量要全程成立),跟主動驅動邏輯分開,用獨立的背景 process 專職檢查。
+
+**上了多 process 之後,不能假設換了寫法就自動安全**:多個 process 只要會讀寫同一批訊號,一樣要重新推導「這個判斷依據必須鎖定在哪個精確時間點」,不能靠「反正大家都在差不多時候動作」這種模糊假設——參考 7.1 的推導方式,针對新的多 process 結構重做一次。

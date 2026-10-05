@@ -26,9 +26,9 @@ module SaltConv #(
 	parameter integer QB       = 8,
 	parameter integer V_WIDTH = 12,
 
-	// LIF(整層共用一組)
-	parameter integer TAU  = 16,
-	parameter integer V_TH = 1,
+	// LIF
+	parameter integer TAU              = 16,          // 整層共用,衰減係數跟權重 scale 無關
+	parameter integer V_TH [0:OC-1]    = '{default: 1} // 逐 output channel 一份,承接量化換算後的門檻;per-tensor 時全部填同一個值
 
 	// 輸入 FIFO
 	parameter integer FIFO_DEPTH = 16
