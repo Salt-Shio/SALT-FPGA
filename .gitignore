@@ -1,5 +1,6 @@
 # 外部參考原始碼(複製進來或 clone 的第三方專案,不是本專案產出)
 GENX320/zipcpu
+GENX320/fpga-projects-1.0.0
 docs/GENX320/Reference
 
 # 付費論文 PDF(僅供本機參考,不進版控)
@@ -30,6 +31,8 @@ dfx_runtime.txt
 # *.sim/ 底下只有 sim_1/new/ 是手寫的 testbench 原始碼,要進版控;
 # 其餘(sim_1/behav/ 之類)是跑模擬產生的執行期產物,不進版控
 # GENX320/EvtDecoder/EvtDecoder.sim/sim_*/behav/
+*/*.sim/sim_*/behav
+*/*.sim/sim_*/synth
 */*/*.sim/sim_*/behav
 */*/*.sim/sim_*/synth
 
@@ -64,3 +67,6 @@ __pycache__/
 # OS 產生的雜項檔案
 Thumbs.db
 .DS_Store
+
+# CandidateAxis 等 testbench 用批次檔跑 xsim 的編譯產物
+SaltConv/scripts/tb_work/
