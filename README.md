@@ -52,4 +52,6 @@
 
 ## 授權
 
-尚未指定授權。
+本專案預設採用 [Apache License 2.0](LICENSE)。
+
+例外：`GENX320/driver/` 改寫自 Prophesee 的 GPL-2.0 原始碼，維持 GPL-2.0-only，授權文字見 [GENX320/driver/COPYING](GENX320/driver/COPYING)。
