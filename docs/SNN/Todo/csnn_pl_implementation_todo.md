@@ -20,11 +20,17 @@
 
 - Vivado 專案:`D:\Project\CSNN-FPGA\SaltConv`,module 名稱 `SaltConv`
 - **Part 0(介面規格:parameter list、port list)已定案**,規格本體就是 [`SaltConv.sv`](../../../SaltConv/SaltConv.srcs/sources_1/new/SaltConv.sv) 本身,不在文件裡重複貼一份維護兩處。module 本體目前空白,待後續 part 依序填入,parameter 預設值都是佔位數字,不代表定案數值。
-    - 2026-10-05:量化完成後,現行介面大多已經對不上整數規格,要重新定案,見待決事項第 14 條。
-- 關鍵決策(Part 0 定案時一併定的):
+    - 2026-10-05:依量化完成的整數規格重新定案(待決事項第 14 條),`xvlog` 語法檢查通過。
+    - parameter 預設值只是佔位,每個 layer 例化時都會傳入完整參數,預設值不跟著目前訓練端的設定走。
+- 關鍵決策:
     - 輸入輸出事件介面用**分欄位**(`s_x/s_y/s_c/s_t` 各自獨立 port),不是打包成單一 `TDATA`——跟 `EvtDecoder` 對 PS 端的做法不同,因為 `EvtDecoder` 那樣是受 PS AXI DMA 規格所迫,`SaltConv` 沒有這個限制
-    - (2026-10-05 已過時,`TAU` 不進硬體,見待決事項第 14 條)LIF 參數 `TAU` 整層共用一組;`V_TH` 逐 output channel 一份(`parameter integer V_TH [0:OC-1]`)——2026-09-24 修正:訓練端 per-channel 權重量化下,fire 門檻換算成整數域後 $\tilde v_{th}=v_{th}/s_c$ 逐 channel 不同,即使物理 $v_{th}$ 是層共用常數,詳見 `Spiking-Affine-Lazy-Training` 的 `docs/math/權重量化推導.md` 第 111 行。陣列大小 $OC$ 不多,直接當編譯期常數合成成 mux,不用額外配置記憶體;per-tensor 情況陣列全部填同一個值一樣正確,不綁死訓練端最後的量化方案
-    - 權重不出現在 port list,模組內部用 ROM,初始化方式留到寫權重讀取那個 part 再定
+    - 量化參數(2026-10-05):`Q_WIDTH`($b$)、`I_V`、`F_V`、`F_A`、`DT_MAX`,`V_WIDTH` 改成 `localparam`,由 `I_V+F_V` 推出。
+        - 捨入規則、溢位處理還沒選定,做成 `parameter bit ROUND`、`SATURATE`,兩種行為都要能合成。
+        - `TAU` 拿掉:$\tau$ 不進硬體,只透過衰減表 $A[\Delta t]$ 出現。
+    - 訓練出來的三份資料(權重寬字、$\hat v_{th}[o_c]$、$A[\Delta t]$)都不佔 port,用 `$readmemh` 從檔案載入,檔名是 parameter `Q_FILE`、`VTH_FILE`、`A_FILE`。
+        - 檔名參數不寫型別:UG901 不支援 SystemVerilog `string` 型別參數,也不支援空字串參數。
+        - $\hat v_{th}$ 逐 output channel 一份(per-channel 權重量化下 $\hat v_{th}$ 逐 channel 不同),從檔案載入後仍是編譯期常數,合成成 mux,不用額外配置記憶體。
+    - 神經元記憶體清除不另開 port(2026-10-05):`rst_n` 釋放後逐位址寫 0,清完才拉高 `s_ready`,細節見 Conv.md 第 2 節「清除」。
 - **輸入 FIFO 決策**:
     - 只有輸入端有 FIFO;輸出端沒有獨立 FIFO,靠 Conv.md 第 4 節的 bitmask 機制排序送出,下游 `ready=0` 時直接反壓卡住整條內部 pipeline(Conv.md 5.4 節)
     - FIFO 本體要獨立成一個參數化寬度的可重用子模組(暫定名 `EventFifo`),自己寫 RTL,不用 Xilinx IP——深度小(現行 `FIFO_DEPTH=16`)用不到 BRAM 管理能力,且介面已決定分欄位,套 Xilinx AXI4-Stream IP 反而要多包一層 pack/unpack
@@ -56,16 +62,19 @@
     - 繞回版:conv1 12 bits、conv2 14 bits,test 0.9222。驗證跟 test 都沒碰到暫存器範圍,繞回不會真的發生。
     - 飽和版:conv1 9 bits、conv2 11 bits,test 0.9229。幾乎每筆樣本都會碰到範圍,硬體要照飽和逐位元夾住。
     - 兩版的權重碼、衰減表、門檻完全相同($b=7$、$f_a=6$、$f_V=0$、捨入用 `round`),只差 $i_V$ 跟溢位處理。
-    - `SaltConv.sv` 的 `V_WIDTH=12` 仍是佔位值,選定版本前不改。
+    - `SaltConv.sv` 的 `I_V`、`F_V` 預設值只是佔位,選定版本後由例化端傳入。
 5. **衰減查表 $A[\Delta t]$ 的 ROM 深度**:兩版共用同一張表,深度 $\Delta t_{\max}=75$ 格,每格 $f_a=6$ bits 無號,值 $60,56,53,\dots,1$。
     - 同一拍 $M\times M$ 個候選要同時查表(Conv.md 第 3 節 ①)。2026-10-05 決定用 LUT 做的 ROM,組合邏輯讀取,由綜合工具生成 $M\times M$ 份查表電路;實際 LUT 用量等合成後確認,吃太多再回頭檢討。
 6. **`FIFO_DEPTH` 數字未定**:反壓、不丟事件的策略已經決定,但實際深度要看目標 clock 頻率、conv2/compress 的實際輸入事件率,這兩個事實還缺。
 7. **事件間 pipeline overlap(讓不同 $oc$ 的讀跟算/寫重疊)**:已評估,結論是**目前不做**——省下的量是固定 2~3 拍、不隨 $OC$ 變大,理論吞吐量餘裕已經很大,複雜度換不到有意義的提升。保留當優化方向,等實測吞吐量真的不夠再重新評估。
 8. **`EvtDecoder → conv1` 轉接模組還沒設計**:需要先查證 `EvtDecoder` 目前 `M_AXIS_TDATA` 實際打包的欄位配置(EVT2.1 格式),才能寫對應的 unpack 邏輯。
-9. **樣本邊界怎麼重置神經元記憶體**:換樣本時所有層的 $\hat V$、$t_{last}$ 都要回到 0。
-    - 樣本邊界的訊號從哪裡來、BRAM 怎麼清零、清零期間事件怎麼處理,都還沒定。
+9. **(2026-10-05 已決定)樣本邊界怎麼重置神經元記憶體**:換樣本時所有層的 $\hat V$、$t_{last}$ 都要回到 0。
+    - 決定:不開 port,`rst_n` 釋放後逐位址寫 0,清除期間 `s_ready=0`(Conv.md 第 2 節「清除」)。
+    - 清除只用在剛開機跟實驗重來;實際應用是連續事件流,沒有樣本邊界。
+    - `rst_n` 會丟掉 FIFO、pipeline 裡還沒處理完的事件,實驗時要等上一個樣本處理完才 reset;「怎麼知道處理完」是驅動實驗那一端的事。
 10. **權重匯出格式**:訓練端 `model.npz` 存的是 $q$、`decay_table_int`、`v_th_int`($\hat v_{th}$ 逐神經元存,同一個輸出 channel 值相同)。
-    - 要轉成 `SaltConv` 用的格式:權重 ROM 寬字(位址 $(o_c,c)$,寬 $K\times K\times b$)、$\hat v_{th}[o_c]$、$A[\Delta t]$。
+    - 2026-10-05 已決定:每層三個 `$readmemh` 用的 hex 檔,權重寬字(位址 $(o_c,c)$,寬 $K\times K\times b$)、$\hat v_{th}[o_c]$、$A[\Delta t]$。
+    - 還沒定:$(o_c,c)$ 攤平的順序、寬字內 $K\times K$ 個 tap 的排列、有號數的 hex 表示法、訓練端由誰寫匯出程式。
     - 訓練端 TODO 的「量化模型的匯出格式」也在等這邊的規格。
 11. **乘 $s_i$ 放在 FPGA 內還是外部**:輸出層讀出 $\text{score}_i=\hat V[i]\cdot s_i$ 是整個推論唯一的浮點運算,conv 層不需要 $s$。
 12. **用 `reference.npz` 做逐位元比對**:每個量化資料夾都有 val 前 2000 筆的逐筆結果。
@@ -74,14 +83,11 @@
     - conv 層單獨驗證時只有 spike 總數可比,沒有逐筆的 spike 序列。
 13. **conv1 前面的轉換模組,µs 換 ms 要用 floor**:$t=\lfloor t_{\mu s}/1000\rfloor$,跟訓練端相同。
     - 放在第 8 條的轉接模組裡,還是另外一個模組,還沒定。
-14. **`SaltConv.sv` 介面要依整數規格重新定案**:Part 0 的 parameter/port 是量化前定的,現在大多對不上。
-    - `TAU`:$\tau$ 不進硬體,硬體拿到的是衰減表 $A[\Delta t]$(深度 $\Delta t_{\max}$、每格 $f_a$ bits)。
-    - `QB=8`:現行兩版都是 $b=7$。
-    - `V_WIDTH=12`:佔位值,依第 4 條選定的版本改。
-    - `V_TH`:要是 $w$ 位元有號整數,現在宣告成 `integer` 陣列,沒有表達位寬。
-    - 缺少的參數:$f_a$、$f_V$、$\Delta t_{\max}$、捨入規則、溢位處理。
-    - 權重、$\hat v_{th}$、$A[\Delta t]$ 怎麼初始化,跟第 10 條的匯出格式一起定。
-    - 樣本邊界重置(第 9 條)目前沒有對應的 port。
+14. **(2026-10-05 已決定)`SaltConv.sv` 介面要依整數規格重新定案**:Part 0 的 parameter/port 是量化前定的,當時大多對不上。
+    - 已改完,結果見上方「關鍵決策」。
+15. **連續事件流的時間戳記繞回**:實際應用吃連續事件流,時間戳記到 $2^{T\_WIDTH}$ ms 會繞回。
+    - 繞回之後 $\Delta t=t-t_{last}$ 會算錯。
+    - 怎麼處理還沒討論,跟第 9 條的清除是兩件事。
 
 ## 查證細節
 

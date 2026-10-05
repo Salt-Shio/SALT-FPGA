@@ -22,19 +22,28 @@ module SaltConv #(
 	parameter integer P     = 1,
 
 	// 時間與資料
-	parameter integer T_WIDTH = 16,
-	parameter integer QB       = 8,
-	parameter integer V_WIDTH = 12,
+	parameter integer T_WIDTH = 16,   // 單位:整數 ms
+	parameter integer Q_WIDTH = 7,    // 權重碼位元寬 b
+	parameter integer I_V     = 9,    // 膜電位暫存器整數位元(含符號位)
+	parameter integer F_V     = 0,    // 膜電位暫存器小數位元
+	parameter integer F_A     = 6,    // 衰減碼小數位元
+	parameter integer DT_MAX  = 75,   // 衰減表深度 Δt_max
 
-	// LIF
-	parameter integer TAU              = 16,          // 整層共用,衰減係數跟權重 scale 無關
-	parameter integer V_TH [0:OC-1]    = '{default: 1} // 逐 output channel 一份,承接量化換算後的門檻;per-tensor 時全部填同一個值
+	// 量化行為(兩種都要能合成,尚未選定)
+	parameter bit ROUND    = 1,       // 1:round,0:truncate
+	parameter bit SATURATE = 1,       // 1:飽和,0:繞回
+
+	// 訓練出來的資料,用 $readmemh 載入
+	// 不寫型別:Vivado 不支援 SystemVerilog string 型別參數,也不支援空字串參數(UG901)
+	parameter Q_FILE   = "q.mem",     // 權重寬字,位址 (o_c,c),每字 K*K*Q_WIDTH bits
+	parameter VTH_FILE = "vth.mem",   // 門檻,位址 o_c,每字 I_V+F_V bits 有號
+	parameter A_FILE   = "a.mem",     // 衰減表,位址 Δt-1,每字 F_A bits 無號
 
 	// 輸入 FIFO
 	parameter integer FIFO_DEPTH = 16
 )(
 	input  logic clk,
-	input  logic rst_n,          // active-low,同步釋放
+	input  logic rst_n,          // active-low,同步釋放;釋放後先把神經元記憶體逐位址清 0,清完才拉高 s_ready
 
 	// 輸入事件(分離欄位)
 	input  logic                  s_valid,
@@ -52,5 +61,7 @@ module SaltConv #(
 	output logic [$clog2(W_OUT)-1:0] m_ox,
 	output logic [T_WIDTH-1:0]       m_t
 );
+
+	localparam integer V_WIDTH = I_V + F_V;   // 膜電位暫存器寬度 w
 
 endmodule
