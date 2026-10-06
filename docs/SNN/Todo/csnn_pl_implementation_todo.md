@@ -18,7 +18,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 |---|---|---|---|---|
 | 0 | 介面規格(parameter、port) | — | 完成 | `SaltConv.sv` |
 | 1 | 輸入 FIFO | — | 完成 | `EventFIFO.sv`、`tb_event_fifo.sv` |
-| 2 | 候選神經元與 banking 位址(純組合邏輯) | 第 2 節「神經元」 | 進行中：`CandidateAxis` 完成；`CandidateGrid` 在專案副本上 tb 全過，待在正式專案跑過、確認 | `CandidateAxis.sv`、`CandidateGrid.sv`、`tb_candidate_axis.sv`、`tb_candidate_grid.sv` |
+| 2 | 候選神經元與 banking 位址(純組合邏輯) | 第 2 節「神經元」 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv`、`tb_candidate_axis.sv`、`tb_candidate_grid.sv` |
 | 3 | 權重 BRAM 讀取與 tap 選擇 | 第 2 節「權重」 | 未開始 | |
 | 4 | 神經元 BRAM($\hat V,t_{last}$)介面，先做單埠無腦版 | 5.2 | 未開始 | |
 | 5 | LIF 膜電位更新 | 第 3 節 | 未開始 | |
@@ -26,13 +26,44 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 7 | pipeline FSM 整合，先做無腦版 | 5.1、5.2 | 未開始 | |
 | 8 | 優化：管線化、反壓、讀取延遲一般化 | 5.3~5.5 | 視情況再細分 | |
 
-## 下一步
+## 下一步：Part 3 權重 BRAM 讀取與 tap 選擇
 
-1. **Part 2 收尾**：在正式專案跑 `scripts/run_tb_candidate_grid.tcl`。
-    - 要先關掉開著 SaltConv 的 Vivado GUI。
-    - 第一次執行會把 `CandidateGrid.sv` 加進 `sources_1`、建 `sim_candidate_grid` 模擬集。
-    - 跑過、確認後，Part 2 才算完成。
-2. **Part 3 開始前**：先定下方「權重匯出格式」還沒定的項目。
+規格在 Conv.md 第 2 節「權重」：
+
+- 權重 BRAM 唯讀，位址 $(o_c,c)$ 攤平，深度 $OC\times C$。
+- 每個位址存一整個 kernel：$K\times K$ 個權重碼打包成一個寬字，寬 $K\times K\times b$。
+- 讀出寬字後，每個候選用自己的 $(k_y,k_x)$ 選出 tap 位置 $k_y\times K+k_x$ 的權重碼，是讀出後的 $K\times K$ 選 1 多工，不是另一次定址。
+- 同一拍的 $M\times M$ 個候選共用同一個寬字($o_c$、$c$ 相同)，各自做一次多工。
+
+接 Part 2 的地方：
+
+- `CandidateGrid` 每組輸出的 `tap_y`、`tap_x` 就是 $(k_y,k_x)$，`valid=0` 的組不能用。
+- $o_c$ 跟 `CandidateGrid` 的 `out_channel` 是同一個值(之後由 Part 7 的計數器給)，$c$ 是輸入事件的 `in_channel`。
+
+開始寫 RTL 之前要先定：
+
+1. **權重檔格式**：見下方「權重匯出格式」還沒定的四項，要跟訓練端一起定。檔案格式決定 RTL 怎麼拆寬字，所以要先定。
+2. **讀取延遲怎麼呈現**：BRAM 讀取要 1 clock，Conv.md 第 2 節把「第幾拍讀」留到 pipeline 階段(Part 7)。Part 3 的模組介面要不要先把這 1 拍包進去，要先討論。
+
+## 驗證流程(Part 1、2 用的做法，Part 3 之後照做)
+
+- **答案檔**：Python 腳本用訓練端的函式產生，放 `SaltConv.srcs/sim_1/new/ref/`。
+    - 環境是 WSL 的 conda 環境 `jax`(`~/miniconda3/envs/jax/bin/python`)。
+    - 範例：`scripts/gen_candidate_grid_ref.py`。
+- **testbench**：讀答案檔逐筆比對，不一致印出輸入、欄位、預期值、實際值，最後印一行總結(`ALL PASS` / `FAIL`)。
+    - 參數用 generic 帶入，答案檔目錄用 `-testplusarg REF_DIR=` 帶入。
+    - 範例：`tb_candidate_grid.sv`。
+- **跑模擬**：一個 testbench 一個模擬集，`scripts/run_tb_*.tcl` 跑所有參數組，共用流程在 `scripts/sim_common.tcl`。
+    - 多組參數一律用 batch 模式跑；從 GUI 的 Tcl Console 跑，連續 elaborate 會不定時出現 `Spawn failed`(原因不明)。
+    - GUI 只用來跑 testbench 預設參數的單組模擬、看波形。
+- **Vivado 的已知陷阱**記在本機的 `.claude/skills/vivado-usage/SKILL.md`(不進 repo)。
+    - 最常碰到的是：GUI 開著專案時，外面用 batch 改的專案設定會被 GUI 存檔蓋掉。GUI 開著就在專案副本上跑，不要動正式專案的 `.xpr`。
+- **單獨合成子模組**用 out-of-context(`synth_design -mode out_of_context`)，不然 port 會被當成晶片接腳算進 IOB。
+
+## 專案狀態備註
+
+- `sim_candidate_axis` 模擬集的 `REF_DIR` 被 GUI 存檔蓋掉了。跑 `run_tb_candidate_axis.tcl` 不受影響(腳本每次都會重設)，但在 GUI 對它直接 Run Simulation 會報缺 `REF_DIR`。下次跑這支腳本時會補回去。
+- `synth_1` 是 out-of-context，top 是 `CandidateGrid`。之後單獨合成別的子模組，改 top 就好。
 
 ## 待決事項
 
@@ -49,9 +80,10 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 ### 合成後要確認
 
 - **衰減表 ROM 的 LUT 用量**：$M\times M$ 份組合邏輯查表電路，吃太多再回頭檢討。
-- **`CandidateAxis` 的除法**：除以 $S$、除以 $M$ 不是 2 的次方時，UG901 沒寫會用 LUT 還是 DSP。
-    - $K=3,S=1$ 已確認是 LUT、0 DSP。
-    - 其他參數合成後看 utilization，必要時加 `USE_DSP="no"`。
+- **`CandidateAxis` 的除法、`CandidateGrid` 的乘常數**：除以 $S$、除以 $M$ 不是 2 的次方時，UG901 沒寫會用 LUT 還是 DSP；乘常數也一樣。
+    - `CandidateAxis` 單獨合成，$K=3,S=1$：LUT，0 DSP。
+    - `CandidateGrid` 預設參數($K=3,S=1,P=1$，64×64，$OC=16$，$M=3$)，out-of-context：306 LUT、54 CARRY8，0 DSP。
+    - 其他參數(包括實際的 conv1、conv2)合成後看 utilization，必要時加 `USE_DSP="no"`。
 
 ### 權重匯出格式(Part 3 開始前要定)
 
