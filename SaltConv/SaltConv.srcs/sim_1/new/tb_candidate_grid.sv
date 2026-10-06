@@ -23,9 +23,9 @@ module tb_candidate_grid;
 	parameter integer X_WIDTH      = 6;
 
 	// 跟 CandidateGrid 的 localparam 同一套公式,port 位寬要對上才能接
-	localparam integer BANK_COUNT        = (KERNEL_SIZE + STRIDE - 1) / STRIDE;
-	localparam integer ROW_SLOTS         = (OUT_ROWS + BANK_COUNT - 1) / BANK_COUNT;
-	localparam integer COL_SLOTS         = (OUT_COLS + BANK_COUNT - 1) / BANK_COUNT;
+	localparam integer AXIS_BANK_COUNT   = (KERNEL_SIZE + STRIDE - 1) / STRIDE;
+	localparam integer ROW_SLOTS         = (OUT_ROWS + AXIS_BANK_COUNT - 1) / AXIS_BANK_COUNT;
+	localparam integer COL_SLOTS         = (OUT_COLS + AXIS_BANK_COUNT - 1) / AXIS_BANK_COUNT;
 	localparam integer BANK_DEPTH        = OUT_CHANNELS * ROW_SLOTS * COL_SLOTS;
 	localparam integer BANK_ADDR_WIDTH   = (BANK_DEPTH > 1) ? $clog2(BANK_DEPTH) : 1;
 	localparam integer OUT_CHANNEL_WIDTH = (OUT_CHANNELS > 1) ? $clog2(OUT_CHANNELS) : 1;
@@ -38,12 +38,12 @@ module tb_candidate_grid;
 	logic [Y_WIDTH-1:0]           in_y;
 	logic [X_WIDTH-1:0]           in_x;
 	logic [OUT_CHANNEL_WIDTH-1:0] out_channel;
-	logic                         valid     [0:BANK_COUNT-1][0:BANK_COUNT-1];
-	logic [BANK_ADDR_WIDTH-1:0]   bank_addr [0:BANK_COUNT-1][0:BANK_COUNT-1];
-	logic [OUT_Y_WIDTH-1:0]       out_y     [0:BANK_COUNT-1][0:BANK_COUNT-1];
-	logic [OUT_X_WIDTH-1:0]       out_x     [0:BANK_COUNT-1][0:BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]         tap_y     [0:BANK_COUNT-1][0:BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]         tap_x     [0:BANK_COUNT-1][0:BANK_COUNT-1];
+	logic                         valid     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [BANK_ADDR_WIDTH-1:0]   bank_addr [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [OUT_Y_WIDTH-1:0]       out_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [OUT_X_WIDTH-1:0]       out_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         tap_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         tap_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 
 	CandidateGrid #(
 		.X_WIDTH     (X_WIDTH),
@@ -121,8 +121,8 @@ module tb_candidate_grid;
 						$fatal(1, "答案檔格式不對:要 out_channel=%0d in_y=%0d in_x=%0d,讀到 %0d %0d %0d",
 						       channel, coord_y, coord_x, expected_channel, expected_y, expected_x);
 
-					for (int row_bank = 0; row_bank < BANK_COUNT; row_bank++) begin
-						for (int col_bank = 0; col_bank < BANK_COUNT; col_bank++) begin
+					for (int row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
+						for (int col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
 							scan_count = $fscanf(ref_fd, "%d %d %d %d %d %d", expected_valid, expected_out_y,
 							                     expected_out_x, expected_tap_y, expected_tap_x, expected_bank_addr);
 							if (scan_count != 6)

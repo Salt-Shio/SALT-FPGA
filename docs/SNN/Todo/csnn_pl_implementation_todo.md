@@ -19,14 +19,20 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 0 | 介面規格(parameter、port) | — | 完成 | `SaltConv.sv` |
 | 1 | 輸入 FIFO | — | 完成 | `EventFIFO.sv`、`tb_event_fifo.sv` |
 | 2 | 候選神經元與 banking 位址(純組合邏輯) | 第 2 節「神經元」 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv`、`tb_candidate_axis.sv`、`tb_candidate_grid.sv` |
-| 3 | 權重 BRAM 讀取與 tap 選擇 | 第 2 節「權重」 | 未開始 | |
+| 3 | 權重 BRAM 讀取與 tap 選擇 | 第 2 節「權重」 | 完成 | `WeightMemory.sv`、`WeightTapSelect.sv`、`tb_weight_lookup.sv`、`sources_1/mem/` |
 | 4 | 神經元 BRAM($\hat V,t_{last}$)介面，先做單埠無腦版 | 5.2 | 未開始 | |
 | 5 | LIF 膜電位更新 | 第 3 節 | 未開始 | |
 | 6 | bitmask 優先權排序與輸出 | 第 4 節 | 未開始 | |
 | 7 | pipeline FSM 整合，先做無腦版 | 5.1、5.2 | 未開始 | |
 | 8 | 優化：管線化、反壓、讀取延遲一般化 | 5.3~5.5 | 視情況再細分 | |
 
-## 下一步：Part 3 權重 BRAM 讀取與 tap 選擇
+## 下一步：Part 4 神經元 BRAM($\hat V,t_{last}$)介面
+
+- 規格在 Conv.md 第 2 節「神經元」(banking、bank 內位址、每個 bank 容量、清除)跟 5.2(單埠無腦版的讀寫時序)。
+- 接 Part 2 的地方：`CandidateGrid` 每組輸出的 `valid`、`bank_addr`。
+- 開始寫 RTL 前，先讀完這兩段，列出要定的事項跟使用者確認。
+
+## Part 3 權重 BRAM 讀取與 tap 選擇(完成)
 
 規格在 Conv.md 第 2 節「權重」：
 
@@ -42,8 +48,36 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 
 開始寫 RTL 之前要先定：
 
-1. **權重檔格式**：見下方「權重匯出格式」還沒定的四項，要跟訓練端一起定。檔案格式決定 RTL 怎麼拆寬字，所以要先定。
-2. **讀取延遲怎麼呈現**：BRAM 讀取要 1 clock，Conv.md 第 2 節把「第幾拍讀」留到 pipeline 階段(Part 7)。Part 3 的模組介面要不要先把這 1 拍包進去，要先討論。
+1. **權重檔格式**：已定，寫在 Conv.md 第 2 節「權重」的「檔案格式」。匯出程式的分工見下方「權重匯出格式」。
+2. **讀取延遲怎麼呈現**：已定，拆成兩個模組，tap 延遲 1 拍的 register 不放在這兩個模組裡。
+    - `WeightMemory`：同步讀取的 ROM，這一拍送 $(o_c,c)$，下一拍輸出 $K\times K\times b$ 位元寬字。
+    - `WeightTapSelect`：純組合邏輯，輸入寬字跟 $M\times M$ 組 $(k_y,k_x)$，輸出 $M\times M$ 個權重碼。tap 超出 $0\sim K-1$ 時輸出 0。
+    - tap 是送 $(o_c,c)$ 那一拍算出來的，要存 1 拍才跟寬字對齊。這個 register 由上層放，跟候選的位址、座標、valid 存在同一組 register，不在 `WeightTapSelect` 內部另存一份。
+    - 驗證用一個 testbench 同時例化兩個模組，不另寫暫時的 top。
+        - 只驗一件事：RTL 讀出的權重等於 Python 用訓練端邏輯算出的 $q[o_c,c,k_y,k_x]$。
+        - Python 對每組 $(o_c,c)$、每個事件座標 $(y,x)$，用訓練端的候選規則算出每個 bank 的 valid、$(k_y,k_x)$ 跟 $q[o_c,c,k_y,k_x]$。
+        - testbench 照答案檔一行一拍：送 $(o_c,c)$，下一拍把每個 bank 的 $(k_y,k_x)$ 直接接到 `WeightTapSelect`，比對 valid=1 的 bank。
+        - 答案不經過打包：conv1、conv2 直接取 `model.npz` 的 $q$；人工參數由答案檔腳本產生隨機 $q$，同一份 $q$ 匯出 `.mem` 跟寫答案。
+        - 不另外測 RTL 自己的寫法細節(`read_enable=0` 保持、tap 超出範圍輸出 0、bank 之間 tap 接錯)：沒有模型答案可以對照，接 `CandidateGrid` 的部分到 Part 7 用真實事件再測。
+
+結果：
+
+- 權重檔：訓練端 `python -m tools.export_fpga` 匯出到 `SaltConv.srcs/sources_1/mem/<量化資料夾>/`，繞回版、飽和版各一份。
+    - 兩版的權重、衰減表內容相同；門檻寬度不同(12、9 bits)，但都是 3 個 hex 字元，內容也相同。
+- 模擬：`scripts/gen_weight_lookup_ref.py` 產生答案，`scripts/run_tb_weight_lookup.tcl` 跑 9 組參數，全部 ALL PASS。
+    - conv1、conv2 各用兩版的權重檔跑一次。
+    - 人工參數 5 組：$C$、$OC$ 不是 2 的次方；$K=1,4,5,7$；寬字 4、80、150、441 bits；`IN_CHANNEL_WIDTH` 比需要的寬。
+    - 反向測試：把 conv1 繞回版權重檔一個位址的最高 hex 字元改掉(清掉 tap 8 的 bit 5)，那組報 289 筆 `MISMATCH`、FAIL，腳本 exit 1。
+    - 答案檔 conv1 約 2.8 MB、conv2 約 5.6 MB。
+- 命名調整(Part 2 的檔案也一起改，`candidate_axis`、`candidate_grid` 重跑全部 PASS)：
+    - `BANK_COUNT` 改成 `AXIS_BANK_COUNT`：值是每一軸的 bank 數 $M$，不是 bank 總數 $M\times M$。
+    - `WeightMemory` 的 `DEPTH`、`ADDR_WIDTH` 改成 `WEIGHT_DEPTH`、`WEIGHT_ADDR_WIDTH`，跟 `BANK_DEPTH`、`BANK_ADDR_WIDTH` 同一種命名。
+- out-of-context 合成(xck26)，`-lint` 三個都是 0 個訊息：
+    - `WeightMemory` 用 `(* rom_style = "block" *)` 固定成 BRAM，不交給 Vivado 依大小判斷，各層同一種資源才好比較功耗、用量。
+        - 不指定時 conv1(深度 16)會被做成 32 LUT + 63 FF，conv2(深度 128)是 1 個 RAMB36。
+        - 指定後 conv1、conv2 都是 1 個 RAMB36，0 LUT。
+        - 合成報 `Synth 8-7052`：BRAM 沒有併入輸出暫存器，timing 可能不是最好。加輸出暫存器會讓讀取延遲變 2 拍，屬於 Conv.md 5.5 的 $R\ne1$，到 Part 8 再看。
+    - `WeightTapSelect` $K=3,S=2$($M=2$，4 個 9 選 1)：112 LUT。
 
 ## 驗證流程(Part 1、2 用的做法，Part 3 之後照做)
 
@@ -84,17 +118,27 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
     - `CandidateAxis` 單獨合成，$K=3,S=1$：LUT，0 DSP。
     - `CandidateGrid` 預設參數($K=3,S=1,P=1$，64×64，$OC=16$，$M=3$)，out-of-context：306 LUT、54 CARRY8，0 DSP。
     - 其他參數(包括實際的 conv1、conv2)合成後看 utilization，必要時加 `USE_DSP="no"`。
+- **`.mem` 左邊補的 0 會不會出截斷警告**：權重檔已確認不會。
+    - xsim(寬字 63、150、441 bits)跟合成(63 bits)都沒有截斷警告，合成 log 是 `$readmem data file ... is read successfully`。
+    - 門檻檔($w=9$、$11$ bits)要等 Part 5 讀進 RTL 時再看一次。
 
-### 權重匯出格式(Part 3 開始前要定)
+### 權重匯出格式(已定，conv 層已實作)
 
-- 已定：每層三個 `$readmemh` 用的 hex 檔，權重寬字、$\hat v_{th}[o_c]$、$A[\Delta t]$。
-- 還沒定：
-    - $(o_c,c)$ 攤平的順序。
-    - 寬字內 $K\times K$ 個 tap 的排列。
-    - 有號數的 hex 表示法。
-    - 訓練端由誰寫匯出程式。
-- 訓練端 `model.npz` 存的是 $q$、`decay_table_int`、`v_th_int`。$\hat v_{th}$ 逐神經元存，同一個 output channel 值相同。
-- 訓練端 TODO 的「量化模型的匯出格式」在等這邊的規格。
+- 已定：
+    - 每層三個 `$readmemh` 用的 hex 檔：權重寬字、$\hat v_{th}[o_c]$、$A[\Delta t]$。
+        - Vivado 合成只收 `$readmemh`、`$readmemb` 兩種(UG901 Table 24)，選 hex。
+    - 格式規格只寫在 Conv.md 第 2 節「權重」、「門檻」，第 3 節 ① 的「檔案格式」，這裡不重複。
+        - 位址 $o_c\times C+c$，任意 $C$ 都用乘常數，不補到 2 的次方。
+        - tap $k_y\times K+k_x$ 放在寬字第 $(k_y\times K+k_x)\,b$ 位元起，tap 0 在最低位。
+        - 二補數，一行一個位址，固定 $\lceil\text{位元數}/4\rceil$ 個 hex 字元，最左邊補 0。
+    - 匯出程式由訓練端寫，docstring 指到 Conv.md，不在訓練端文件另寫一份規格。
+    - 程式位置：打包函式放 `salt_core` 新模組(輸入陣列、輸出 `.mem`)，`tools/export_fpga.py` 只負責讀 `model.npz`。SALT-FPGA 測非 2 的次方參數時，答案檔腳本 import 同一個打包函式產生隨機權重的 `.mem`。
+    - 輸入輸出：輸入一個量化資料夾，`--out-dir` 指定輸出；每層 `<層>_weight.mem`、`<層>_threshold.mem`、`<層>_decay.mem`；只匯出 conv 層。
+    - 匯出時檢查：$q$ 超出 $b$ 位元、同一個 $o_c$ 的 $\hat v_{th}$ 不全相同或超出 $w$ 位元、衰減表超出 $f_a$ 位元，都 raise。
+    - `.mem` commit 進 SALT-FPGA(例如 `SaltConv.srcs/sources_1/mem/<版本>/`)，繞回版、飽和版各一份。
+    - 訓練端 `salt_core/tests/` 加手算小例子驗證打包。
+- 訓練端 `model.npz` 存的是 $q$(形狀 `(OC, C, K, K)`)、`decay_table_int`、`v_th_int`。$\hat v_{th}$ 逐神經元存，同一個 output channel 值相同。
+- 訓練端 TODO 的「量化模型的匯出格式」已改成指向 Conv.md，FC 層等 FC.md。
 
 ### 系統整合
 
@@ -165,7 +209,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 - 輸出 $M$ 組，第 $r$ 組就是 bank $r$($o\bmod M=r$)的候選，每組帶 $\{valid,\ o,\ \lfloor o/M\rfloor,\ k\}$。
     - $o\bmod M$ 就是組的編號，不另外輸出。
     - $k$ 在這裡一起算好，給 Part 3 選權重 tap。
-- 輸出 port 每個欄位各自一個 unpacked array：`valid`、`out_coord`、`bank_offset`、`tap`，長度 `BANK_COUNT`，位寬用模組參數算。
+- 輸出 port 每個欄位各自一個 unpacked array：`valid`、`out_coord`、`bank_offset`、`tap`，長度 `AXIS_BANK_COUNT`，位寬用模組參數算。
     - 不用 struct：要多一個共用巨集 `.svh`，上層兩軸位寬不同還要各開 generate block，專案其他地方也沒用 struct。
 - 兩軸配對獨立成子模組 `CandidateGrid`，可以單獨窮舉驗證。
     - 輸入 $(y,x)$ 跟這一拍的 $o_c$，輸出 $M\times M$ 組 `valid`、`bank_addr`、$(o_y,o_x)$、$(k_y,k_x)$。

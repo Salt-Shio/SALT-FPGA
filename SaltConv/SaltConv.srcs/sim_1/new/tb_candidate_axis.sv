@@ -19,18 +19,18 @@ module tb_candidate_axis;
 	parameter integer IN_COORD_WIDTH = 9;
 
 	// 跟 CandidateAxis 的 localparam 同一套公式,port 位寬要對上才能接
-	localparam integer BANK_COUNT        = (KERNEL_SIZE + STRIDE - 1) / STRIDE;
-	localparam integer BANK_SLOTS        = (OUT_SIZE + BANK_COUNT - 1) / BANK_COUNT;
+	localparam integer AXIS_BANK_COUNT   = (KERNEL_SIZE + STRIDE - 1) / STRIDE;
+	localparam integer BANK_SLOTS        = (OUT_SIZE + AXIS_BANK_COUNT - 1) / AXIS_BANK_COUNT;
 	localparam integer OUT_COORD_WIDTH   = (OUT_SIZE > 1) ? $clog2(OUT_SIZE) : 1;
 	localparam integer BANK_OFFSET_WIDTH = (BANK_SLOTS > 1) ? $clog2(BANK_SLOTS) : 1;
 	localparam integer TAP_WIDTH         = (KERNEL_SIZE > 1) ? $clog2(KERNEL_SIZE) : 1;
 	localparam integer IN_COORD_COUNT    = 2 ** IN_COORD_WIDTH;
 
 	logic [IN_COORD_WIDTH-1:0]    in_coord;
-	logic                         valid       [0:BANK_COUNT-1];
-	logic [OUT_COORD_WIDTH-1:0]   out_coord   [0:BANK_COUNT-1];
-	logic [BANK_OFFSET_WIDTH-1:0] bank_offset [0:BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]         tap         [0:BANK_COUNT-1];
+	logic                         valid       [0:AXIS_BANK_COUNT-1];
+	logic [OUT_COORD_WIDTH-1:0]   out_coord   [0:AXIS_BANK_COUNT-1];
+	logic [BANK_OFFSET_WIDTH-1:0] bank_offset [0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         tap         [0:AXIS_BANK_COUNT-1];
 
 	CandidateAxis #(
 		.KERNEL_SIZE   (KERNEL_SIZE),
@@ -90,7 +90,7 @@ module tb_candidate_axis;
 			if (scan_count != 1 || expected_coord != coord)
 				$fatal(1, "答案檔第 %0d 行格式不對:讀到 in_coord=%0d", coord, expected_coord);
 
-			for (int bank = 0; bank < BANK_COUNT; bank++) begin
+			for (int bank = 0; bank < AXIS_BANK_COUNT; bank++) begin
 				scan_count = $fscanf(ref_fd, "%d %d %d %d", expected_valid, expected_out_coord,
 				                     expected_bank_offset, expected_tap);
 				if (scan_count != 4)
