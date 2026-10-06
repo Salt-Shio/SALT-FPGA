@@ -63,9 +63,23 @@
     - 對 $M$ 取模保證落在 $M\times M$ 個不同 bank，同一事件枚舉出的候選之間`不會有兩個落在同一個 bank`
 
 - **bank 內部位址**：$(o_c,\ \lfloor o_y/M\rfloor,\ \lfloor o_x/M\rfloor)$ 攤平後的索引
+    - $\lfloor o_y/M\rfloor$、$\lfloor o_x/M\rfloor$ 就是下面「每個 bank 的候選怎麼算」的 $g_m$，兩軸各一個，記成 $g_y$、$g_x$
+    - 攤平用乘常數，緊密排列，不補到 2 的次方：
+    $$
+    \text{addr}=(o_c\cdot G_y+g_y)\cdot G_x+g_x
+    \qquad
+    G_y=\left\lceil\frac{H_{out}}{M}\right\rceil
+    \qquad
+    G_x=\left\lceil\frac{W_{out}}{M}\right\rceil
+    $$
+    - $G_y$、$G_x$ 合成時就固定，乘常數會變成移位加法，不用乘法器
+    - 每一維補到 2 的次方、直接接 bit 雖然不用運算，但深度會變大，例如 $OC=16$、$G_y=G_x=22$ 時從 7744 變 16384，BRAM 用量約兩倍
+    - RTL 裡記憶體宣告成一維陣列，位址自己算好送進去，不靠綜合工具攤平多維陣列
 
 - **每個 bank 容量**：$OC\times\lceil H_{out}/M\rceil\times\lceil W_{out}/M\rceil$ 筆 $(\hat V,t_{last})$
-    - 邊界不整除的細節待補
+    - 邊界不整除時，每個 bank 實際用到的格數不一樣，但一律開這麼多
+        - 例子：$H_{out}=64$、$M=3$，y 軸上 bank 0 有 22 格($o_y=0,3,\dots,63$)，bank 1、2 只有 21 格
+        - 統一容量，位址公式的 $G_y$、$G_x$ 才只有一個值，不用每個 bank 各算一套，代價是有些 bank 空幾格
 
 #### 每個 bank 的候選怎麼算
 
