@@ -11,7 +11,7 @@
 用法(WSL,conda 環境 jax):
     python gen_candidate_axis_ref.py \
         --training-repo /mnt/d/Project/Spiking-Affine-Lazy-Training \
-        --out-dir /mnt/d/Project/CSNN-FPGA/SaltConv/SaltConv.srcs/sim_1/new/ref
+        --out-dir /mnt/d/Project/SALT-FPGA/SaltConv/SaltConv.srcs/sim_1/new/ref
 """
 import argparse
 import sys
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-# (KERNEL_SIZE, STRIDE, PADDING, OUT_SIZE, IN_COORD_WIDTH),跟 run_tb_candidate_axis.bat 的清單一致
+# (KERNEL_SIZE, STRIDE, PADDING, OUT_SIZE, IN_COORD_WIDTH),跟 run_tb_candidate_axis.tcl 的清單一致
 PARAM_SETS = [
     (3, 1, 1, 64, 9),   # 預設,M=3
     (3, 2, 1, 32, 6),   # S>1,候選可能少於 M
