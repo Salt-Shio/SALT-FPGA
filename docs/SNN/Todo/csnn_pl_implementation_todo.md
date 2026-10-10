@@ -20,17 +20,68 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 1 | 輸入 FIFO | — | 完成 | `EventFIFO.sv`、`tb_event_fifo.sv` |
 | 2 | 候選神經元與 banking 位址(純組合邏輯) | 第 2 節「神經元」 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv`、`tb_candidate_axis.sv`、`tb_candidate_grid.sv` |
 | 3 | 權重 BRAM 讀取與 tap 選擇 | 第 2 節「權重」 | 完成 | `WeightMemory.sv`、`WeightTapSelect.sv`、`tb_weight_lookup.sv`、`sources_1/mem/` |
-| 4 | 神經元 BRAM($\hat V,t_{last}$)介面，先做單埠無腦版 | 5.2 | 未開始 | |
+| 4 | 神經元 BRAM($\hat V,t_{last}$)介面，一讀一寫兩個埠 | 第 2 節「神經元」、5.2、5.3 | 完成 | `NeuronMemory.sv`、`tb_neuron_memory.sv` |
 | 5 | LIF 膜電位更新 | 第 3 節 | 未開始 | |
 | 6 | bitmask 優先權排序與輸出 | 第 4 節 | 未開始 | |
 | 7 | pipeline FSM 整合，先做無腦版 | 5.1、5.2 | 未開始 | |
 | 8 | 優化：管線化、反壓、讀取延遲一般化 | 5.3~5.5 | 視情況再細分 | |
 
-## 下一步：Part 4 神經元 BRAM($\hat V,t_{last}$)介面
+## 下一步：Part 5 LIF 膜電位更新
 
-- 規格在 Conv.md 第 2 節「神經元」(banking、bank 內位址、每個 bank 容量、清除)跟 5.2(單埠無腦版的讀寫時序)。
-- 接 Part 2 的地方：`CandidateGrid` 每組輸出的 `valid`、`bank_addr`。
-- 開始寫 RTL 前，先讀完這兩段，列出要定的事項跟使用者確認。
+- Part 5 規格在 Conv.md 第 3 節(①~④)。
+- 接 Part 3、Part 4 的地方：`WeightTapSelect` 的 `weight_code`($q$)、`NeuronMemory` 的 `read_membrane`、`read_last_time`($\hat V,t_{last}$)，算出的 $\hat V_{new}$、$t$ 接 `NeuronMemory` 的寫埠。
+- 開始寫 RTL 前，先讀完第 3 節，列出要定的事項跟使用者確認。
+
+## Part 4 神經元 BRAM($\hat V,t_{last}$)介面(完成)
+
+規格在 Conv.md 第 2 節「神經元」：
+
+- $M\times M$ 個 bank，bank $(o_y\bmod M,\ o_x\bmod M)$，bank 內位址由 `CandidateGrid` 的 `bank_addr` 給，每個 bank 一律 $OC\times G_y\times G_x$ 格。
+- 換樣本、實驗重來時所有神經元回到 $(0,0)$：`rst_n` 釋放後逐位址清 0，清除期間不收事件。
+
+定案的事項(2026-10-09 跟使用者確認)：
+
+1. **模組切法**：`NeuronMemory` 一個模組包 $M\times M$ 個 bank 跟清除邏輯，port 照 `CandidateGrid` 用 `[r_y][r_x]` 的 unpacked array。
+    - 清除要一個共用計數器同時寫所有 bank，放同一個模組。
+    - 運算(Part 5)、哪一拍讀寫(Part 7)都不在這裡。
+2. **打包**：一格 $\{t_{last},\hat V\}$，$\hat V$ 在低位，寬 $w+$`TIME_WIDTH`；port 上兩個欄位分開，打包拆包在模組內。
+    - 參數直接收 `MEMBRANE_WIDTH`($w$)，記憶體用不到 $i_V$、$f_V$ 的切法。
+3. **$t_{last}$ 存完整 `TIME_WIDTH`**：時間戳記繞回還沒討論，少存位元等於先替它做決定。
+4. **一讀一寫兩個埠**(simple dual port)：5.3 管線化一定要；無腦版只是讀寫不在同一拍。原本寫的「先做單埠無腦版」不做，到 Part 8 不用改介面。
+    - 同一個 bank 同一拍讀寫同一個位址，讀出的值不保證，由上層避開(Conv.md 第 2 節「記憶體型態」)。
+5. **讀取**：同步讀 1 拍，`read_enable` 每個 bank 各一條，`read_enable=0` 時保持上一次的值，跟 `WeightMemory` 一致。上層接 `valid`，沒有候選的 bank 不讀。
+6. **清除**：`rst_n` 非同步觸發、同步釋放(同 `EventFIFO`)。
+    - `rst_n=0` 期間 `clearing=1`；釋放後第 $n$ 個 posedge 每個 bank 的位址 $n-1$ 寫 0，寫完 `BANK_DEPTH-1` 後 `clearing` 變 0。
+    - 釋放後 `clearing=1` 剛好 `BANK_DEPTH` 拍：conv1 648 拍、conv2 400 拍。
+    - 清除期間外部寫入一律忽略。
+7. **驗證**：Python 產生答案，每一拍的讀出值都要對上(見下方結果)。
+
+結果：
+
+- 模擬：`scripts/gen_neuron_memory_ref.py` 產生答案，`scripts/run_tb_neuron_memory.tcl` 跑 9 組參數，全部 ALL PASS。
+    - testbench 例化 `CandidateGrid` + `NeuronMemory`，讀寫位址都由 RTL 的 `CandidateGrid` 算；上一拍的 `valid`、`bank_addr` 存起來當這一拍的寫入位址(5.3 的時序，讀取延遲 1 拍)。
+    - 五段：清除 → 全部讀一遍(全 0)→ 隨機讀改寫 → 全部讀一遍(最後寫的值)→ 再清除、全部讀一遍(全 0)。
+        - 隨機讀改寫：隨機事件，$o_c$ 照 $0\sim OC-1$；讀出後下一拍寫回隨機值，涵蓋 $w$ 位元有號、`TIME_WIDTH` 位元的上下限；隨機插空拍，讀寫撞到同一顆神經元時也插空拍。
+        - 每一拍比對：有候選的 bank 比讀出值，沒有候選的 bank 比保持值，每個 bank 的 `valid` 也跟 Python 比。
+        - 清除期間每個 bank 都送全 1 的外部寫入，要被忽略。
+    - 參數：conv1($w$=12、9)、conv2($w$=14、11)，`TIME_WIDTH=16`；人工 5 組：$M=3$、$M=4$、$S>K$ 的 $M=1$、字寬 38 bits、輸出 1×1 且 $OC=1$(每一步都撞到上一步的寫)。$w$ 最小 2、`TIME_WIDTH` 最小 1。
+    - 反向測試(conv1 繞回版、1×1 兩組，跑完 RTL、答案檔都還原)：
+        - 清除期間不忽略外部寫入：全部讀一遍讀到全 1，FAIL。
+        - 讀取不看 `read_enable`：沒有候選的 bank 讀到 X，FAIL。
+        - 清除少清一格：`clearing` 早一拍變 0，最後一格沒清到，FAIL。
+        - 答案檔改一個預期值：那一行報 1 筆 `MISMATCH`，FAIL。
+    - 答案檔總共約 15 MB，最大的是 conv1 約 2.6 MB。
+    - elaborate 有 `VRFC 10-3532`(`glbl` 沒有 `KERNEL_SIZE` 參數可以覆寫)：generic 也被套到 `glbl`，總結行印出的參數跟 generic 一致，參數有套到 testbench。
+- out-of-context 合成(xck26，non-project 模式，不動 `.xpr`)，`-lint` 四組都是 0 個訊息：
+
+| 設定 | BRAM | LUT | FF |
+|---|---|---|---|
+| conv1，$w$=12 | 4 個 RAMB36(每個 bank 648×28，推成 1024×28) | 91 | 11 |
+| conv1，$w$=9 | 4 個 RAMB36 | 85 | 11 |
+| conv2，$w$=14 | 4 個 RAMB18(2 個 tile) | 90 | 10 |
+| conv2，$w$=11 | 4 個 RAMB18 | 84 | 10 |
+
+- 合成報 `Synth 8-7052`(BRAM 沒有併入輸出暫存器)，跟 `WeightMemory` 相同，到 Part 8 一起看。
 
 ## Part 3 權重 BRAM 讀取與 tap 選擇(完成)
 
@@ -103,11 +154,6 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 
 ### 量化與數值
 
-- **膜電位暫存器寬度選哪一版**：訓練端給了兩版，$f_V=0$，所以 $w=i_V$。
-    - 繞回版：conv1 12 bits、conv2 14 bits，test 0.9222。驗證跟 test 都沒碰到範圍，繞回不會真的發生。
-    - 飽和版：conv1 9 bits、conv2 11 bits，test 0.9229。幾乎每筆樣本都會碰到範圍，硬體要逐位元夾住。
-    - 其他都相同：$b=7$、$f_a=6$、$f_V=0$、捨入用 `round`，衰減表、門檻、權重碼也相同。
-    - `SaltConv` 的 `SATURATE` 參數兩種都支援，選定後由例化端傳入。
 - **`FIFO_DEPTH`**：反壓、不丟事件的策略已定，深度要看目標 clock 頻率跟 conv2/compress 的實際輸入事件率，這兩個數字還沒有。
 - **FPGA 上實際省多少功耗**：運算量少 20 倍不等於功耗少 20 倍，漏電流、clock tree 是固定成本，要 Vivado 功耗分析或實測才有數字。
 
@@ -158,6 +204,14 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
     - conv 層單獨驗證時只有 spike 總數可比，沒有逐筆的 spike 序列。
 
 ## 已定案設計
+
+### 量化方案
+
+- `SaltConv` 是通用模組：捨入(`ROUND`)、溢位處理(`SATURATE`)兩種都支援，由例化端用參數選，不選定一版。
+- 訓練端目前給了兩版，$f_V=0$，所以 $w=i_V$：
+    - 繞回版：conv1 12 bits、conv2 14 bits，test 0.9222。驗證跟 test 都沒碰到範圍，繞回不會真的發生。
+    - 飽和版：conv1 9 bits、conv2 11 bits，test 0.9229。幾乎每筆樣本都會碰到範圍，硬體要逐位元夾住。
+    - 其他都相同：$b=7$、$f_a=6$、$f_V=0$、捨入用 `round`，衰減表、門檻、權重碼也相同。
 
 ### 運算方式
 

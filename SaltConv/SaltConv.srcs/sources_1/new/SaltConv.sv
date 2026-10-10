@@ -30,7 +30,7 @@ module SaltConv #(
 	parameter integer DECAY_FRAC_WIDTH    = 6,    // f_a,衰減碼小數位元
 	parameter integer DECAY_TABLE_DEPTH   = 75,   // Δt_max,衰減表深度
 
-	// 量化行為(兩種都要能合成,尚未選定)
+	// 量化行為(兩種都要能合成,由例化端選)
 	parameter bit ROUND    = 1,   // 1:round,0:truncate
 	parameter bit SATURATE = 1,   // 1:飽和,0:繞回
 
