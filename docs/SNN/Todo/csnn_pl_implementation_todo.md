@@ -21,16 +21,91 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 2 | 候選神經元與 banking 位址(純組合邏輯) | 第 2 節「神經元」 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv`、`tb_candidate_axis.sv`、`tb_candidate_grid.sv` |
 | 3 | 權重 BRAM 讀取與 tap 選擇 | 第 2 節「權重」 | 完成 | `WeightMemory.sv`、`WeightTapSelect.sv`、`tb_weight_lookup.sv`、`sources_1/mem/` |
 | 4 | 神經元 BRAM($\hat V,t_{last}$)介面，一讀一寫兩個埠 | 第 2 節「神經元」、5.2、5.3 | 完成 | `NeuronMemory.sv`、`tb_neuron_memory.sv` |
-| 5 | LIF 膜電位更新 | 第 3 節 | 未開始 | |
+| 5 | LIF 膜電位更新 | 第 3 節 | 進行中 | `NeuronUpdate.sv`、`tb_neuron_update.sv` |
 | 6 | bitmask 優先權排序與輸出 | 第 4 節 | 未開始 | |
 | 7 | pipeline FSM 整合，先做無腦版 | 5.1、5.2 | 未開始 | |
 | 8 | 優化：管線化、反壓、讀取延遲一般化 | 5.3~5.5 | 視情況再細分 | |
 
-## 下一步：Part 5 LIF 膜電位更新
+## 下一步：Part 5 LIF 膜電位更新(進行中)
 
-- Part 5 規格在 Conv.md 第 3 節(①~④)。
-- 接 Part 3、Part 4 的地方：`WeightTapSelect` 的 `weight_code`($q$)、`NeuronMemory` 的 `read_membrane`、`read_last_time`($\hat V,t_{last}$)，算出的 $\hat V_{new}$、$t$ 接 `NeuronMemory` 的寫埠。
-- 開始寫 RTL 前，先讀完第 3 節，列出要定的事項跟使用者確認。
+規格在 Conv.md 第 3 節(①~④)：一顆神經元收到一筆事件，算出 $\hat V_{new}$ 跟有沒有 fire。
+
+接 Part 3、Part 4 的地方：`WeightTapSelect` 的 `weight_code`($q$)、`NeuronMemory` 的 `read_membrane`、`read_last_time`($\hat V,t_{last}$)，算出的 $\hat V_{new}$、$t$ 接 `NeuronMemory` 的寫埠。
+
+定案的事項(2026-10-11 跟使用者確認)：
+
+1. **模組切法**：`NeuronUpdate` 只算 1 顆神經元，上層(Part 7)用 generate 複製 $M\times M$ 份。
+    - $M\times M$ 顆之間沒有互相影響，也沒有像 `NeuronMemory` 清除計數器那種共用的東西。
+2. **衰減表**：放在 `NeuronUpdate` 裡，`$readmemh(DECAY_FILE)` 載入，每一份 `NeuronUpdate` 各帶一份。
+    - 每顆的 $\Delta t$ 不同，本來就要 $M\times M$ 份查表電路(Conv.md 第 3 節 ①)。
+3. **門檻**：`threshold` 是 `NeuronUpdate` 的輸入。
+    - 依 $o_c$ 選門檻的電路留到 Part 7，門檻檔($w=9$、$11$ bits)的截斷警告也到那時確認。
+4. **延遲**：純組合邏輯，同一拍算完，不拆多拍；要拆幾級到 Part 8 看 timing。
+5. **port**：
+    - 輸入 `weight_code`($q$)、`membrane`($\hat V$)、`last_time`($t_{last}$)、`event_time`($t$)、`threshold`($\hat v_{th}$)。
+    - 輸出 `spike`($s$)、`new_membrane`($\hat V_{new}$)。
+    - $t_{last,new}=t$ 只是接線，由上層直接接 `NeuronMemory` 的寫埠，不從模組輸出。
+    - 不收 `valid`：不合法的候選照算，寫不寫回、送不送出由上層決定。
+6. **參數**：沿用 `SaltConv` 的名稱。
+    - `WEIGHT_WIDTH`、`MEMBRANE_INT_WIDTH`、`MEMBRANE_FRAC_WIDTH`、`DECAY_FRAC_WIDTH`、`DECAY_TABLE_DEPTH`、`TIME_WIDTH`、`ROUND`、`SATURATE`、`DECAY_FILE`。
+    - `ROUND`、`SATURATE` 四種組合都要能合成。
+7. **$t<t_{last}$**：只有時間戳記繞回才會發生，繞回還沒討論。
+    - 先用 `TIME_WIDTH` 位元無號減法算 $\Delta t$，模組註解寫明，不替繞回做決定。
+8. **驗證**：
+    - 答案用訓練端的整數更新函式產生，testbench 逐筆比對。
+    - 參數：`ROUND` × `SATURATE` 四種組合 × conv1、conv2 的位寬；人工參數 $f_V>0$、$f_a$ 不同、$\Delta t_{\max}$ 很小。
+        - 訓練端只有 $f_V=0$，函式不支援 $f_V>0$ 的話，答案怎麼來再跟使用者確認。
+    - 必測邊界：
+        - $\Delta t=0$、$1$、$\Delta t_{\max}$、$\Delta t_{\max}+1$。
+        - 負的 $\hat V$ 在 round 時往更負的方向捨。
+        - 加完 $q$ 往上、往下溢位，繞回、飽和各一次。
+        - $\hat V'=\hat v_{th}$ 要 fire。
+        - $q$ 的最大、最小值。
+    - 位寬小的參數組直接窮舉。
+    - 反向測試：改壞 RTL 或答案檔，確認會 FAIL。
+    - out-of-context 合成 conv1、conv2 參數，記錄 LUT、DSP，看衰減表吃多少 LUT。
+9. **檔案**：`NeuronUpdate.sv`、`tb_neuron_update.sv`、`scripts/gen_neuron_update_ref.py`、`scripts/run_tb_neuron_update.tcl`、`sim_1/new/ref/` 的答案檔。
+
+結果(等使用者過目)：
+
+- 答案來源：訓練端 `salt_core.quant.codes.apply_decay_table_int` + `salt_core.quant.scan.process_event`，支援 truncate、飽和、$f_V>0$，人工參數也用同一套。
+- 模擬：`run_tb_neuron_update.tcl` 跑 8 組參數 × `ROUND` × `SATURATE` 共 32 組，全部 ALL PASS。
+    - 訓練端 4 組：$w$=12、14、9、11，衰減表用 `sources_1/mem/` 匯出的檔，答案腳本會確認它跟 `model.npz` 相同。門檻除了隨機值也用這層實際的逐 channel 門檻。
+    - 人工 4 組：
+        - $b$=3、$w$=4、$f_a$=3、$\Delta t_{\max}$=2、`TIME_WIDTH`=2：全部窮舉(V̂、q、門檻、所有 $t\ge t_{last}$ 的組合)。
+        - $b$=2、$w$=2、$f_a$=1、$\Delta t_{\max}$=1：位寬下限，全部窮舉。
+        - $f_V$=2、$b+f_V$ 比 $w$ 寬：V̂、q、$\Delta t$ 窮舉。
+        - $w$=21、$f_a$=12(乘積 33 bits)：邊界值組合加 2 萬筆隨機。
+    - 人工衰減表最後一格(查表的上界)不能是 0，不然跟「超過表深度 A=0」分不出來(反向測試抓到的漏洞，已修)。
+    - 反向測試(每種跑窮舉組 4 種模式 + conv1 $w$=9 round 飽和，跑完 RTL、答案檔都還原)：
+        - $\Delta t=0$ 也去乘衰減：5 組全部 FAIL。
+        - round 不加半格：`ROUND=1` 的 3 組 FAIL，`ROUND=0` 的 PASS。
+        - 飽和時正溢位改成繞回：`SATURATE=1` 的 3 組 FAIL，`SATURATE=0` 的 PASS。
+        - fire 判斷 `>=` 改成 `>`：5 組全部 FAIL。
+        - 超過表深度的判斷 `>` 改成 `>=`：5 組全部 FAIL。
+        - 答案檔改一個值：那一組報 1 筆 `MISMATCH`，FAIL。
+    - 有一次(改答案檔那輪)一組沒動到的參數在 xsim 執行了 `source tb_neuron_update.tcl`，testbench 卻沒有任何輸出就結束，腳本判成失敗；之後全部 32 組重跑、反向測試重跑都沒再出現，原因不明。
+    - elaborate 有 `VRFC 10-3532`(同 Part 4，`glbl` 沒有這些參數)。`$readmemh` 讀衰減表沒有截斷警告。
+- out-of-context 合成(xck26，non-project 模式)，`$readmemh` 都讀取成功：
+
+| 設定 | LUT | CARRY8 | DSP | FF | 組合邏輯延遲 |
+|---|---|---|---|---|---|
+| conv1 $w$=12，round、繞回 | 83 | 5 | 1 | 0 | 5.65 ns |
+| conv1 $w$=9，round、飽和 | 143 | 11 | 0 | 0 | 5.66 ns |
+| conv2 $w$=14，round、繞回 | 88 | 5 | 1 | 0 | 5.77 ns |
+| conv2 $w$=11，round、飽和 | 86 | 5 | 1 | 0 | 5.77 ns |
+| conv1 $w$=12，truncate、繞回 | 83 | 5 | 1 | 0 | 5.65 ns |
+| conv1 $w$=12，truncate、飽和 | 88 | 5 | 1 | 0 | 5.81 ns |
+| conv1 $w$=12，round、飽和 | 88 | 5 | 1 | 0 | 5.81 ns |
+
+- 合成的觀察：
+    - $w$=9 的乘法被做成 LUT(143 LUT、0 DSP)，其他都用 1 個 DSP：乘法器用哪種資源由 Vivado 依位寬決定，跟 `WeightMemory` 指定 `rom_style` 之前的情況一樣。DSP、LUT 誰快的量測見「合成後要確認」的「乘法器用 DSP 還是 LUT」。
+    - round 跟 truncate 的用量相同，加半格併進 DSP 裡了。
+    - 衰減表的 LUT 用量包在上表的 LUT 總數裡，沒有單獨拆出來。
+    - 組合邏輯延遲約 5.7 ns(只算這個模組，不含 BRAM 讀出、繞線)，要拆幾級到 Part 8 再看。
+- `-lint`：每組 1~2 個 `ASSIGN-6`(有些 bit 沒被讀)，都是刻意丟掉的高位：
+    - `shifted_product` 第 $w$ 位以上：$D$ 一定放得進 $w$ 位元(Conv.md 第 3 節 ②)，高位只是符號延伸。
+    - `unfitted` 第 $w$ 位以上：繞回本來就只取低 $w$ 位，只在 `SATURATE=0` 時出現。
 
 ## Part 4 神經元 BRAM($\hat V,t_{last}$)介面(完成)
 
@@ -159,6 +234,29 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 
 ### 合成後要確認
 
+- **`NeuronUpdate` 的乘法器用 DSP 還是 LUT(Part 8 決定)**：
+    - 問題：$A\cdot\hat V$ 沒有指定資源，Vivado 依位寬自己選，$w$=9 用 LUT、其他用 DSP，各層、各版本資源類型不同，用量跟功耗不好比。
+    - 指定方法：在乘積訊號上加 `(* use_dsp = "yes" *)` 強制用 DSP、`"no"` 強制用 slice logic(UG901 2025.2「Multipliers Implementation」)。
+    - 量測(2026-10-11，xck26，non-project，暫存目錄的 RTL 副本，正式 RTL 沒加屬性)：
+        - 輸入、輸出各包一層暫存器，量暫存器 → `NeuronUpdate` → 暫存器；合成、布局、繞線後，用 2 ns 時脈的 slack 換算路徑延遲。
+        - 都是 round；$w$=12、14 繞回，$w$=9、11 飽和(各自量化版本實際的設定)。
+
+| 位寬 | 乘法器 | LUT | CARRY8 | DSP | 路徑延遲 | 邏輯 / 繞線 | 最高時脈 |
+|---|---|---|---|---|---|---|---|
+| conv1 $w$=12 | DSP | 73 | 5 | 1 | 5.35 ns | 3.54 / 1.82 ns | 181 MHz |
+| | LUT | 153 | 13 | 0 | 5.10 ns | 2.74 / 2.36 ns | 190 MHz |
+| conv2 $w$=14 | DSP | 76 | 5 | 1 | 5.56 ns | 3.62 / 1.95 ns | 175 MHz |
+| | LUT | 172 | 15 | 0 | 5.42 ns | 2.69 / 2.73 ns | 179 MHz |
+| conv1 $w$=9 | DSP | 78 | 5 | 1 | 5.66 ns | 3.74 / 1.92 ns | 172 MHz |
+| | LUT | 148 | 11 | 0 | 5.30 ns | 2.52 / 2.78 ns | 183 MHz |
+| conv2 $w$=11 | DSP | 83 | 5 | 1 | 5.73 ns | 3.56 / 2.17 ns | 170 MHz |
+| | LUT | 158 | 13 | 0 | 5.32 ns | 2.75 / 2.57 ns | 182 MHz |
+
+- 乘法器量測的結果：
+    - 不拆管線的版本，LUT 每組都比較快(0.14~0.43 ns，最高時脈高 2~7%)，代價是每顆多 70~95 LUT、6~10 CARRY8。
+    - 一層 $M\times M=4$ 份：DSP 版 4 個 DSP，LUT 版多 300~400 LUT；晶片總量 117,120 LUT、1,248 DSP。
+    - DSP 慢在邏輯延遲(多約 1 ns)：純組合邏輯沒用到 DSP 內部暫存器，訊號直接穿過 `DSP_A_B_DATA → PREADD → MULTIPLIER → ALU → OUTPUT` 每一級。
+    - 還沒量：Part 8 拆管線時，乘法如果切在 DSP 內部的暫存器上，DSP 的延遲可能大幅下降，結論可能反過來，要再量一次才決定。
 - **衰減表 ROM 的 LUT 用量**：$M\times M$ 份組合邏輯查表電路，吃太多再回頭檢討。
 - **`CandidateAxis` 的除法、`CandidateGrid` 的乘常數**：除以 $S$、除以 $M$ 不是 2 的次方時，UG901 沒寫會用 LUT 還是 DSP；乘常數也一樣。
     - `CandidateAxis` 單獨合成，$K=3,S=1$：LUT，0 DSP。
