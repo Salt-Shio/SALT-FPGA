@@ -9,6 +9,9 @@
 //   bank 內位址(Conv.md 第 2 節「bank 內部位址」):
 //     addr = (o_c * ROW_SLOTS + g_y) * COL_SLOTS + g_x,緊密排列,不補到 2 的次方。
 //   每個 bank 一律開 OUT_CHANNELS * ROW_SLOTS * COL_SLOTS 格,邊界不整除時有些 bank 會空幾格。
+//   top_row_bank、left_col_bank:窗(這一拍 M x M 個候選框住的範圍)左上角那格的 bank,
+//   就是 y 軸、x 軸 CandidateAxis 的 min_bank,給 SpikeSelect 決定讀的順序(Conv.md 第 4 節補充)。
+//   只看事件座標,跟 out_channel、valid 無關。
 //////////////////////////////////////////////////////////////////////////////////
 
 module CandidateGrid #(
@@ -33,7 +36,8 @@ module CandidateGrid #(
 	localparam integer OUT_X_WIDTH       = (OUT_COLS > 1) ? $clog2(OUT_COLS) : 1,
 	localparam integer ROW_OFFSET_WIDTH  = (ROW_SLOTS > 1) ? $clog2(ROW_SLOTS) : 1,
 	localparam integer COL_OFFSET_WIDTH  = (COL_SLOTS > 1) ? $clog2(COL_SLOTS) : 1,
-	localparam integer TAP_WIDTH         = (KERNEL_SIZE > 1) ? $clog2(KERNEL_SIZE) : 1
+	localparam integer TAP_WIDTH         = (KERNEL_SIZE > 1) ? $clog2(KERNEL_SIZE) : 1,
+	localparam integer BANK_INDEX_WIDTH  = (AXIS_BANK_COUNT > 1) ? $clog2(AXIS_BANK_COUNT) : 1
 )(
 	input  logic [Y_WIDTH-1:0]           in_y,                                                   // y,事件座標
 	input  logic [X_WIDTH-1:0]           in_x,                                                   // x,事件座標
@@ -44,7 +48,9 @@ module CandidateGrid #(
 	output logic [OUT_Y_WIDTH-1:0]       out_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // o_y
 	output logic [OUT_X_WIDTH-1:0]       out_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // o_x
 	output logic [TAP_WIDTH-1:0]         tap_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // k_y
-	output logic [TAP_WIDTH-1:0]         tap_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1]    // k_x
+	output logic [TAP_WIDTH-1:0]         tap_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // k_x
+	output logic [BANK_INDEX_WIDTH-1:0]  top_row_bank,                                           // 窗最上面那列的 o_y mod M
+	output logic [BANK_INDEX_WIDTH-1:0]  left_col_bank                                           // 窗最左邊那行的 o_x mod M
 );
 
 	// y 軸的候選,第 r_y 組是 o_y mod M = r_y 的那個
@@ -70,7 +76,8 @@ module CandidateGrid #(
 		.valid      (row_valid),
 		.out_coord  (row_coord),
 		.bank_offset(row_offset),
-		.tap        (row_tap)
+		.tap        (row_tap),
+		.min_bank   (top_row_bank)
 	);
 
 	CandidateAxis #(
@@ -84,7 +91,8 @@ module CandidateGrid #(
 		.valid      (col_valid),
 		.out_coord  (col_coord),
 		.bank_offset(col_offset),
-		.tap        (col_tap)
+		.tap        (col_tap),
+		.min_bank   (left_col_bank)
 	);
 
 	always_comb begin

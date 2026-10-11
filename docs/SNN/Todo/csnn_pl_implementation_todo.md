@@ -21,12 +21,146 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 2 | 候選神經元與 banking 位址(純組合邏輯) | 第 2 節「神經元」 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv`、`tb_candidate_axis.sv`、`tb_candidate_grid.sv` |
 | 3 | 權重 BRAM 讀取與 tap 選擇 | 第 2 節「權重」 | 完成 | `WeightMemory.sv`、`WeightTapSelect.sv`、`tb_weight_lookup.sv`、`sources_1/mem/` |
 | 4 | 神經元 BRAM($\hat V,t_{last}$)介面，一讀一寫兩個埠 | 第 2 節「神經元」、5.2、5.3 | 完成 | `NeuronMemory.sv`、`tb_neuron_memory.sv` |
-| 5 | LIF 膜電位更新 | 第 3 節 | 進行中 | `NeuronUpdate.sv`、`tb_neuron_update.sv` |
-| 6 | bitmask 優先權排序與輸出 | 第 4 節 | 未開始 | |
+| 5 | LIF 膜電位更新 | 第 3 節 | 完成 | `NeuronUpdate.sv`、`tb_neuron_update.sv` |
+| 6 | bitmask 優先權排序與輸出 | 第 4 節 | 進行中 | `SpikeSelect.sv`、`tb_spike_select.sv` |
+| 6.5 | Part 2 補輸出窗左上角的 bank(`top_row_bank`、`left_col_bank`)給 Part 6 用，Part 7 開始前完成 | 第 4 節補充 | 進行中 | `CandidateAxis.sv`、`CandidateGrid.sv` 跟它們的 testbench、答案腳本 |
 | 7 | pipeline FSM 整合，先做無腦版 | 5.1、5.2 | 未開始 | |
 | 8 | 優化：管線化、反壓、讀取延遲一般化 | 5.3~5.5 | 視情況再細分 | |
 
-## 下一步：Part 5 LIF 膜電位更新(進行中)
+## 下一步：Part 6 bitmask 優先權排序與輸出(進行中)
+
+規格在 Conv.md 第 4 節：同一拍同一個 $o_c$ 有 0~$M\times M$ 顆 fire，每拍在還沒送的裡面挑 $(o_y,o_x)$ 最小的送出。
+
+接 Part 2、Part 5 的地方：每個 bank 的 `NeuronUpdate` 的 `spike`($s$)、`CandidateGrid` 的 `valid`、`out_y`、`out_x`($o_y,o_x$)。
+
+送出順序跟訓練端一致：`model_operation_quant.md` 第 5 節規定同一筆事件的多個 fire 照神經元編號 $o_c\cdot H_{out}W_{out}+o_y\cdot W_{out}+o_x$ 由小到大(訓練端 `salt_core/stream.py` 的 lexsort)。
+硬體外層依序跑 $o_c$，每個 $o_c$ 內比 $(o_y,o_x)$，順序相同。
+同一拍不同 bank 的 $(o_y,o_x)$ mod $M$ 不同，不會平手。
+
+定案的事項(2026-10-11 跟使用者確認)：
+
+1. **模組範圍**：Part 6 只做純組合邏輯的選擇器，bitmask 暫存器、`out_valid/out_ready` 交握、$o_c$、$t$ 放 Part 7。
+    - 暫存器什麼時候存、存什麼，無腦版跟 5.3、5.4 不同，放在 FSM 那邊，Part 8 改管線時不用改選擇器介面。
+2. **`valid`**：選擇器只收一條待送 mask `pending`，$s\land valid$ 由上層做。
+    - Part 5 定了不合法的候選照算，所以這個 AND 一定要有；暫存器存的已經是濾過的值，選擇器再收 `valid` 是重複的。
+3. **找最小的電路**：兩種都做、比較合成結果後，定案用旋轉法(2026-10-11)，比較鍵法的檔案已刪。
+    - 比較鍵法(Conv.md 第 4 節現在的寫法)：$key_j=\{\overline{pending_j},o_y,o_x\}$，兩兩比較的樹狀結構取最小。
+    - 旋轉法：
+        - 窗：一筆事件在一個 $o_c$ 的候選，在輸出面上框住 $M\times M$ 格(每軸連續 $M$ 個座標)，每一格各在不同的 bank。
+        - $(o_y,o_x)$ 由小到大，就是把窗由左上往右下讀。
+        - 窗裡第 $k$ 列(最上面是第 0 列)的 bank 列編號是 $(\texttt{top\_row\_bank}+k)\bmod M$，行同理；`top_row_bank`、`left_col_bank` 是窗左上角那格的 bank。
+        - 照這個順序做優先權編碼器，第一個 `pending=1` 的就是答案，不比座標。
+        - 窗左上角的 bank 現在 `CandidateAxis`、`CandidateGrid` 沒有輸出，排在 Part 6.5(Part 7 開始前完成)。比較跟驗證階段由答案檔提供。
+4. **port**：
+    - 輸入 `pending[r_y][r_x]`、`out_y`、`out_x`(沿用 `CandidateGrid` 的 unpacked array)、`top_row_bank`、`left_col_bank`。
+    - 輸出 `found`(有沒有東西可送)、`selected[r_y][r_x]`(one-hot，上層用它清 bit，`found=0` 時全 0)、`selected_y`、`selected_x`。
+5. **驗證**：
+    - 答案用訓練端的候選規則(`axis_candidate_lists`)產生真實的 $(o_y,o_x)$，照神經元編號排序。
+    - 每個有候選的 $(y,x)$，合法 bank 的子集合當 `pending`，$2^n\le512$ 時窮舉，否則抽樣；不合法 bank 的座標填亂數，不能被選到。
+    - testbench 每拍比對 `found`、`selected`、座標，清掉答案的那個 bit 再比下一個，直到全 0。
+    - 參數：conv1、conv2($M=2$)，人工 $M=1$($S>K$)、$M=3$、$M=4$、1×1 輸出；兩種寫法跑同一份答案。
+    - 反向測試；out-of-context 合成兩種寫法，加暫存器包一層量布局繞線後的路徑延遲。
+6. **檔案**：`SpikeSelect.sv`(旋轉法)、`tb_spike_select.sv`、`scripts/gen_spike_select_ref.py`、`scripts/run_tb_spike_select.tcl`。
+    - 比較階段旋轉法叫 `SpikeSelectRotate.sv`、比較鍵法叫 `SpikeSelect.sv`；定案後刪掉比較鍵法，旋轉法改名成 `SpikeSelect`，port `first_row_bank`、`first_col_bank` 改名 `top_row_bank`、`left_col_bank`，testbench 拿掉 `USE_ROTATION`。
+
+狀態：等使用者 code review，還不算完成。
+
+Part 6.5 要做的事(Part 7 開始前完成)：
+
+- `CandidateAxis` 輸出窗在這一軸座標最小那格的 bank，$(m_{max}+1)\bmod M$(`max_bank` 已經有)；`CandidateGrid` 接出 `top_row_bank`、`left_col_bank`；兩個的答案腳本、testbench 補這個欄位，重跑驗證。
+
+文件：Conv.md 第 4 節「補充：怎麼用電路做」已改成旋轉法(窗、由左上往右下讀、窗左上角推出讀的順序、優先權編碼器)；5.3 原本說「比較器」「比較邏輯」的地方改成「優先權編碼器」。
+
+定案後重跑(改名之後)：
+
+- 答案檔重新產生，跟改名前逐位元相同(只改名稱)。
+- `run_tb_spike_select.tcl` 8 組全部 ALL PASS，elaborate 只有已知的 `VRFC 10-3532`。
+- `-lint` 4 組(conv1、conv2、$M=3$、$M=4$)0 個訊息；LUT 17、15、84、147，跟下表旋轉法相同。
+
+比較階段的結果：
+
+- 模擬：`run_tb_spike_select.tcl` 跑 8 組參數 × 兩種寫法共 16 組，全部 ALL PASS。
+    - 參數：conv1、conv2($M=2$)；$M=3$ 13×11、$M=3$ 64×64(座標 6 bits)；$M=4$；$M=3$ 且 $S>1$；$M=1$($S>K$)；1×1 輸出。
+    - 答案腳本對每個事件座標確認「照窗由上往下(由左往右)的順序」跟「依座標排」順序相同(旋轉法的前提)，8 組都成立。
+    - 答案檔共約 9 MB，最大的是 $M=3$ 64×64 約 5 MB。
+    - elaborate 只有已知的 `VRFC 10-3532`(`glbl` 沒有這些參數)。
+- 反向測試(conv1、$M=3$ 13×11 兩組，跑完 RTL、答案檔都還原)：
+    - 比較鍵法 key 最高位不取反：兩組 FAIL(沒亮的 bank 座標填 0 會贏)。
+    - 比較鍵法先比 $o_x$ 再比 $o_y$：兩組 FAIL。
+    - 旋轉法 y 軸不看窗左上角的列編號(當時叫 `first_row_bank`)、一律從 bank 0 開始：兩組 FAIL。
+    - 旋轉法改成 column-major 掃：兩組 FAIL。
+    - conv1 答案檔一個 case 的送出順序對調：那一組報 3 筆 `MISMATCH`、FAIL，另一組 PASS。
+- 合成比較(xck26，non-project，out-of-context；LUT 是模組單獨合成，延遲是輸入輸出各包一層暫存器、布局繞線後用 2 ns 時脈的 slack 換算)：
+    - `-lint` 8 組都是 0 個訊息。
+
+| 設定 | 寫法 | LUT | CARRY8 | 路徑延遲 | 邏輯 / 繞線 | 邏輯層數 |
+|---|---|---|---|---|---|---|
+| conv1($M=2$，17×17) | 比較鍵法 | 55 | 3 | 1.98 ns | 0.98 / 1.00 ns | 6 |
+| | 旋轉法 | 17 | 0 | 1.05 ns | 0.45 / 0.59 ns | 2 |
+| conv2($M=2$，9×9) | 比較鍵法 | 46 | 3 | 2.02 ns | 1.11 / 0.90 ns | 6 |
+| | 旋轉法 | 15 | 0 | 0.99 ns | 0.47 / 0.52 ns | 2 |
+| $M=3$，64×64 | 比較鍵法 | 183 | 9 | 4.46 ns | 2.17 / 2.12 ns | 12 |
+| | 旋轉法 | 84 | 0 | 1.66 ns | 0.65 / 1.02 ns | 3 |
+| $M=4$，64×64 | 比較鍵法 | 386 | 18 | 4.84 ns | 2.43 / 2.25 ns | 13 |
+| | 旋轉法 | 147 | 0 | 3.09 ns | 1.28 / 1.81 ns | 9 |
+
+- 合成的觀察：
+    - 旋轉法每組都比較少、比較快：LUT 約 1/3~1/2，延遲約一半，不用 CARRY8。
+    - 比較鍵法的成本隨座標位寬、bank 數一起長：每一層比較器都是 $1+$`OUT_Y_WIDTH`$+$`OUT_X_WIDTH` 位元的大小比較(走 CARRY8)。旋轉法只看 `pending` 跟 $\log_2 M$ 位元的起點，座標只經過最後的多工器。
+    - 旋轉法 $M=4$ 的最長路徑是 `pending` → `selected`(9 層)：16 個 bank 依名次逐一判斷 `!found` 的優先權鏈。實際的 conv1、conv2 是 $M=2$，用不到。
+    - 旋轉法的代價不在這個模組：起點 bank 要從 `CandidateAxis` 輸出($m_{max}$ 已經有，多一個 +1 mod $M$)，Part 7 的管線暫存器每軸多存 $\log_2 M$ 位元。
+
+## Part 6.5 Part 2 補輸出窗左上角的 bank(進行中，Part 7 開始前完成)
+
+目的：`SpikeSelect` 要的 `top_row_bank`、`left_col_bank` 現在沒有模組輸出，由 Part 2 補上。
+算法見 Conv.md 第 4 節補充「窗左上角的 bank 從哪裡來」：每一軸是 $(m_{max}+1)\bmod M$，`CandidateAxis` 已經算出 $m_{max}$(`max_bank`)。
+
+要做的事：
+
+1. **`CandidateAxis`**：多一個輸出，值是 $(m_{max}+1)\bmod M$，位寬 $\lceil\log_2 M\rceil$(至少 1 bit)。
+    - 只看事件座標，跟有沒有合法候選無關，一律有值。
+2. **`CandidateGrid`**：y 軸那個接出來當 `top_row_bank`，x 軸那個接出來當 `left_col_bank`，各一個值，不是每個 bank 一份。
+3. **驗證 `CandidateAxis`**：`gen_candidate_axis_ref.py`、`tb_candidate_axis.sv` 每行多一個欄位，`run_tb_candidate_axis.tcl` 重跑全部參數。
+4. **驗證 `CandidateGrid`**：`gen_candidate_grid_ref.py`、`tb_candidate_grid.sv` 每行多兩個欄位，`run_tb_candidate_grid.tcl` 重跑全部參數。
+5. **其他例化 `CandidateGrid` 的地方**：`tb_neuron_memory.sv` 不用新輸出，port 留著不接；重跑 `run_tb_neuron_memory.tcl` 確認沒受影響。
+6. **答案腳本共用同一個函式**：$(m_{max}+1)\bmod M$ 現在寫在 `gen_spike_select_ref.py` 的 `window_start_bank`，改成放在一個地方，其他腳本 import，不複製。
+7. **反向測試**：輸出改成 $m_{max}$(少加 1)，`CandidateAxis`、`CandidateGrid` 都要 FAIL。
+8. **合成**：out-of-context 合成 conv1、conv2 參數的 `CandidateGrid`，`-lint`，LUT 跟改之前比。
+9. **文件**：TODO「已定案設計 → 候選計算」的輸出欄位清單補上這個值。
+
+定案的事項(2026-10-11 跟使用者確認)：
+
+- **port 名稱**：`CandidateAxis` 用 `min_bank`，跟內部的 `max_bank` 成對；`CandidateGrid` 用 `top_row_bank`、`left_col_bank`，跟 `SpikeSelect` 相同。
+    - `max_bank` 是窗最大座標 $o_{max}$ 的 bank，`min_bank` 是窗最小座標 $o_{max}-(M-1)$ 的 bank，$=(\texttt{max\_bank}+1)\bmod M$。
+    - 註解要寫明：不是 Conv.md 第 2 節 $o_{min}$ 的 bank。
+        - $K$ 不是 $S$ 的倍數時，有些 $i$ 只被 $M-1$ 個輸出蓋到，$o_{min}$ 比窗最小大 1。例如 conv1 $i=4$：窗是 $o=1、2$，$o_{min}=2$。
+        - $o_{min}$ 在 RTL 裡沒有算，也沒有變數存它。
+    - 不用 `valid_min_bank`：窗最小那格常常不合法(例如上面的 $o=1$、靠影像上緣的負座標)，名字會說反。
+
+- **答案從哪裡來**：Python 產生。訓練端沒有「窗」這個概念，沒有現成函式可以直接算出這個值。
+    - 答案用公式 $(\lfloor(i+P)/S\rfloor+1)\bmod M$ 算；同時用訓練端 `_axis_candidates` 的合法候選檢查「從這個 bank 往後循環的順序 = 座標由小到大」，兩邊一致才寫答案。
+- **`tb_spike_select` 改成例化 RTL 的 `CandidateGrid`**：
+    - `top_row_bank`、`left_col_bank`、`out_y`、`out_x` 由 `CandidateGrid` 依事件座標算出來接進 `SpikeSelect`(`tb_neuron_memory` 也是這樣做)，一起測到兩個模組的編號規則接得起來。
+    - 答案檔的值留著，跟 `CandidateGrid` 算出來的互相比對。
+
+結果(等使用者 code review)：
+
+- 檔案：
+    - RTL：`CandidateAxis.sv` 多 `min_bank`，`BANK_INDEX_WIDTH` 從模組內部移到參數區，port 才能用；`CandidateGrid.sv` 多 `top_row_bank`、`left_col_bank`。
+    - 答案腳本：`gen_candidate_axis_ref.py` 新增 `axis_min_bank`(公式)、`check_min_bank_order`(拿訓練端的合法候選檢查順序)，`gen_candidate_grid_ref.py`、`gen_spike_select_ref.py` 都 import 這兩個；`gen_spike_select_ref.py` 原本自己的 `window_start_bank`、`check_window_order` 刪掉。
+    - 答案檔格式：axis 每行 `in_coord` 後面多 `min_bank`；grid 每行 `in_x` 後面多 `top_row_bank left_col_bank`；spike_select 每個 bank 多一個 `valid` 欄位(四個欄位 `valid pending out_y out_x`)。
+    - `tb_spike_select.sv` 例化 `CandidateGrid`(`OUT_CHANNELS=1`，$o_c$ 不影響要用的輸出)，先比 `CandidateGrid` 的窗左上角、每個 bank 的 `valid`、合法 bank 的座標，再比 `SpikeSelect`。
+- 答案腳本對每組參數的每個座標確認「從 `min_bank` 往後循環的順序 = 座標由小到大」，全部成立。
+- 模擬，全部 ALL PASS，elaborate 只有已知的 `VRFC 10-3532`：
+    - `run_tb_candidate_axis.tcl` 8 組、`run_tb_candidate_grid.tcl` 7 組、`run_tb_spike_select.tcl` 8 組。
+    - `run_tb_neuron_memory.tcl` 9 組：`tb_neuron_memory` 沒接新的 port，沒有新的警告。
+- 反向測試(`min_bank` 改成直接等於 `max_bank`，少加 1；跑完已還原)：
+    - axis、grid、spike_select 三支腳本都 FAIL，第一筆 `MISMATCH` 都是窗左上角的值；spike_select 的錯誤數比只錯窗左上角多，`SpikeSelect` 的送出順序也錯了。
+    - 只有 $M=1$ 的參數組 PASS(axis 的 $K=1,S=2$、$K=2,S=3$，grid、spike_select 的 $K=1,S=2$)：只有一個 bank，`min_bank`、`max_bank` 都是 0，本來就分不出來。
+- out-of-context 合成 `CandidateGrid`(xck26)，`-lint` 0 個訊息：
+    - conv1：109 → 120 LUT(多 11)；conv2：105 → 105 LUT。都是 0 CARRY8、0 DSP。
+
+## Part 5 LIF 膜電位更新(完成)
 
 規格在 Conv.md 第 3 節(①~④)：一顆神經元收到一筆事件，算出 $\hat V_{new}$ 跟有沒有 fire。
 
@@ -66,7 +200,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
     - out-of-context 合成 conv1、conv2 參數，記錄 LUT、DSP，看衰減表吃多少 LUT。
 9. **檔案**：`NeuronUpdate.sv`、`tb_neuron_update.sv`、`scripts/gen_neuron_update_ref.py`、`scripts/run_tb_neuron_update.tcl`、`sim_1/new/ref/` 的答案檔。
 
-結果(等使用者過目)：
+結果：
 
 - 答案來源：訓練端 `salt_core.quant.codes.apply_decay_table_int` + `salt_core.quant.scan.process_event`，支援 truncate、飽和、$f_V>0$，人工參數也用同一套。
 - 模擬：`run_tb_neuron_update.tcl` 跑 8 組參數 × `ROUND` × `SATURATE` 共 32 組，全部 ALL PASS。
@@ -222,7 +356,6 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 
 ## 專案狀態備註
 
-- `sim_candidate_axis` 模擬集的 `REF_DIR` 被 GUI 存檔蓋掉了。跑 `run_tb_candidate_axis.tcl` 不受影響(腳本每次都會重設)，但在 GUI 對它直接 Run Simulation 會報缺 `REF_DIR`。下次跑這支腳本時會補回去。
 - `synth_1` 是 out-of-context，top 是 `CandidateGrid`。之後單獨合成別的子模組，改 top 就好。
 
 ## 待決事項
@@ -362,9 +495,11 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
     - $o\bmod M$ 就是組的編號，不另外輸出。
     - $k$ 在這裡一起算好，給 Part 3 選權重 tap。
 - 輸出 port 每個欄位各自一個 unpacked array：`valid`、`out_coord`、`bank_offset`、`tap`，長度 `AXIS_BANK_COUNT`，位寬用模組參數算。
+    - 另外一個值 `min_bank`：窗最小座標 $o_{max}-(M-1)$ 的 bank，$(m_{max}+1)\bmod M$，給 `SpikeSelect` 用(Part 6.5 加的)。
     - 不用 struct：要多一個共用巨集 `.svh`，上層兩軸位寬不同還要各開 generate block，專案其他地方也沒用 struct。
 - 兩軸配對獨立成子模組 `CandidateGrid`，可以單獨窮舉驗證。
     - 輸入 $(y,x)$ 跟這一拍的 $o_c$，輸出 $M\times M$ 組 `valid`、`bank_addr`、$(o_y,o_x)$、$(k_y,k_x)$。
+    - 另外輸出窗左上角的 bank `top_row_bank`、`left_col_bank`，就是 y 軸、x 軸的 `min_bank`(Part 6.5 加的)。
     - 只算到位址，不含 BRAM；BRAM 是 Part 3、Part 4。
 - bank 內位址用乘常數攤平：$(o_c\cdot G_y+g_y)\cdot G_x+g_x$，不把每一維補到 2 的次方(Conv.md 第 2 節「bank 內部位址」)。
     - 補到 2 的次方，在 $OC=16$、$G_y=G_x=22$ 時 BRAM 用量約兩倍。

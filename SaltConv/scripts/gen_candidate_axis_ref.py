@@ -4,8 +4,12 @@
 從 o_min 往上列 ceil(K/S) 個,檢查 o <= o_max、o >= 0、o < O_max,tap = i - o*S + P。
 再照 Conv.md 的 banking 放到 bank (o mod M),補上 bank_offset = floor(o/M)。
 
+min_bank 是窗(從 o_max 往左連續 M 格)最小座標 o_max-(M-1) 的 bank,用 axis_min_bank 的公式算;
+訓練端沒有窗這個概念,改用 check_min_bank_order 拿訓練端的合法候選確認:
+從 min_bank 往後循環的 bank 順序,就是座標由小到大(SpikeSelect 不比座標的前提)。
+
 每組參數輸出一個文字檔,一行一個 in_coord,欄位以空白分隔:
-    in_coord  valid_0 out_coord_0 bank_offset_0 tap_0  valid_1 out_coord_1 ...
+    in_coord min_bank  valid_0 out_coord_0 bank_offset_0 tap_0  valid_1 out_coord_1 ...
 沒有候選的 bank 寫 valid=0,其餘三個欄位填 0,testbench 比對時不看。
 
 用法(WSL,conda 環境 jax):
@@ -39,6 +43,20 @@ def ref_file_name(kernel_size: int, stride: int, padding: int, out_size: int,
             f"_O{out_size}_W{in_coord_width}.txt")
 
 
+def axis_min_bank(in_coord: int, stride: int, padding: int, bank_count: int) -> int:
+    """窗最小座標 o_max-(M-1) 的 bank,o_max = floor((i+P)/S);(o_max-(M-1)) mod M = (o_max+1) mod M。"""
+    return ((in_coord + padding) // stride + 1) % bank_count
+
+
+def check_min_bank_order(out_coords: list[int], min_bank: int, bank_count: int, in_coord: int) -> None:
+    """合法候選照「從 min_bank 往後循環」的 bank 順序排,要跟依座標排的順序相同。"""
+    by_coord = sorted(out_coords)
+    by_bank = sorted(out_coords, key=lambda out: (out % bank_count - min_bank) % bank_count)
+    if by_coord != by_bank:
+        raise RuntimeError(f"in_coord={in_coord} min_bank={min_bank}:"
+                           f"照 bank 循環的順序 {by_bank} 跟依座標 {by_coord} 不同")
+
+
 def build_reference_rows(axis_candidates, kernel_size: int, stride: int, padding: int,
                          out_size: int, in_coord_width: int) -> list[str]:
     """窮舉 in_coord = 0 ~ 2^in_coord_width - 1,回傳每一行的文字。"""
@@ -70,7 +88,10 @@ def build_reference_rows(axis_candidates, kernel_size: int, stride: int, padding
             if banks[bank][0]:
                 raise RuntimeError(f"in_coord={in_coord} 有兩個候選落在 bank {bank}")
             banks[bank] = (1, out_coord, out_coord // bank_count, tap)
-        fields = [str(int(in_coord))]
+        min_bank = axis_min_bank(int(in_coord), stride, padding, bank_count)
+        check_min_bank_order([bank_fields[1] for bank_fields in banks if bank_fields[0]], min_bank,
+                             bank_count, int(in_coord))
+        fields = [str(int(in_coord)), str(min_bank)]
         for bank_fields in banks:
             fields.extend(str(value) for value in bank_fields)
         rows.append(" ".join(fields))

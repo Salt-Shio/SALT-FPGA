@@ -8,6 +8,11 @@
 //   valid[r]=0 時,同一組的 out_coord/bank_offset/tap 值不保證,上層不能使用。
 //   算法見 Conv.md 第 2 節「每個 bank 的候選怎麼算」:
 //   從 o_max 往左找每個 bank 的座標,整筆事件只除以 STRIDE、除以 AXIS_BANK_COUNT 各一次。
+//   窗:從 o_max 往左連續 AXIS_BANK_COUNT 格,每個 bank 一格,合法候選都在窗裡。
+//   min_bank 是窗最小座標 o_max-(M-1) 所在的 bank,= (m_max+1) mod M(Conv.md 第 4 節補充),給 SpikeSelect 用。
+//     只看 in_coord,窗最小那格合不合法都有值。
+//     不是 Conv.md 第 2 節 o_min 的 bank:K 不是 S 的倍數時,有些 in_coord 只被 M-1 個輸出蓋到,
+//     o_min 比窗最小大 1(例:K=3,S=2,P=1,i=4 時窗是 o=1、2,o_min=2)。
 //////////////////////////////////////////////////////////////////////////////////
 
 module CandidateAxis #(
@@ -22,13 +27,15 @@ module CandidateAxis #(
 	localparam integer BANK_SLOTS        = (OUT_SIZE + AXIS_BANK_COUNT - 1) / AXIS_BANK_COUNT,   // ceil(O_max/M),每個 bank 在這一軸上有幾格
 	localparam integer OUT_COORD_WIDTH   = (OUT_SIZE > 1) ? $clog2(OUT_SIZE) : 1,
 	localparam integer BANK_OFFSET_WIDTH = (BANK_SLOTS > 1) ? $clog2(BANK_SLOTS) : 1,
-	localparam integer TAP_WIDTH         = (KERNEL_SIZE > 1) ? $clog2(KERNEL_SIZE) : 1
+	localparam integer TAP_WIDTH         = (KERNEL_SIZE > 1) ? $clog2(KERNEL_SIZE) : 1,
+	localparam integer BANK_INDEX_WIDTH  = (AXIS_BANK_COUNT > 1) ? $clog2(AXIS_BANK_COUNT) : 1   // m、m_max、n_m、min_bank 都在 0~AXIS_BANK_COUNT-1
 )(
 	input  logic [IN_COORD_WIDTH-1:0]    in_coord,                            // i,事件在這一軸的座標
 	output logic                         valid       [0:AXIS_BANK_COUNT-1],   // 這一組有沒有合法候選
 	output logic [OUT_COORD_WIDTH-1:0]   out_coord   [0:AXIS_BANK_COUNT-1],   // o,候選的輸出座標
 	output logic [BANK_OFFSET_WIDTH-1:0] bank_offset [0:AXIS_BANK_COUNT-1],   // floor(o/M),在 bank 裡的第幾格
-	output logic [TAP_WIDTH-1:0]         tap         [0:AXIS_BANK_COUNT-1]    // k,kernel tap
+	output logic [TAP_WIDTH-1:0]         tap         [0:AXIS_BANK_COUNT-1],   // k,kernel tap
+	output logic [BANK_INDEX_WIDTH-1:0]  min_bank                             // 窗最小座標 o_max-(M-1) 的 bank,(m_max+1) mod M
 );
 
 	// 內部運算位寬:涵蓋輸入座標的整個範圍,不只影像內的合法範圍
@@ -38,7 +45,6 @@ module CandidateAxis #(
 	localparam integer MAX_OUT_COORD_WIDTH   = (MAX_OUT_COORD_MAX > 0) ? $clog2(MAX_OUT_COORD_MAX + 1) : 1;
 	localparam integer MAX_BANK_OFFSET_MAX   = MAX_OUT_COORD_MAX / AXIS_BANK_COUNT;                   // g_max 的最大值
 	localparam integer MAX_BANK_OFFSET_WIDTH = (MAX_BANK_OFFSET_MAX > 0) ? $clog2(MAX_BANK_OFFSET_MAX + 1) : 1;
-	localparam integer BANK_INDEX_WIDTH      = (AXIS_BANK_COUNT > 1) ? $clog2(AXIS_BANK_COUNT) : 1;   // m、m_max、n_m 都在 0~AXIS_BANK_COUNT-1
 
 	// 整筆事件算一次
 	logic [PADDED_COORD_WIDTH-1:0]    padded_coord;      // i+P
@@ -57,6 +63,8 @@ module CandidateAxis #(
 		max_out_coord   = MAX_OUT_COORD_WIDTH'(padded_coord / STRIDE);
 		max_bank        = BANK_INDEX_WIDTH'(max_out_coord % AXIS_BANK_COUNT);
 		max_bank_offset = MAX_BANK_OFFSET_WIDTH'(max_out_coord / AXIS_BANK_COUNT);
+		// 往左 M-1 格 = bank 往後 1 個(循環):m_max 是最後一個 bank 時繞回 0
+		min_bank        = (max_bank == BANK_INDEX_WIDTH'(AXIS_BANK_COUNT - 1)) ? '0 : BANK_INDEX_WIDTH'(max_bank + 1'b1);
 
 		for (int unsigned bank = 0; bank < AXIS_BANK_COUNT; bank++) begin
 			wraps[bank] = (bank > max_bank);

@@ -4,7 +4,7 @@
 // Description:
 //   CandidateAxis 窮舉比對:in_coord 從 0 跑到 2^IN_COORD_WIDTH-1,
 //   跟 scripts/gen_candidate_axis_ref.py 用訓練端 _axis_candidates 算出的答案逐個 bank 比對。
-//   valid 一律要相同;valid=1 的 bank 再比 out_coord、bank_offset、tap。
+//   每個 in_coord 先比 min_bank(窗最小座標的 bank);valid 一律要相同;valid=1 的 bank 再比 out_coord、bank_offset、tap。
 //   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入,
 //   檔名照參數組出來,規則跟 gen_candidate_axis_ref.py 的 ref_file_name 相同。
 //   純組合邏輯,只用一個 initial 流程:設定輸入、等 #1、比對。
@@ -24,6 +24,7 @@ module tb_candidate_axis;
 	localparam integer OUT_COORD_WIDTH   = (OUT_SIZE > 1) ? $clog2(OUT_SIZE) : 1;
 	localparam integer BANK_OFFSET_WIDTH = (BANK_SLOTS > 1) ? $clog2(BANK_SLOTS) : 1;
 	localparam integer TAP_WIDTH         = (KERNEL_SIZE > 1) ? $clog2(KERNEL_SIZE) : 1;
+	localparam integer BANK_INDEX_WIDTH  = (AXIS_BANK_COUNT > 1) ? $clog2(AXIS_BANK_COUNT) : 1;
 	localparam integer IN_COORD_COUNT    = 2 ** IN_COORD_WIDTH;
 
 	logic [IN_COORD_WIDTH-1:0]    in_coord;
@@ -31,6 +32,7 @@ module tb_candidate_axis;
 	logic [OUT_COORD_WIDTH-1:0]   out_coord   [0:AXIS_BANK_COUNT-1];
 	logic [BANK_OFFSET_WIDTH-1:0] bank_offset [0:AXIS_BANK_COUNT-1];
 	logic [TAP_WIDTH-1:0]         tap         [0:AXIS_BANK_COUNT-1];
+	logic [BANK_INDEX_WIDTH-1:0]  min_bank;
 
 	CandidateAxis #(
 		.KERNEL_SIZE   (KERNEL_SIZE),
@@ -43,7 +45,8 @@ module tb_candidate_axis;
 		.valid      (valid),
 		.out_coord  (out_coord),
 		.bank_offset(bank_offset),
-		.tap        (tap)
+		.tap        (tap),
+		.min_bank   (min_bank)
 	);
 
 	string ref_dir;
@@ -52,19 +55,23 @@ module tb_candidate_axis;
 	int    check_count;
 	int    error_count;
 
-	// 比對一個欄位,不一致就印出 in_coord、bank、欄位名稱、預期值、實際值
+	// 比對一個欄位,不一致就印出 in_coord、bank、欄位名稱、預期值、實際值;bank<0 是整個 in_coord 一個值的欄位,不印 bank
 	task automatic check_field(input int coord, input int bank, input string field_name,
 	                           input int expected, input int actual);
 		check_count++;
 		if (expected != actual) begin
 			error_count++;
-			$display("MISMATCH in_coord=%0d bank=%0d %s: expected=%0d actual=%0d",
-			         coord, bank, field_name, expected, actual);
+			if (bank < 0)
+				$display("MISMATCH in_coord=%0d %s: expected=%0d actual=%0d", coord, field_name, expected, actual);
+			else
+				$display("MISMATCH in_coord=%0d bank=%0d %s: expected=%0d actual=%0d",
+				         coord, bank, field_name, expected, actual);
 		end
 	endtask
 
 	initial begin
 		int expected_coord;
+		int expected_min_bank;
 		int expected_valid;
 		int expected_out_coord;
 		int expected_bank_offset;
@@ -86,9 +93,10 @@ module tb_candidate_axis;
 			in_coord = IN_COORD_WIDTH'(coord);
 			#1;
 
-			scan_count = $fscanf(ref_fd, "%d", expected_coord);
-			if (scan_count != 1 || expected_coord != coord)
+			scan_count = $fscanf(ref_fd, "%d %d", expected_coord, expected_min_bank);
+			if (scan_count != 2 || expected_coord != coord)
 				$fatal(1, "答案檔第 %0d 行格式不對:讀到 in_coord=%0d", coord, expected_coord);
+			check_field(coord, -1, "min_bank", expected_min_bank, int'(min_bank));
 
 			for (int bank = 0; bank < AXIS_BANK_COUNT; bank++) begin
 				scan_count = $fscanf(ref_fd, "%d %d %d %d", expected_valid, expected_out_coord,

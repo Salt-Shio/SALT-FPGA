@@ -4,6 +4,7 @@
 // Description:
 //   CandidateGrid 窮舉比對:out_channel 跑 0~OUT_CHANNELS-1,in_y、in_x 各從 0 跑到 2^寬度-1,
 //   跟 scripts/gen_candidate_grid_ref.py 用訓練端 _axis_candidates 算出的答案逐個 bank 比對。
+//   每組輸入先比 top_row_bank、left_col_bank(窗左上角的 bank);
 //   valid 一律要相同;valid=1 的 bank 再比 out_y、out_x、tap_y、tap_x、bank_addr。
 //   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入,
 //   檔名照參數組出來,規則跟 gen_candidate_grid_ref.py 的 ref_file_name 相同。
@@ -32,6 +33,7 @@ module tb_candidate_grid;
 	localparam integer OUT_Y_WIDTH       = (OUT_ROWS > 1) ? $clog2(OUT_ROWS) : 1;
 	localparam integer OUT_X_WIDTH       = (OUT_COLS > 1) ? $clog2(OUT_COLS) : 1;
 	localparam integer TAP_WIDTH         = (KERNEL_SIZE > 1) ? $clog2(KERNEL_SIZE) : 1;
+	localparam integer BANK_INDEX_WIDTH  = (AXIS_BANK_COUNT > 1) ? $clog2(AXIS_BANK_COUNT) : 1;
 	localparam integer IN_Y_COUNT        = 2 ** Y_WIDTH;
 	localparam integer IN_X_COUNT        = 2 ** X_WIDTH;
 
@@ -44,6 +46,8 @@ module tb_candidate_grid;
 	logic [OUT_X_WIDTH-1:0]       out_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 	logic [TAP_WIDTH-1:0]         tap_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 	logic [TAP_WIDTH-1:0]         tap_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [BANK_INDEX_WIDTH-1:0]  top_row_bank;
+	logic [BANK_INDEX_WIDTH-1:0]  left_col_bank;
 
 	CandidateGrid #(
 		.X_WIDTH     (X_WIDTH),
@@ -55,15 +59,17 @@ module tb_candidate_grid;
 		.STRIDE      (STRIDE),
 		.PADDING     (PADDING)
 	) dut (
-		.in_y       (in_y),
-		.in_x       (in_x),
-		.out_channel(out_channel),
-		.valid      (valid),
-		.bank_addr  (bank_addr),
-		.out_y      (out_y),
-		.out_x      (out_x),
-		.tap_y      (tap_y),
-		.tap_x      (tap_x)
+		.in_y         (in_y),
+		.in_x         (in_x),
+		.out_channel  (out_channel),
+		.valid        (valid),
+		.bank_addr    (bank_addr),
+		.out_y        (out_y),
+		.out_x        (out_x),
+		.tap_y        (tap_y),
+		.tap_x        (tap_x),
+		.top_row_bank (top_row_bank),
+		.left_col_bank(left_col_bank)
 	);
 
 	string ref_dir;
@@ -72,15 +78,19 @@ module tb_candidate_grid;
 	int    check_count;
 	int    error_count;
 
-	// 比對一個欄位,不一致就印出輸入、bank、欄位名稱、預期值、實際值
+	// 比對一個欄位,不一致就印出輸入、bank、欄位名稱、預期值、實際值;row_bank<0 是整組輸入一個值的欄位,不印 bank
 	task automatic check_field(input int channel, input int coord_y, input int coord_x,
 	                           input int row_bank, input int col_bank, input string field_name,
 	                           input int expected, input int actual);
 		check_count++;
 		if (expected != actual) begin
 			error_count++;
-			$display("MISMATCH out_channel=%0d in_y=%0d in_x=%0d bank=(%0d,%0d) %s: expected=%0d actual=%0d",
-			         channel, coord_y, coord_x, row_bank, col_bank, field_name, expected, actual);
+			if (row_bank < 0)
+				$display("MISMATCH out_channel=%0d in_y=%0d in_x=%0d %s: expected=%0d actual=%0d",
+				         channel, coord_y, coord_x, field_name, expected, actual);
+			else
+				$display("MISMATCH out_channel=%0d in_y=%0d in_x=%0d bank=(%0d,%0d) %s: expected=%0d actual=%0d",
+				         channel, coord_y, coord_x, row_bank, col_bank, field_name, expected, actual);
 		end
 	endtask
 
@@ -88,6 +98,8 @@ module tb_candidate_grid;
 		int expected_channel;
 		int expected_y;
 		int expected_x;
+		int expected_top_row_bank;
+		int expected_left_col_bank;
 		int expected_valid;
 		int expected_out_y;
 		int expected_out_x;
@@ -116,10 +128,15 @@ module tb_candidate_grid;
 					in_x        = X_WIDTH'(coord_x);
 					#1;
 
-					scan_count = $fscanf(ref_fd, "%d %d %d", expected_channel, expected_y, expected_x);
-					if (scan_count != 3 || expected_channel != channel || expected_y != coord_y || expected_x != coord_x)
+					scan_count = $fscanf(ref_fd, "%d %d %d %d %d", expected_channel, expected_y, expected_x,
+					                     expected_top_row_bank, expected_left_col_bank);
+					if (scan_count != 5 || expected_channel != channel || expected_y != coord_y || expected_x != coord_x)
 						$fatal(1, "答案檔格式不對:要 out_channel=%0d in_y=%0d in_x=%0d,讀到 %0d %0d %0d",
 						       channel, coord_y, coord_x, expected_channel, expected_y, expected_x);
+					check_field(channel, coord_y, coord_x, -1, -1, "top_row_bank",
+					            expected_top_row_bank, int'(top_row_bank));
+					check_field(channel, coord_y, coord_x, -1, -1, "left_col_bank",
+					            expected_left_col_bank, int'(left_col_bank));
 
 					for (int row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
 						for (int col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin

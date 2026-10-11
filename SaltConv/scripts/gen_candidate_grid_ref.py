@@ -6,14 +6,17 @@ y、x 各用 _axis_candidates 算單軸候選,兩軸的 valid 做外積得到二
 bank 內位址用 Conv.md 的公式從 o_y、o_x 直接算:
     addr = (o_c * G_y + floor(o_y/M)) * G_x + floor(o_x/M),G_y = ceil(H_out/M),G_x = ceil(W_out/M)
 
+top_row_bank、left_col_bank 是窗左上角那格的 bank,用 gen_candidate_axis_ref.py 的 axis_min_bank 算,
+同樣用 check_min_bank_order 拿訓練端的合法候選確認順序。
+
 每組參數輸出一個文字檔,一行一組輸入,out_channel、in_y、in_x 由外到內窮舉,欄位以空白分隔:
-    out_channel in_y in_x  [bank (0,0)] [bank (0,1)] ... [bank (M-1,M-1)]
+    out_channel in_y in_x top_row_bank left_col_bank  [bank (0,0)] [bank (0,1)] ... [bank (M-1,M-1)]
 每個 bank 六個欄位:valid out_y out_x tap_y tap_x bank_addr,bank 依 (r_y, r_x) row-major 排列。
 沒有候選的 bank 寫 valid=0,其餘欄位填 0,testbench 比對時不看。
 
 產生答案之前,先窮舉這組參數的每一顆神經元,確認 (bank, bank_addr) 一對一、bank_addr 小於 bank 深度。
 
-用法(WSL,conda 環境 jax):
+用法(WSL,conda 環境 jax,在 scripts 目錄執行,要 import 同目錄的 gen_candidate_axis_ref.py):
     python gen_candidate_grid_ref.py \
         --training-repo /mnt/d/Project/Spiking-Affine-Lazy-Training \
         --out-dir /mnt/d/Project/SALT-FPGA/SaltConv/SaltConv.srcs/sim_1/new/ref
@@ -23,6 +26,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+from gen_candidate_axis_ref import axis_min_bank, check_min_bank_order
 
 # (KERNEL_SIZE, STRIDE, PADDING, OUT_ROWS, OUT_COLS, OUT_CHANNELS, Y_WIDTH, X_WIDTH),
 # 跟 run_tb_candidate_grid.tcl 的清單一致
@@ -114,6 +119,15 @@ def build_reference_rows(axis_candidates, kernel_size: int, stride: int, padding
     col_candidates = axis_candidate_lists(axis_candidates, x_width, kernel_size, stride, padding,
                                           candidate_count, out_cols)
 
+    top_row_banks = []
+    for in_y, y_candidates in enumerate(row_candidates):
+        top_row_banks.append(axis_min_bank(in_y, stride, padding, bank_count))
+        check_min_bank_order([out_y for out_y, _ in y_candidates], top_row_banks[-1], bank_count, in_y)
+    left_col_banks = []
+    for in_x, x_candidates in enumerate(col_candidates):
+        left_col_banks.append(axis_min_bank(in_x, stride, padding, bank_count))
+        check_min_bank_order([out_x for out_x, _ in x_candidates], left_col_banks[-1], bank_count, in_x)
+
     rows = []
     for out_channel in range(out_channels):
         for in_y, y_candidates in enumerate(row_candidates):
@@ -129,7 +143,8 @@ def build_reference_rows(axis_candidates, kernel_size: int, stride: int, padding
                                                f"bank ({row_bank},{col_bank})")
                         addr = bank_address(out_channel, out_y, out_x, bank_count, row_slots, col_slots)
                         banks[row_bank][col_bank] = (1, out_y, out_x, tap_y, tap_x, addr)
-                fields = [str(out_channel), str(in_y), str(in_x)]
+                fields = [str(out_channel), str(in_y), str(in_x), str(top_row_banks[in_y]),
+                          str(left_col_banks[in_x])]
                 for bank_row in banks:
                     for bank_fields in bank_row:
                         fields.extend(str(value) for value in bank_fields)
