@@ -22,12 +22,52 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 3 | 權重 BRAM 讀取與 tap 選擇 | 第 2 節「權重」 | 完成 | `WeightMemory.sv`、`WeightTapSelect.sv`、`tb_weight_lookup.sv`、`sources_1/mem/` |
 | 4 | 神經元 BRAM($\hat V,t_{last}$)介面，一讀一寫兩個埠 | 第 2 節「神經元」、5.2、5.3 | 完成 | `NeuronMemory.sv`、`tb_neuron_memory.sv` |
 | 5 | LIF 膜電位更新 | 第 3 節 | 完成 | `NeuronUpdate.sv`、`tb_neuron_update.sv` |
-| 6 | bitmask 優先權排序與輸出 | 第 4 節 | 進行中 | `SpikeSelect.sv`、`tb_spike_select.sv` |
-| 6.5 | Part 2 補輸出窗左上角的 bank(`top_row_bank`、`left_col_bank`)給 Part 6 用，Part 7 開始前完成 | 第 4 節補充 | 進行中 | `CandidateAxis.sv`、`CandidateGrid.sv` 跟它們的 testbench、答案腳本 |
+| 6 | bitmask 優先權排序與輸出 | 第 4 節 | 完成 | `SpikeSelect.sv`、`tb_spike_select.sv` |
+| 6.5 | Part 2 補輸出窗左上角的 bank(`top_row_bank`、`left_col_bank`)給 Part 6 用 | 第 4 節補充 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv` 跟它們的 testbench、答案腳本 |
 | 7 | pipeline FSM 整合，先做無腦版 | 5.1、5.2 | 未開始 | |
 | 8 | 優化：管線化、反壓、讀取延遲一般化 | 5.3~5.5 | 視情況再細分 | |
 
-## 下一步：Part 6 bitmask 優先權排序與輸出(進行中)
+## 下一步：Part 7 pipeline FSM 整合(無腦版)
+
+規格在 Conv.md 5.1、5.2，換事件的銜接在 5.6：
+
+- 一個 $o_c$ 至少 2 拍：送讀位址 → 資料就緒、算 $(s,\hat V_{new})$、寫回、鎖存 bitmask → 從 bitmask 一拍送一個。
+- 推進到下一個 $o_c$ 只看一個條件：這一拍做完 bitmask 會不會變空(5.1)，會就同拍發起下一個 $o_c$ 的讀位址。
+- 照 5.2 的表，一個 $o_c$ 占 $1+\max(1,k)$ 拍，$k$ 是這個 $o_c$ fire 的候選數。
+- $o_c=OC-1$ 推進時，下一個就是下一筆事件的 $o_c=0$，規則不變(5.6)。
+- 管線化、反壓、讀取延遲一般化(5.3~5.5)是 Part 8，這裡不做。
+
+要接起來的模組，跟前面各 Part 留給 Part 7 的事：
+
+- **`EventFIFO`**：輸入事件；`NeuronMemory` 的 `clearing` 期間 `in_ready=0`(Conv.md 第 2 節「清除」)。
+- **$o_c$ 計數器**：接 `CandidateGrid` 的 `out_channel`、`WeightMemory` 的位址。
+- **`WeightMemory` + `WeightTapSelect`**：送 $(o_c,c)$ 的那拍算出的 tap 要存 1 拍才跟寬字對齊。
+    - 這組暫存器由上層放，跟候選的 `valid`、`bank_addr`、$(o_y,o_x)$ 存在同一組(Part 3 定案)。
+- **`NeuronMemory`**：`read_enable` 接 `valid`；讀出的下一拍寫回，寫入位址是存了 1 拍的 `bank_addr`(`tb_neuron_memory` 已經這樣接)。
+    - 只寫回合法候選：`NeuronUpdate` 對不合法的候選也照算(Part 5 定案)。
+    - $t_{last,new}=t$ 由上層直接接寫埠。
+- **`NeuronUpdate`**：generate 複製 $M\times M$ 份。
+    - 門檻依 $o_c$ 選：`$readmemh(THRESHOLD_FILE)` 載入，合成成 mux(「已定案設計 → 門檻與衰減表」)。
+    - 門檻檔($w=9$、$11$ bits)讀進來有沒有截斷警告，這時候確認(Part 5 留下的)。
+- **`SpikeSelect`**：`pending` 是 $s\land valid$(Part 6 定案)。
+    - bitmask 暫存器、`out_valid/out_ready`、送出的 $o_c$、$t$ 都在這裡做(Part 6 定案)。
+    - `top_row_bank`、`left_col_bank`、每個 bank 的 $(o_y,o_x)$ 跟 bitmask 一起存，用到這個 $o_c$ 送完(Conv.md 第 4 節補充)。
+
+開始寫 RTL 之前要先定：
+
+1. **模組切法**：FSM 直接寫在 `SaltConv` 裡，還是另開一個模組，`SaltConv` 只負責例化跟接線。
+2. **狀態怎麼切**：5.2 的每一拍對應到哪個狀態、每個狀態推哪些 enable。
+3. **`out_ready=0` 無腦版要不要處理**：頂層已經有 `out_ready` port。
+    - 5.4 第一段說，只走 bitmask 這條路時，送不出去就不清 bit、不推進，是借用 5.1 既有規則，不是新狀態。
+    - 5.4 後半(當拍直接送的快路徑)是 5.3 才有的，屬於 Part 8。
+4. **讀寫撞同一顆神經元**：無腦版寫回 $o_c$ 跟讀 $o_c+1$ 不同拍；換事件時，下一筆事件 $o_c=0$ 的讀位址最早在上一筆最後一次寫回的下一拍。
+    - 要在定下來的狀態表上再確認一次，不能同拍同位址讀寫(Conv.md 第 2 節「記憶體型態」)。
+5. **答案從哪裡來**：要能逐筆比對輸出事件 $(o_c,o_y,o_x,t)$ 的順序。
+    - 訓練端有 `QuantBackend.scan`(一層的整數掃描)跟 `stream.py` 的 `extract_output_events_conv`(spike 轉輸出事件，同一筆事件照神經元編號排)，能不能直接拿來產生單層答案，要先讀過再定。
+    - 除了輸出事件，要不要也比最後的 $\hat V$(訓練端 `v_final`)、拍數(對 $1+\max(1,k)$)。
+    - 參數：conv1、conv2 × 繞回、飽和兩版，加人工參數($M=1$、$M=3$、1×1 輸出等，同前面各 Part)。
+
+## Part 6 bitmask 優先權排序與輸出(完成)
 
 規格在 Conv.md 第 4 節：同一拍同一個 $o_c$ 有 0~$M\times M$ 顆 fire，每拍在還沒送的裡面挑 $(o_y,o_x)$ 最小的送出。
 
@@ -50,7 +90,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
         - $(o_y,o_x)$ 由小到大，就是把窗由左上往右下讀。
         - 窗裡第 $k$ 列(最上面是第 0 列)的 bank 列編號是 $(\texttt{top\_row\_bank}+k)\bmod M$，行同理；`top_row_bank`、`left_col_bank` 是窗左上角那格的 bank。
         - 照這個順序做優先權編碼器，第一個 `pending=1` 的就是答案，不比座標。
-        - 窗左上角的 bank 現在 `CandidateAxis`、`CandidateGrid` 沒有輸出，排在 Part 6.5(Part 7 開始前完成)。比較跟驗證階段由答案檔提供。
+        - 窗左上角的 bank 由 Part 6.5 從 `CandidateAxis`、`CandidateGrid` 接出來；比較階段還沒有時由答案檔提供。
 4. **port**：
     - 輸入 `pending[r_y][r_x]`、`out_y`、`out_x`(沿用 `CandidateGrid` 的 unpacked array)、`top_row_bank`、`left_col_bank`。
     - 輸出 `found`(有沒有東西可送)、`selected[r_y][r_x]`(one-hot，上層用它清 bit，`found=0` 時全 0)、`selected_y`、`selected_x`。
@@ -62,12 +102,6 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
     - 反向測試；out-of-context 合成兩種寫法，加暫存器包一層量布局繞線後的路徑延遲。
 6. **檔案**：`SpikeSelect.sv`(旋轉法)、`tb_spike_select.sv`、`scripts/gen_spike_select_ref.py`、`scripts/run_tb_spike_select.tcl`。
     - 比較階段旋轉法叫 `SpikeSelectRotate.sv`、比較鍵法叫 `SpikeSelect.sv`；定案後刪掉比較鍵法，旋轉法改名成 `SpikeSelect`，port `first_row_bank`、`first_col_bank` 改名 `top_row_bank`、`left_col_bank`，testbench 拿掉 `USE_ROTATION`。
-
-狀態：等使用者 code review，還不算完成。
-
-Part 6.5 要做的事(Part 7 開始前完成)：
-
-- `CandidateAxis` 輸出窗在這一軸座標最小那格的 bank，$(m_{max}+1)\bmod M$(`max_bank` 已經有)；`CandidateGrid` 接出 `top_row_bank`、`left_col_bank`；兩個的答案腳本、testbench 補這個欄位，重跑驗證。
 
 文件：Conv.md 第 4 節「補充：怎麼用電路做」已改成旋轉法(窗、由左上往右下讀、窗左上角推出讀的順序、優先權編碼器)；5.3 原本說「比較器」「比較邏輯」的地方改成「優先權編碼器」。
 
@@ -110,7 +144,7 @@ Part 6.5 要做的事(Part 7 開始前完成)：
     - 旋轉法 $M=4$ 的最長路徑是 `pending` → `selected`(9 層)：16 個 bank 依名次逐一判斷 `!found` 的優先權鏈。實際的 conv1、conv2 是 $M=2$，用不到。
     - 旋轉法的代價不在這個模組：起點 bank 要從 `CandidateAxis` 輸出($m_{max}$ 已經有，多一個 +1 mod $M$)，Part 7 的管線暫存器每軸多存 $\log_2 M$ 位元。
 
-## Part 6.5 Part 2 補輸出窗左上角的 bank(進行中，Part 7 開始前完成)
+## Part 6.5 Part 2 補輸出窗左上角的 bank(完成)
 
 目的：`SpikeSelect` 要的 `top_row_bank`、`left_col_bank` 現在沒有模組輸出，由 Part 2 補上。
 算法見 Conv.md 第 4 節補充「窗左上角的 bank 從哪裡來」：每一軸是 $(m_{max}+1)\bmod M$，`CandidateAxis` 已經算出 $m_{max}$(`max_bank`)。
@@ -143,7 +177,7 @@ Part 6.5 要做的事(Part 7 開始前完成)：
     - `top_row_bank`、`left_col_bank`、`out_y`、`out_x` 由 `CandidateGrid` 依事件座標算出來接進 `SpikeSelect`(`tb_neuron_memory` 也是這樣做)，一起測到兩個模組的編號規則接得起來。
     - 答案檔的值留著，跟 `CandidateGrid` 算出來的互相比對。
 
-結果(等使用者 code review)：
+結果：
 
 - 檔案：
     - RTL：`CandidateAxis.sv` 多 `min_bank`，`BANK_INDEX_WIDTH` 從模組內部移到參數區，port 才能用；`CandidateGrid.sv` 多 `top_row_bank`、`left_col_bank`。
