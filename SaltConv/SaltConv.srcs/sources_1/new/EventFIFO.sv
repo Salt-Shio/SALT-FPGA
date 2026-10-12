@@ -30,7 +30,9 @@ module EventFIFO #(
 
 	logic [PTR_WIDTH-1:0] w, r;
 	logic full, empty;
-	logic [DATA_WIDTH-1:0] mem [0:DEPTH-1];
+	// 一律用 distributed RAM(LUT 當記憶體),不交給 Vivado 依大小判斷:深度小,讀取要組合邏輯(FWFT),
+	// BRAM 讀出要多 1 拍。之後深度開大換 BRAM 時,這裡跟 rd_valid 的對齊一起改
+	(* ram_style = "distributed" *) logic [DATA_WIDTH-1:0] mem [0:DEPTH-1];
 
 	logic push, pop;
 	logic [PTR_WIDTH-1:0] w_next, r_next;
@@ -46,6 +48,14 @@ module EventFIFO #(
 
 	assign rd_data = mem[r]; // FWFT:直接組合邏輯讀,rd_valid=1 那拍資料就穩定
 
+	// 資料陣列不放進有非同步 reset 的 always_ff:放在一起時 Vivado 報 Synth 8-7137(Set、reset 同優先),
+	// 推不出 distributed RAM,整個陣列變成暫存器。reset 期間就算寫進來,w、r、empty 都被 reset,讀不到。
+	always_ff @(posedge clk) begin
+		if (push) begin
+			mem[w] <= wr_data;
+		end
+	end
+
 	always_ff @(posedge clk or negedge rst_n) begin
 		if (!rst_n) begin
 			w     <= '0;
@@ -54,7 +64,6 @@ module EventFIFO #(
 			empty <= 1'b1;
 		end else begin
 			if (push) begin
-				mem[w] <= wr_data;
 				w <= w_next;
 			end
 			if (pop) begin

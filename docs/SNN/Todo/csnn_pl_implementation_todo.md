@@ -24,48 +24,134 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 5 | LIF 膜電位更新 | 第 3 節 | 完成 | `NeuronUpdate.sv`、`tb_neuron_update.sv` |
 | 6 | bitmask 優先權排序與輸出 | 第 4 節 | 完成 | `SpikeSelect.sv`、`tb_spike_select.sv` |
 | 6.5 | Part 2 補輸出窗左上角的 bank(`top_row_bank`、`left_col_bank`)給 Part 6 用 | 第 4 節補充 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv` 跟它們的 testbench、答案腳本 |
-| 7 | pipeline FSM 整合，先做無腦版 | 5.1、5.2 | 未開始 | |
-| 8 | 優化：管線化、反壓、讀取延遲一般化 | 5.3~5.5 | 視情況再細分 | |
+| 7 | pipeline FSM 整合，先做無腦版(含只走 bitmask 的反壓) | 5.1、5.2、5.4 前半、5.6、5.7 | `SaltConv.sv` review 完，改 review 提出的項目中；testbench 還沒 review | `SaltConv.sv`、`tb_salt_conv.sv` |
+| 8 | 優化：管線化(含快路徑的反壓)、讀取延遲一般化 | 5.3、5.4 後半、5.5 | 視情況再細分 | |
 
-## 下一步：Part 7 pipeline FSM 整合(無腦版)
+## 下一步：Part 7 pipeline FSM 整合(無腦版，改 code review 提出的項目)
 
-規格在 Conv.md 5.1、5.2，換事件的銜接在 5.6：
+把 Part 1~6 的模組接成完整的 `SaltConv`，加上指揮每一拍做什麼的狀態機。
 
-- 一個 $o_c$ 至少 2 拍：送讀位址 → 資料就緒、算 $(s,\hat V_{new})$、寫回、鎖存 bitmask → 從 bitmask 一拍送一個。
-- 推進到下一個 $o_c$ 只看一個條件：這一拍做完 bitmask 會不會變空(5.1)，會就同拍發起下一個 $o_c$ 的讀位址。
-- 照 5.2 的表，一個 $o_c$ 占 $1+\max(1,k)$ 拍，$k$ 是這個 $o_c$ fire 的候選數。
-- $o_c=OC-1$ 推進時，下一個就是下一筆事件的 $o_c=0$，規則不變(5.6)。
-- 管線化、反壓、讀取延遲一般化(5.3~5.5)是 Part 8，這裡不做。
+### 範圍
 
-要接起來的模組，跟前面各 Part 留給 Part 7 的事：
+- 規格：Conv.md 5.1、5.2(無腦版逐拍表)、5.4 前半(只走 bitmask 的反壓)、5.6(換事件)、5.7(狀態機)。
+- 一個 $o_c$ 占 PROCESS 1 拍 $+$ SENDING $\max(1,k)$ 拍，$k$ 是這個 $o_c$ fire 的個數。
+    - conv1($OC=8$)一筆完全沒有 fire 的事件是 $1+8\times2=17$ 拍；conv2($OC=16$)是 $1+16\times2=33$ 拍。
+- Part 8 才做：5.3 管線化(算的當拍直接送)、5.4 後半(快路徑的反壓)、5.5 讀取延遲一般化。
 
-- **`EventFIFO`**：輸入事件；`NeuronMemory` 的 `clearing` 期間 `in_ready=0`(Conv.md 第 2 節「清除」)。
-- **$o_c$ 計數器**：接 `CandidateGrid` 的 `out_channel`、`WeightMemory` 的位址。
-- **`WeightMemory` + `WeightTapSelect`**：送 $(o_c,c)$ 的那拍算出的 tap 要存 1 拍才跟寬字對齊。
-    - 這組暫存器由上層放，跟候選的 `valid`、`bank_addr`、$(o_y,o_x)$ 存在同一組(Part 3 定案)。
-- **`NeuronMemory`**：`read_enable` 接 `valid`；讀出的下一拍寫回，寫入位址是存了 1 拍的 `bank_addr`(`tb_neuron_memory` 已經這樣接)。
+### 已定案的事項(2026-10-12 跟使用者確認)
+
+1. **狀態機直接寫在 `SaltConv` 裡**，不另開模組。
+    - 狀態機單獨拿出來沒有訓練端的答案可以比，最後都是測整個 `SaltConv`，拆出去沒有換到更好測。
+2. **三個狀態 IDLE、PROCESS、SENDING**：狀態表、轉移條件寫在 Conv.md 5.7，圖是 `docs/SNN/Concept/Layer-RTL/Conv-image/SaltConvFSM.drawio`(Conv.md 嵌的是匯出的 `.svg`)。
+    - IDLE：等事件；FIFO 空、神經元記憶體清除中都停在這裡。
+    - PROCESS：讀出的資料就緒，$M\times M$ 份 `NeuronUpdate` 算，合法候選寫回，$s\land valid$ 存進 bitmask。下一拍一定是 SENDING。
+    - SENDING：`SpikeSelect` 挑一個送出，`out_ready=1` 才清 bit；bitmask 會變空時同拍送下一個 $o_c$ 的讀位址。
+    - 送讀位址不是獨立的狀態，在 IDLE 或 SENDING 的最後一拍順便做。
+3. **正在處理的事件存在事件暫存器**(Conv.md 5.7「事件暫存器」)。
+    - 原因：換事件那一拍同時要用兩筆事件，送出舊事件最後一個 fire 要舊事件的 $t$，讀位址要新事件的 $x,y,c$；`EventFIFO` 一次只看得到最前面那一筆。
+    - 送 $o_c=0$ 讀位址的那一拍從 FIFO 拿出事件，拍子結束時存進暫存器；這一拍的讀位址直接用 FIFO 最前面那筆，$o_c\ge1$ 的讀位址、算、送出的 $t$ 都用暫存器。
+    - 代價：多 $x,y,c,t$ 的位寬，`SaltConv` 預設位寬是 $9+9+4+16=38$ 個 FF，加讀位址來源的二選一；換事件不多花拍數，跟 5.6 一致。
+    - 不選「事件留在 FIFO、做完才拿掉、換事件多等 1 拍」：每筆事件多 1 拍，跟 5.6 不一致；Part 8 管線化時前一筆還在算、下一筆已經在讀，一定要有這個暫存器。
+4. **反壓：`out_ready` 直接接進狀態機**，`out_ready=0` 時 SENDING 停在原地，不清 bit、不換 $o_c$、不送讀位址、不從 FIFO 拿事件。
+    - 不能不管 `out_ready` 直接送：下一層收不下，spike 就丟了，下一層的膜電位跟訓練端不再一致。
+    - 層與層之間不用另外加 skid buffer：每一層輸入端的 `EventFIFO` 就是 16 格的 skid buffer。
+        - FIFO 的 `wr_ready = !full`，`full` 是暫存器，不看後面的 Conv。
+        - `full` 是「現在是不是滿了」的準確狀態，上游只在有空格的那一拍送得進來，不會被塞爆。
+        - Conv 從 FIFO 拿事件的條件裡有 `out_ready`，下一層收不下就不拿；已經拿進來的存在事件暫存器、bitmask，停住時都不變。
+        - 第 3 點要靠 FIFO 讀出端是 FWFT：最前面那筆一直擺在 `rd_data` 上，Conv 同一拍看 `out_ready`、同一拍決定拿不拿，真的拿走之前資料都留在 FIFO 裡。
+        - 一般模式(這一拍 `rd_en`，下一拍資料才出來)：資料出來時已經離開 FIFO，Conv 那一拍收不下就要另外一格存，等於讀出端要再加 skid buffer；每筆事件也多 1 拍。
+    - 所以 ready 的組合邏輯路徑只從下一層 FIFO 的 `full` 走到這一層的狀態機為止，串幾層都一樣長。這條路徑在 Part 8 量，見「合成後要確認」。
+    - 反壓最後會傳到 EvtDecoder，感測器那端能忍多久是另一件事，見待決事項的 `FIFO_DEPTH`。
+5. **讀寫不會撞同一顆神經元**(已確認)：寫回只在 PROCESS，送讀位址只在 IDLE、SENDING 的最後一拍，兩者不會同一拍。
+    - 換事件時，下一筆事件 $o_c=0$ 的讀位址最早在上一筆最後一次寫回(PROCESS)的下一拍，讀到的已經是寫回之後的值。
+    - Part 8 讓讀 $o_c+1$ 跟寫 $o_c$ 同拍之後，要再檢查一次(Conv.md 第 2 節「記憶體型態」)。
+
+### 要接起來的模組，跟前面各 Part 留給 Part 7 的事
+
+- **`EventFIFO`**：`in_ready` 是 FIFO 的 `wr_ready`，`NeuronMemory` 的 `clearing` 期間再強制成 0(Conv.md 第 2 節「清除」)。
+- **事件暫存器、$o_c$ 計數器**：$o_c$ 接 `CandidateGrid` 的 `out_channel`、`WeightMemory` 的位址。
+- **`CandidateGrid`**：送讀位址那一拍算出的候選存進候選暫存器，PROCESS、SENDING 都用這一份，到下一次送讀位址才換(Conv.md 5.7「候選存起來」)。
+    - 存的是每個 bank 的 `valid`、`bank_addr`、$(o_y,o_x)$、$(k_y,k_x)$，跟 `top_row_bank`、`left_col_bank`。
+    - tap 跟權重寬字對齊用的暫存器就是這一組(Part 3 定案)。
+- **`WeightMemory` + `WeightTapSelect`**：送讀位址那一拍送 $(o_c,c)$，PROCESS 那一拍用存起來的 tap 選權重碼。
+- **`NeuronMemory`**：送讀位址那一拍 `read_enable` 接候選的 `valid`；PROCESS 那一拍寫回，寫入位址是存起來的 `bank_addr`(`tb_neuron_memory` 已經這樣接)。
     - 只寫回合法候選：`NeuronUpdate` 對不合法的候選也照算(Part 5 定案)。
-    - $t_{last,new}=t$ 由上層直接接寫埠。
+    - $t_{last,new}=t$ 直接從事件暫存器接寫埠。
 - **`NeuronUpdate`**：generate 複製 $M\times M$ 份。
     - 門檻依 $o_c$ 選：`$readmemh(THRESHOLD_FILE)` 載入，合成成 mux(「已定案設計 → 門檻與衰減表」)。
     - 門檻檔($w=9$、$11$ bits)讀進來有沒有截斷警告，這時候確認(Part 5 留下的)。
-- **`SpikeSelect`**：`pending` 是 $s\land valid$(Part 6 定案)。
-    - bitmask 暫存器、`out_valid/out_ready`、送出的 $o_c$、$t$ 都在這裡做(Part 6 定案)。
-    - `top_row_bank`、`left_col_bank`、每個 bank 的 $(o_y,o_x)$ 跟 bitmask 一起存，用到這個 $o_c$ 送完(Conv.md 第 4 節補充)。
+- **`SpikeSelect`**：`pending` 是 bitmask，bitmask 在 PROCESS 存 $s\land valid$(Part 6 定案)。
+    - `out_valid` = 狀態是 SENDING 而且 `found`；`out_x`、`out_y` 是 `selected_x`、`selected_y`，`out_channel` 是 $o_c$，`out_time` 是事件暫存器的 $t$。
+    - 送出成功(`out_valid && out_ready`)才用 `selected` 清掉 bitmask 的那個 bit。
+    - `out_valid` 不能用到 `out_ready`，不然兩層之間會繞成組合邏輯迴圈。
 
-開始寫 RTL 之前要先定：
+### 驗證的做法(2026-10-12 跟使用者確認)
 
-1. **模組切法**：FSM 直接寫在 `SaltConv` 裡，還是另開一個模組，`SaltConv` 只負責例化跟接線。
-2. **狀態怎麼切**：5.2 的每一拍對應到哪個狀態、每個狀態推哪些 enable。
-3. **`out_ready=0` 無腦版要不要處理**：頂層已經有 `out_ready` port。
-    - 5.4 第一段說，只走 bitmask 這條路時，送不出去就不清 bit、不推進，是借用 5.1 既有規則，不是新狀態。
-    - 5.4 後半(當拍直接送的快路徑)是 5.3 才有的，屬於 Part 8。
-4. **讀寫撞同一顆神經元**：無腦版寫回 $o_c$ 跟讀 $o_c+1$ 不同拍；換事件時，下一筆事件 $o_c=0$ 的讀位址最早在上一筆最後一次寫回的下一拍。
-    - 要在定下來的狀態表上再確認一次，不能同拍同位址讀寫(Conv.md 第 2 節「記憶體型態」)。
-5. **答案從哪裡來**：要能逐筆比對輸出事件 $(o_c,o_y,o_x,t)$ 的順序。
-    - 訓練端有 `QuantBackend.scan`(一層的整數掃描)跟 `stream.py` 的 `extract_output_events_conv`(spike 轉輸出事件，同一筆事件照神經元編號排)，能不能直接拿來產生單層答案，要先讀過再定。
-    - 除了輸出事件，要不要也比最後的 $\hat V$(訓練端 `v_final`)、拍數(對 $1+\max(1,k)$)。
-    - 參數：conv1、conv2 × 繞回、飽和兩版，加人工參數($M=1$、$M=3$、1×1 輸出等，同前面各 Part)。
+- **答案**：`scripts/gen_salt_conv_ref.py`，兩份答案互相比對，一致才寫答案檔。
+    - 官方：訓練端 `ConvLayer.forward` + `QuantBackend`(整層的整數掃描，輸出事件流照 `stream.py` 排序)。佇列容量不夠會截斷，這時放大到 `diag.needed` 再跑。
+    - 逐筆迴圈：照硬體的做法一筆事件、一個 $o_c$ 算，候選用訓練端 `_axis_candidates`，更新用 `apply_decay_table_int` + `process_event`。官方答案沒有的 $t_{last}$、每個 (事件, $o_c$) 的 fire 數 $k$(算拍數)從這裡來。
+    - 訓練端的 `v_final` 多做了一步 catch-up：每顆神經元再衰減到樣本最後一筆事件的時間(權重 0)。硬體不做，所以 testbench 比 catch-up 之前的 $\hat V$；逐筆迴圈補上 catch-up 之後要等於官方的 `v_final`。
+- **參數組**：
+    - 訓練端 conv1、conv2 × 繞回、飽和 4 組，輸入是 test 的前 10 筆(量化資料夾 `eval/test.yaml` 記的評估取樣)；conv2 的輸入是訓練端 conv1 的輸出。
+        - 每層 spike 數跟 `eval/test_outputs.npz` 比對；匯出的權重、門檻、衰減表檔跟 `model.npz` 比對。
+        - 原本要用 val(跟 `reference.npz` 比)，這台機器只有 N-MNIST 的 `Test`，val 要從 `Train` 切，改用 test。
+    - 人工 5 組：$M=1$($K=1,S=2$)；$M=3$($C$、$OC$ 不是 2 的次方，`FIFO_DEPTH=4`)；$K=5,S=2$($M=3$，$f_V=2$)；$M=4$(`FIFO_DEPTH=2`)；1×1 輸出、$OC=1$。`ROUND`、`SATURATE` 四種組合分散在各組。
+        - 門檻大多壓低(同一個 $o_c$ 常有多個 fire)，最後一個 $o_c$ 權重取絕對值、門檻壓低(一定會 fire，換事件那一拍被擋住的情況才碰得到)。
+- **testbench `tb_salt_conv.sv`**：每筆樣本用四種模式各跑一次，中間 `rst_n` 重來。
+    - A：`out_ready` 一直是 1、輸入一直有，另外比拍數(第一個 PROCESS 到最後一個 SENDING 要等於 $\sum(1+\max(1,k))$，中間回 IDLE 多一拍也會被抓到)。
+    - B：`out_ready` 每拍隨機、輸入隨機斷。
+    - C：`out_ready` 隨機長度的連續 0、連續 1 交替(最長 80 拍，超過 FIFO 深度)；輸入隨機斷，偶爾等 SaltConv 整個空下來再送。
+    - D：`out_ready` 每拍 0、1 交替、輸入一直有。
+    - 四種模式都比：輸出事件逐筆照順序；樣本結束時每顆神經元的 $(\hat V,t_{last})$，直接從 `NeuronMemory` 的記憶體內容讀出來。
+    - 每一拍檢查的協定規則：送不出去時下一拍 `out_valid` 還是 1、資料不變；同一拍改 `out_ready`，`out_valid` 不能跟著變；清除期間 `in_ready=0`、FIFO 沒收進事件；`out_valid`、`in_ready` 不是 X。上游清除期間也會拉高 `in_valid`。
+    - 涵蓋率 8 項，要求的項目 0 次就 FAIL：下游不收的四種情況(這個 $o_c$ 還剩 2 個以上、$o_c$ 的最後一個、事件的最後一個且 FIFO 有下一筆、事件的最後一個且 FIFO 空)，加上 `out_valid=0` 時不收、FIFO 滿擋住上游、樣本中途回 IDLE 再接事件、清除期間送事件。
+        - 前四項碰不碰得到由答案檔的 `coverage` 行決定(看 fire 分布)：$M=1$ 每個 $o_c$ 最多 1 個 fire、1×1 輸出只有 1 個 $o_c$，碰不到的那幾項不要求。
+- **檔案**：`SaltConv.sv`、`tb_salt_conv.sv`、`scripts/gen_salt_conv_ref.py`、`scripts/run_tb_salt_conv.tcl`、`sim_1/new/ref/salt_conv_*`(答案檔、人工參數組的資料檔)。
+
+### 結果
+
+- 答案腳本：9 組的逐筆迴圈都跟官方整層 forward 逐位元一致(輸出事件序列、catch-up 之後的 $\hat V$)；訓練端 4 組的 spike 數跟 `eval/test_outputs.npz` 相同，匯出檔跟 `model.npz` 相同。
+    - 訓練端每組 10 筆樣本：conv1 共 20000 筆事件、約 25500 個 fire；conv2 約 25500 筆事件、約 12000 個 fire。同一個 (事件, $o_c$) 最多 2 個 fire；人工參數組最多 15 個($M=4$)。
+- 模擬：`run_tb_salt_conv.tcl` 9 組全部 ALL PASS，涵蓋率要求的項目全部有發生。
+    - 訓練端 conv1 每組比對約 10 萬筆輸出事件、9 萬筆神經元狀態；conv2 約 4.8 萬筆、5.2 萬筆。
+    - xsim 不支援 `$urandom(seed)`，用預設種子；連跑兩次涵蓋率的數字完全相同，亂數是固定的。
+    - 門檻檔($w=9$、$11$ bits)模擬、合成都沒有截斷警告(Part 5 留下的)。
+- 反向測試(人工參數 5 組，跑完 RTL、答案檔都還原)：
+    - SENDING 不看 `out_ready`，照樣清 bit：5 組 FAIL；模式 A 沒錯，錯在 B 之後，協定檢查也抓到「上一拍送不出去，這一拍 `out_valid=0`」。
+    - 換事件那一拍讀位址用事件暫存器：5 組 FAIL，模式 A 就錯。
+    - bitmask 不跟 `valid` 做 AND：5 組 FAIL。
+    - 不合法的候選也寫回：4 組 FAIL；1×1 那組 PASS，它的候選永遠合法，本來就分不出來。
+    - 答案檔改一個輸出座標：只有那一組 FAIL，四種模式各報 1 筆。
+- `EventFIFO` 的修正(Part 1 的模組，整合合成時才發現)：
+    - 資料陣列 `mem` 原本寫在有非同步 reset 的 `always_ff` 裡，合成報 `Synth 8-7137`(Set、reset 同優先)，推不出 distributed RAM，16 格 × 29 bits 全部變成暫存器(conv1 589 個 FF 裡約 464 個)。
+    - `mem` 的寫入移到沒有 reset 的 `always_ff`；reset 期間就算寫進去，`w`、`r`、`empty` 都被 reset，讀不到，介面行為不變。
+    - 改完 `tb_event_fifo` ALL PASS(540 筆)，`tb_salt_conv` 9 組重跑 ALL PASS；合成變成 18 個 LUT 當記憶體，FF 降到 121~129 個。
+    - 依據：UG949「Memory arrays should not be reset」、非同步 reset 會讓暫存器推不進 RAM primitive；UG901 Coding Guidelines「Do not asynchronously set or reset registers」。
+        - 「保持原值」為什麼被做成同時有 set、reset 的暫存器，官方文件沒寫工具內部的做法，查不到確定的說明。
+    - 另外照 `WeightMemory`、`NeuronMemory` 的做法，`mem` 加上 `(* ram_style = "distributed" *)`(UG912 RAM_STYLE：「infer distributed LUT RAMs」)，資源類型寫明，不交給 Vivado 依大小判斷。加屬性之後沒有重跑模擬、合成。
+- out-of-context 合成(xck26，non-project，包裝 module 寫死參數；10 ns 時脈，輸入輸出延遲設 0，布局繞線後)：
+
+| 設定 | LUT(其中當記憶體) | FF | CARRY8 | BRAM | DSP | 最長路徑 | 最高時脈 | `out_ready` 起點最長 |
+|---|---|---|---|---|---|---|---|---|
+| conv1 $w$=12 繞回 | 556(18) | 129 | 20 | 5 個 RAMB36 | 4 | 8.07 ns，17 層 | 116 MHz | 4.08 ns，8 層 LUT |
+| conv1 $w$=9 飽和 | 799(18) | 129 | 44 | 5 個 RAMB36 | 0 | 8.86 ns，20 層 | 107 MHz | 4.63 ns，8 層 LUT |
+| conv2 $w$=14 繞回 | 573(18) | 121 | 20 | 1 個 RAMB36 + 4 個 RAMB18 | 4 | 8.27 ns，18 層 | 113 MHz | 3.93 ns，7 層 LUT |
+| conv2 $w$=11 飽和 | 566(18) | 121 | 20 | 1 個 RAMB36 + 4 個 RAMB18 | 4 | 8.66 ns，19 層 | 109 MHz | 3.79 ns，7 層 LUT |
+
+- 合成的觀察：
+    - 最長路徑都是 `NeuronMemory` 讀出 → `NeuronUpdate` → 寫回同一個 bank，約 8~8.9 ns；最高時脈是用 10 ns 的 slack 換算的。Part 8 拆管線從這裡下手。
+    - conv1 $w$=9 的乘法做成 LUT(0 DSP、LUT 多約 240)，跟 Part 5 單獨合成時一樣，是 Vivado 依位寬自己選的(見「合成後要確認」的乘法器)。
+    - `-lint`：每組 1~2 個 `ASSIGN-6`，都是 Part 5 記錄過、刻意丟掉的高位(`shifted_product`、`unfitted`)。
+    - hold 檢查有 30 個端點不過(-0.18 ns)，起點全部是輸入 port 進 FIFO 的資料陣列：out-of-context 把輸入延遲設成 0 造成的，實際接上一層時訊號從暫存器出來，有 clock-to-Q 的延遲。
+
+### code review 要改的地方(review 走完一起改，改完全部 tb 重跑)
+
+1. **`NeuronMemory` 改成單一 bank，跟 `NeuronUpdate` 放進同一個 genvar 迴圈**(2026-10-13 使用者提出，`SaltConv.sv` 第 327 行的 reviewer 註解)。
+    - 目的：一個 bank 的讀 → 算 → 寫回寫在同一個地方；`memory_read_enable`、`memory_membrane`、`memory_last_time`、`memory_write_enable`、`memory_write_time` 這幾個二維陣列拿掉。行為不變。
+    - 清除計數器用做法 A：`clearing`、`clear_addr` 搬到 `SaltConv`，只有一份，接進每個 bank。
+        - 不選每個 bank 各留一份計數器：$M\times M$ 份一樣的計數器，`clearing` 也有 $M\times M$ 個要挑一個接給 `in_ready`。
+    - 跟著改：`NeuronMemory.sv`(拿掉 bank 的 generate、清除計數器，port 變單一)；`tb_neuron_memory.sv`(自己 generate $M\times M$ 份、自己產生清除，Part 4 重跑)；`tb_salt_conv.sv` 快照路徑改成 `dut.row_banks[r].col_banks[c].neuron_memory.bank`；TODO Part 4、Conv.md 寫到 `NeuronMemory` 結構的地方。答案腳本、答案檔不用動。
+    - 改完拿掉第 327 行的 reviewer 註解。
 
 ## Part 6 bitmask 優先權排序與輸出(完成)
 
@@ -425,6 +511,15 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
     - DSP 慢在邏輯延遲(多約 1 ns)：純組合邏輯沒用到 DSP 內部暫存器，訊號直接穿過 `DSP_A_B_DATA → PREADD → MULTIPLIER → ALU → OUTPUT` 每一級。
     - 還沒量：Part 8 拆管線時，乘法如果切在 DSP 內部的暫存器上，DSP 的延遲可能大幅下降，結論可能反過來，要再量一次才決定。
 - **衰減表 ROM 的 LUT 用量**：$M\times M$ 份組合邏輯查表電路，吃太多再回頭檢討。
+- **`out_ready` 進到狀態機的路徑(Part 7 量過，Part 8 管線化後再量)**：
+    - 路徑：下一層 FIFO 的 `full` 暫存器 → 層與層之間的線 → `oc_done`(這個 o_c 送完了)→ 狀態、$o_c$、bitmask、事件暫存器、候選暫存器、FIFO 讀指標的 enable，跟 `NeuronMemory`、`WeightMemory` 的讀取 enable、讀位址。
+    - Part 7 量到的(見 Part 7 結果)：最長的一條是 `out_ready` → `oc_done` → `take_new_event` → 讀位址選 FIFO 還是事件暫存器 → `CandidateGrid` → BRAM 讀位址，7~8 層 LUT、3.8~4.6 ns，10 ns 時脈還有 4.9~5.8 ns 餘裕，不是最長的路徑。
+        - 原本估「1~2 層 LUT 加 fan-out」是錯的：漏算了讀位址的來源由 `take_new_event` 選，後面還要經過整個 `CandidateGrid`。
+    - 太長時的辦法：
+        - 讀位址不等 `out_ready`：SENDING 期間不寫神經元記憶體，每一拍都先送下一個 $o_c$ 的讀位址，重讀不會出錯。
+            - 讀位址的來源改用 `last_channel` 選(下一個 $o_c$ 是不是新事件只看這個，不用等送完)，`CandidateGrid` 跟 BRAM 的位址、enable 就都不接這條。
+            - 候選暫存器、事件暫存器、FIFO 讀指標還是要等 `oc_done`：`SpikeSelect` 還在用目前的候選，事件還沒真的拿走。
+        - 在 `SaltConv` 輸出加 2 格 skid buffer：狀態機看的 `out_ready` 改成 skid buffer 自己的暫存器，下一層的 `full` 只走到 skid buffer；代價是 2 格 × 一筆輸出事件的寬度，輸出晚 1 拍。
 - **`CandidateAxis` 的除法、`CandidateGrid` 的乘常數**：除以 $S$、除以 $M$ 不是 2 的次方時，UG901 沒寫會用 LUT 還是 DSP；乘常數也一樣。
     - `CandidateAxis` 單獨合成，$K=3,S=1$：LUT，0 DSP。
     - `CandidateGrid` 預設參數($K=3,S=1,P=1$，64×64，$OC=16$，$M=3$)，out-of-context：306 LUT、54 CARRY8，0 DSP。
@@ -516,8 +611,14 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 - 獨立成參數化寬度的可重用子模組，自己寫，不用 Xilinx IP。
     - 深度小(現行 16)，用不到 BRAM 管理能力。
     - 介面是分欄位，套 AXI4-Stream IP 反而要多包一層 pack/unpack。
-- 現在是 distributed RAM 版，輸出遵守 valid/ready 交握，外部不假設任何固定延遲。
+- 現在是 distributed RAM 版(`(* ram_style = "distributed" *)`，資料陣列的寫入放在沒有 reset 的 `always_ff`)，輸出遵守 valid/ready 交握，外部不假設任何固定延遲。
     - 之後深度開大換 BRAM(讀取多 1 clock)，只要改 `EventFIFO` 內部把 `valid` 延後對齊，外部不用動。
+- 讀出端必須維持 FWFT(2026-10-12 定)：`rd_data` 直接是最前面那一筆，`rd_valid && rd_ready` 那一拍才移走。
+    - 靠它成立的兩件事(Part 7 已定案第 3、4 項)：
+        - 反壓：狀態機同一拍看 `out_ready`、同一拍決定拿不拿事件，不用在讀出端另加 skid buffer。
+        - 事件暫存器：送 $o_c=0$ 讀位址那一拍，直接用 FIFO 最前面那筆的 $x,y,c$，換事件不多花拍數。
+    - 換 BRAM 時，`EventFIFO` 內部要多一格輸出暫存器，先把下一筆讀出來放著，對外維持 FWFT。
+- 寫入端 `wr_ready = !full`，`full` 是暫存器，不看讀出端：上一層看到的 ready 不會跟這一層的狀態機串在一起，層與層之間不用另加 skid buffer(Part 7 已定案第 4 項)。
 
 ### 候選計算(`CandidateAxis`、`CandidateGrid`)
 
