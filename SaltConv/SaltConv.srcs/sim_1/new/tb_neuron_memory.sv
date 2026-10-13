@@ -2,7 +2,7 @@
 //////////////////////////////////////////////////////////////////////////////////
 // Module Name: tb_neuron_memory
 // Description:
-//   CandidateGrid + NeuronMemory 一起驗證:每顆神經元讀出的 (V̂, t_last) 要等於最後寫進去的值,清除後要回到 0。
+//   CandidateGrid + NeuronMemoryClear + M x M 個 NeuronMemory 一起驗證:每顆神經元讀出的 (V̂, t_last) 要等於最後寫進去的值,清除後要回到 0。
 //   讀寫位址都由 CandidateGrid 算,跟實際電路同一條路;上一拍的 valid、bank_addr 存起來當這一拍的寫入位址。
 //   答案是 scripts/gen_neuron_memory_ref.py 用訓練端的候選規則排出的每一拍操作跟預期讀出值,格式見那支腳本。
 //   reset 行:
@@ -90,27 +90,39 @@ module tb_neuron_memory;
 		.tap_x      (grid_tap_x)
 	);
 
-	NeuronMemory #(
-		.OUT_CHANNELS  (OUT_CHANNELS),
-		.OUT_ROWS      (OUT_ROWS),
-		.OUT_COLS      (OUT_COLS),
-		.KERNEL_SIZE   (KERNEL_SIZE),
-		.STRIDE        (STRIDE),
-		.MEMBRANE_WIDTH(MEMBRANE_WIDTH),
-		.TIME_WIDTH    (TIME_WIDTH)
-	) memory (
-		.clk            (clk),
-		.rst_n          (rst_n),
-		.clearing       (clearing),
-		.read_enable    (read_enable),
-		.read_addr      (read_addr),
-		.read_membrane  (read_membrane),
-		.read_last_time (read_last_time),
-		.write_enable   (write_enable),
-		.write_addr     (write_addr),
-		.write_membrane (write_membrane),
-		.write_last_time(write_last_time)
+	// 跟 SaltConv 同樣的接法:一份清除計數器,M x M 個 bank
+	logic [BANK_ADDR_WIDTH-1:0] clear_addr;
+
+	NeuronMemoryClear #(
+		.BANK_DEPTH(BANK_DEPTH)
+	) memory_clear (
+		.clk       (clk),
+		.rst_n     (rst_n),
+		.clearing  (clearing),
+		.clear_addr(clear_addr)
 	);
+
+	for (genvar row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin : row_banks
+		for (genvar col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin : col_banks
+			NeuronMemory #(
+				.BANK_DEPTH    (BANK_DEPTH),
+				.MEMBRANE_WIDTH(MEMBRANE_WIDTH),
+				.TIME_WIDTH    (TIME_WIDTH)
+			) memory (
+				.clk            (clk),
+				.clearing       (clearing),
+				.clear_addr     (clear_addr),
+				.read_enable    (read_enable[row_bank][col_bank]),
+				.read_addr      (read_addr[row_bank][col_bank]),
+				.read_membrane  (read_membrane[row_bank][col_bank]),
+				.read_last_time (read_last_time[row_bank][col_bank]),
+				.write_enable   (write_enable[row_bank][col_bank]),
+				.write_addr     (write_addr[row_bank][col_bank]),
+				.write_membrane (write_membrane[row_bank][col_bank]),
+				.write_last_time(write_last_time[row_bank][col_bank])
+			);
+		end
+	end
 
 	string ref_dir;
 	string ref_path;

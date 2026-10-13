@@ -91,7 +91,7 @@ module SaltConv #(
 	output logic [TIME_WIDTH-1:0]        out_time
 );
 
-	// 跟 CandidateGrid、NeuronMemory 的 localparam 同一套公式,port 位寬要對上才能接
+	// 跟 CandidateGrid 的 localparam 同一套公式,port 位寬要對上才能接
 	localparam integer AXIS_BANK_COUNT   = (KERNEL_SIZE + STRIDE - 1) / STRIDE;                  // M = ceil(K/S),每軸的 bank 數
 	localparam integer ROW_SLOTS         = (OUT_ROWS + AXIS_BANK_COUNT - 1) / AXIS_BANK_COUNT;   // G_y
 	localparam integer COL_SLOTS         = (OUT_COLS + AXIS_BANK_COUNT - 1) / AXIS_BANK_COUNT;   // G_x
@@ -113,7 +113,7 @@ module SaltConv #(
 	// ---------------------------------------------------------------
 	// 輸入 FIFO
 	// ---------------------------------------------------------------
-	logic                        clearing;   // NeuronMemory 還在清 0
+	logic                        clearing;   // 神經元記憶體還在清 0(NeuronMemoryClear)
 	logic                        fifo_write_ready;
 	logic                        fifo_read_valid;
 	logic [EVENT_WIDTH-1:0]      fifo_read_data;
@@ -284,23 +284,47 @@ module SaltConv #(
 	end
 
 	// ---------------------------------------------------------------
-	// 神經元記憶體:送讀位址那一拍讀,PROCESS 那一拍寫回合法的候選
+	// 神經元記憶體與膜電位更新:每個 bank 一份 NeuronMemory + NeuronUpdate
+	// 送讀位址那一拍讀,PROCESS 那一拍算、寫回合法的候選
 	// ---------------------------------------------------------------
-	logic                             memory_read_enable   [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic signed [MEMBRANE_WIDTH-1:0] memory_membrane      [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic        [TIME_WIDTH-1:0]     memory_last_time     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic                             memory_write_enable  [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic        [TIME_WIDTH-1:0]     memory_write_time    [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic                             spike                [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic signed [MEMBRANE_WIDTH-1:0] new_membrane         [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [BANK_ADDR_WIDTH-1:0] clear_addr;
+	logic                       spike [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+
+	// 所有 bank 同一拍清同一個位址,計數器只有一份
+	NeuronMemoryClear #(
+		.BANK_DEPTH(BANK_DEPTH)
+	) neuron_memory_clear (
+		.clk       (clk),
+		.rst_n     (rst_n),
+		.clearing  (clearing),
+		.clear_addr(clear_addr)
+	);
 
 	for (genvar row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin : row_banks
 		for (genvar col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin : col_banks
-			// 沒有合法候選的 bank 不讀
-			assign memory_read_enable[row_bank][col_bank]  = begin_next_oc && grid_valid[row_bank][col_bank];
-			// NeuronUpdate 對不合法的候選也照算,只寫回合法的
-			assign memory_write_enable[row_bank][col_bank] = (state == PROCESS) && candidate_valid[row_bank][col_bank];
-			assign memory_write_time[row_bank][col_bank]   = event_time;   // t_last,new = t
+			logic signed [MEMBRANE_WIDTH-1:0] membrane;       // 讀出的 V̂
+			logic        [TIME_WIDTH-1:0]     last_time;      // 讀出的 t_last
+			logic signed [MEMBRANE_WIDTH-1:0] new_membrane;   // 算出的 V̂_new
+
+			NeuronMemory #(
+				.BANK_DEPTH    (BANK_DEPTH),
+				.MEMBRANE_WIDTH(MEMBRANE_WIDTH),
+				.TIME_WIDTH    (TIME_WIDTH)
+			) neuron_memory (
+				.clk            (clk),
+				.clearing       (clearing),
+				.clear_addr     (clear_addr),
+				// 沒有合法候選的 bank 不讀
+				.read_enable    (begin_next_oc && grid_valid[row_bank][col_bank]),
+				.read_addr      (grid_bank_addr[row_bank][col_bank]),
+				.read_membrane  (membrane),
+				.read_last_time (last_time),
+				// NeuronUpdate 對不合法的候選也照算,只寫回合法的
+				.write_enable   ((state == PROCESS) && candidate_valid[row_bank][col_bank]),
+				.write_addr     (candidate_bank_addr[row_bank][col_bank]),
+				.write_membrane (new_membrane),
+				.write_last_time(event_time)   // t_last,new = t
+			);
 
 			NeuronUpdate #(
 				.TIME_WIDTH         (TIME_WIDTH),
@@ -314,38 +338,15 @@ module SaltConv #(
 				.DECAY_FILE         (DECAY_FILE)
 			) neuron_update (
 				.weight_code (weight_code[row_bank][col_bank]),
-				.membrane    (memory_membrane[row_bank][col_bank]),
-				.last_time   (memory_last_time[row_bank][col_bank]),
+				.membrane    (membrane),
+				.last_time   (last_time),
 				.event_time  (event_time),
 				.threshold   (thresholds[current_channel]),
 				.spike       (spike[row_bank][col_bank]),
-				.new_membrane(new_membrane[row_bank][col_bank])
+				.new_membrane(new_membrane)
 			);
 		end
 	end
-
-	// reviewer 這裡是否考慮讓 NeuronMemory 變成單一 bank 然後併入上方的 genvar
-	NeuronMemory #(
-		.OUT_CHANNELS  (OUT_CHANNELS),
-		.OUT_ROWS      (OUT_ROWS),
-		.OUT_COLS      (OUT_COLS),
-		.KERNEL_SIZE   (KERNEL_SIZE),
-		.STRIDE        (STRIDE),
-		.MEMBRANE_WIDTH(MEMBRANE_WIDTH),
-		.TIME_WIDTH    (TIME_WIDTH)
-	) neuron_memory (
-		.clk            (clk),
-		.rst_n          (rst_n),
-		.clearing       (clearing),
-		.read_enable    (memory_read_enable),
-		.read_addr      (grid_bank_addr),
-		.read_membrane  (memory_membrane),
-		.read_last_time (memory_last_time),
-		.write_enable   (memory_write_enable),
-		.write_addr     (candidate_bank_addr),
-		.write_membrane (new_membrane),
-		.write_last_time(memory_write_time)
-	);
 
 	// ---------------------------------------------------------------
 	// 送出:bitmask 裡挑 (o_y, o_x) 最小的

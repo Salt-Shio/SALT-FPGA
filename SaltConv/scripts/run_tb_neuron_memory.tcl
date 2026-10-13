@@ -1,7 +1,8 @@
 # Run tb_neuron_memory once per parameter set, using simulation set sim_neuron_memory of the SaltConv project.
 # Generate the reference files first (WSL): gen_neuron_memory_ref.py.
 # The parameter list below must match PARAM_SETS in that script.
-# The first run also adds NeuronMemory.sv to sources_1 and creates the simulation set; later runs skip that.
+# The first run also adds NeuronMemory.sv and NeuronMemoryClear.sv to sources_1 and creates the simulation set;
+# later runs skip that.
 # Compile runs once; each parameter set changes the simset generic, then elaborates and simulates.
 # Usage:
 #   PowerShell (batch mode, close the GUI first):
@@ -48,8 +49,10 @@ open_saltconv_project $scripts_dir
 # First run only: register the design source and create the simulation set.
 # Files are referenced in place (no copy into the project), same as the other testbenches.
 set srcs_dir [file join [get_property DIRECTORY [current_project]] [get_property NAME [current_project]].srcs]
-if {[llength [get_files -quiet -of_objects [get_filesets sources_1] *NeuronMemory.sv]] == 0} {
-    add_files -fileset sources_1 -norecurse [file join $srcs_dir sources_1 new NeuronMemory.sv]
+foreach source_name {NeuronMemory.sv NeuronMemoryClear.sv} {
+    if {[llength [get_files -quiet -of_objects [get_filesets sources_1] */$source_name]] == 0} {
+        add_files -fileset sources_1 -norecurse [file join $srcs_dir sources_1 new $source_name]
+    }
 }
 update_compile_order -fileset sources_1
 if {[llength [get_filesets -quiet $simset_name]] == 0} {

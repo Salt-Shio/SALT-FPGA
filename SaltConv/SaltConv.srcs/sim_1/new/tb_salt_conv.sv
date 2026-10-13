@@ -58,7 +58,7 @@ module tb_salt_conv;
 	parameter THRESHOLD_FILE = "../../../../SaltConv.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11/conv1_threshold.mem";
 	parameter DECAY_FILE     = "../../../../SaltConv.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11/conv1_decay.mem";
 
-	// 跟 SaltConv、NeuronMemory 的 localparam 同一套公式
+	// 跟 SaltConv 的 localparam 同一套公式
 	localparam integer MEMBRANE_WIDTH    = MEMBRANE_INT_WIDTH + MEMBRANE_FRAC_WIDTH;
 	localparam integer OUT_CHANNEL_WIDTH = (OUT_CHANNELS > 1) ? $clog2(OUT_CHANNELS) : 1;
 	localparam integer OUT_Y_WIDTH       = (OUT_ROWS > 1) ? $clog2(OUT_ROWS) : 1;
@@ -148,7 +148,7 @@ module tb_salt_conv;
 		for (genvar col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin : snapshot_cols
 			always @(snapshot_request) begin
 				for (int addr = 0; addr < BANK_DEPTH; addr++) begin
-					bank_snapshot[row_bank][col_bank][addr] = dut.neuron_memory.row_banks[row_bank].col_banks[col_bank].bank[addr];
+					bank_snapshot[row_bank][col_bank][addr] = dut.row_banks[row_bank].col_banks[col_bank].neuron_memory.bank[addr];
 				end
 			end
 		end

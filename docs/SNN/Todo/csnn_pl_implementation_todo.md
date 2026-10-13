@@ -20,7 +20,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 1 | 輸入 FIFO | — | 完成 | `EventFIFO.sv`、`tb_event_fifo.sv` |
 | 2 | 候選神經元與 banking 位址(純組合邏輯) | 第 2 節「神經元」 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv`、`tb_candidate_axis.sv`、`tb_candidate_grid.sv` |
 | 3 | 權重 BRAM 讀取與 tap 選擇 | 第 2 節「權重」 | 完成 | `WeightMemory.sv`、`WeightTapSelect.sv`、`tb_weight_lookup.sv`、`sources_1/mem/` |
-| 4 | 神經元 BRAM($\hat V,t_{last}$)介面，一讀一寫兩個埠 | 第 2 節「神經元」、5.2、5.3 | 完成 | `NeuronMemory.sv`、`tb_neuron_memory.sv` |
+| 4 | 神經元 BRAM($\hat V,t_{last}$)介面，一讀一寫兩個埠 | 第 2 節「神經元」、5.2、5.3 | 完成 | `NeuronMemory.sv`、`NeuronMemoryClear.sv`、`tb_neuron_memory.sv` |
 | 5 | LIF 膜電位更新 | 第 3 節 | 完成 | `NeuronUpdate.sv`、`tb_neuron_update.sv` |
 | 6 | bitmask 優先權排序與輸出 | 第 4 節 | 完成 | `SpikeSelect.sv`、`tb_spike_select.sv` |
 | 6.5 | Part 2 補輸出窗左上角的 bank(`top_row_bank`、`left_col_bank`)給 Part 6 用 | 第 4 節補充 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv` 跟它們的 testbench、答案腳本 |
@@ -68,13 +68,14 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 
 ### 要接起來的模組，跟前面各 Part 留給 Part 7 的事
 
-- **`EventFIFO`**：`in_ready` 是 FIFO 的 `wr_ready`，`NeuronMemory` 的 `clearing` 期間再強制成 0(Conv.md 第 2 節「清除」)。
+- **`EventFIFO`**：`in_ready` 是 FIFO 的 `wr_ready`，`NeuronMemoryClear` 的 `clearing` 期間再強制成 0(Conv.md 第 2 節「清除」)。
 - **事件暫存器、$o_c$ 計數器**：$o_c$ 接 `CandidateGrid` 的 `out_channel`、`WeightMemory` 的位址。
 - **`CandidateGrid`**：送讀位址那一拍算出的候選存進候選暫存器，PROCESS、SENDING 都用這一份，到下一次送讀位址才換(Conv.md 5.7「候選存起來」)。
     - 存的是每個 bank 的 `valid`、`bank_addr`、$(o_y,o_x)$、$(k_y,k_x)$，跟 `top_row_bank`、`left_col_bank`。
     - tap 跟權重寬字對齊用的暫存器就是這一組(Part 3 定案)。
 - **`WeightMemory` + `WeightTapSelect`**：送讀位址那一拍送 $(o_c,c)$，PROCESS 那一拍用存起來的 tap 選權重碼。
-- **`NeuronMemory`**：送讀位址那一拍 `read_enable` 接候選的 `valid`；PROCESS 那一拍寫回，寫入位址是存起來的 `bank_addr`(`tb_neuron_memory` 已經這樣接)。
+- **`NeuronMemory`**：每個 bank 一份，跟 `NeuronUpdate` 放在同一個 generate 迴圈；`NeuronMemoryClear` 一層一份，`clearing`、`clear_addr` 接進每個 bank。
+    - 送讀位址那一拍 `read_enable` 接候選的 `valid`；PROCESS 那一拍寫回，寫入位址是存起來的 `bank_addr`(`tb_neuron_memory` 已經這樣接)。
     - 只寫回合法候選：`NeuronUpdate` 對不合法的候選也照算(Part 5 定案)。
     - $t_{last,new}=t$ 直接從事件暫存器接寫埠。
 - **`NeuronUpdate`**：generate 複製 $M\times M$ 份。
@@ -128,15 +129,19 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
     - 改完 `tb_event_fifo` ALL PASS(540 筆)，`tb_salt_conv` 9 組重跑 ALL PASS；合成變成 18 個 LUT 當記憶體，FF 降到 121~129 個。
     - 依據：UG949「Memory arrays should not be reset」、非同步 reset 會讓暫存器推不進 RAM primitive；UG901 Coding Guidelines「Do not asynchronously set or reset registers」。
         - 「保持原值」為什麼被做成同時有 set、reset 的暫存器，官方文件沒寫工具內部的做法，查不到確定的說明。
-    - 另外照 `WeightMemory`、`NeuronMemory` 的做法，`mem` 加上 `(* ram_style = "distributed" *)`(UG912 RAM_STYLE：「infer distributed LUT RAMs」)，資源類型寫明，不交給 Vivado 依大小判斷。加屬性之後沒有重跑模擬、合成。
-- out-of-context 合成(xck26，non-project，包裝 module 寫死參數；10 ns 時脈，輸入輸出延遲設 0，布局繞線後)：
+    - 另外照 `WeightMemory`、`NeuronMemory` 的做法，`mem` 加上 `(* ram_style = "distributed" *)`(UG912 RAM_STYLE：「infer distributed LUT RAMs」)，資源類型寫明，不交給 Vivado 依大小判斷。
+        - 2026-10-13 跟 `NeuronMemory` 拆分一起重跑模擬、合成：一樣是 18 個 LUT 當記憶體，FF 少 4 個(見下面合成表)。
+        - 少的是有非同步 reset 的 FF(FDCE 25→21)，RTL 統計少一個 4-bit 暫存器。用不加屬性的 `EventFIFO` 副本配新的 `NeuronMemory` 合成 conv1 繞回版，FF 回到 129，所以是屬性造成的，不是 `NeuronMemory` 拆分。少的是哪個暫存器、為什麼，沒有查到。
+- out-of-context 合成(xck26，non-project，包裝 module 寫死參數；10 ns 時脈，輸入輸出延遲設 0，布局繞線後)。2026-10-13 `NeuronMemory` 拆成單一 bank、`EventFIFO` 加 `ram_style` 之後重跑：
 
 | 設定 | LUT(其中當記憶體) | FF | CARRY8 | BRAM | DSP | 最長路徑 | 最高時脈 | `out_ready` 起點最長 |
 |---|---|---|---|---|---|---|---|---|
-| conv1 $w$=12 繞回 | 556(18) | 129 | 20 | 5 個 RAMB36 | 4 | 8.07 ns，17 層 | 116 MHz | 4.08 ns，8 層 LUT |
-| conv1 $w$=9 飽和 | 799(18) | 129 | 44 | 5 個 RAMB36 | 0 | 8.86 ns，20 層 | 107 MHz | 4.63 ns，8 層 LUT |
-| conv2 $w$=14 繞回 | 573(18) | 121 | 20 | 1 個 RAMB36 + 4 個 RAMB18 | 4 | 8.27 ns，18 層 | 113 MHz | 3.93 ns，7 層 LUT |
-| conv2 $w$=11 飽和 | 566(18) | 121 | 20 | 1 個 RAMB36 + 4 個 RAMB18 | 4 | 8.66 ns，19 層 | 109 MHz | 3.79 ns，7 層 LUT |
+| conv1 $w$=12 繞回 | 550(18) | 125 | 20 | 5 個 RAMB36 | 4 | 8.14 ns，17 層 | 116 MHz | 4.62 ns，8 層 LUT |
+| conv1 $w$=9 飽和 | 798(18) | 125 | 44 | 5 個 RAMB36 | 0 | 8.36 ns，19 層 | 113 MHz | 4.60 ns，8 層 LUT |
+| conv2 $w$=14 繞回 | 573(18) | 117 | 20 | 1 個 RAMB36 + 4 個 RAMB18 | 4 | 8.36 ns，17 層 | 112 MHz | 3.97 ns，7 層 LUT |
+| conv2 $w$=11 飽和 | 568(18) | 117 | 20 | 1 個 RAMB36 + 4 個 RAMB18 | 4 | 8.68 ns，19 層 | 108 MHz | 3.91 ns，7 層 LUT |
+
+- 改之前(2026-10-12)：LUT 556、799、573、566，FF 129、129、121、121，最高時脈 116、107、113、109 MHz，`out_ready` 起點 4.08、4.63、3.93、3.79 ns；BRAM、DSP、CARRY8 相同。時脈、路徑長度的差別在布局繞線的變動範圍內，資源只差上面 `ram_style` 的 4 個 FF 跟幾個 LUT。
 
 - 合成的觀察：
     - 最長路徑都是 `NeuronMemory` 讀出 → `NeuronUpdate` → 寫回同一個 bank，約 8~8.9 ns；最高時脈是用 10 ns 的 slack 換算的。Part 8 拆管線從這裡下手。
@@ -144,14 +149,20 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
     - `-lint`：每組 1~2 個 `ASSIGN-6`，都是 Part 5 記錄過、刻意丟掉的高位(`shifted_product`、`unfitted`)。
     - hold 檢查有 30 個端點不過(-0.18 ns)，起點全部是輸入 port 進 FIFO 的資料陣列：out-of-context 把輸入延遲設成 0 造成的，實際接上一層時訊號從暫存器出來，有 clock-to-Q 的延遲。
 
-### code review 要改的地方(review 走完一起改，改完全部 tb 重跑)
+### code review 要改的地方
 
-1. **`NeuronMemory` 改成單一 bank，跟 `NeuronUpdate` 放進同一個 genvar 迴圈**(2026-10-13 使用者提出，`SaltConv.sv` 第 327 行的 reviewer 註解)。
-    - 目的：一個 bank 的讀 → 算 → 寫回寫在同一個地方；`memory_read_enable`、`memory_membrane`、`memory_last_time`、`memory_write_enable`、`memory_write_time` 這幾個二維陣列拿掉。行為不變。
-    - 清除計數器用做法 A：`clearing`、`clear_addr` 搬到 `SaltConv`，只有一份，接進每個 bank。
+`SaltConv.sv` 的 review 在 2026-10-13 走完；testbench、答案腳本還沒 review。
+另外三條 reviewer 註解(第 86 行 `out_valid`、第 161 行預設值放 default、第 387 行 `oc_done` 的寫法)討論後不改，註解已拿掉。
+
+1. **`NeuronMemory` 改成單一 bank，跟 `NeuronUpdate` 放進同一個 genvar 迴圈**(2026-10-13 使用者提出，已改完，等使用者確認)。
+    - 目的：一個 bank 的讀 → 算 → 寫回寫在同一個地方；`memory_read_enable`、`memory_membrane`、`memory_last_time`、`memory_write_enable`、`memory_write_time` 這幾個二維陣列拿掉，改成迴圈內的區域訊號。行為不變。
+    - 清除計數器只有一份，接進每個 bank。拆成獨立的小模組 `NeuronMemoryClear`(做法 A1)，`SaltConv` 例化一份。
+        - 不直接寫在 `SaltConv` 裡(A2)：`tb_neuron_memory` 沒有 `SaltConv`，測不到計數器「剛好清 `BANK_DEPTH` 拍」；拆成模組之後 Part 4 的檢查、答案檔原封不動繼續用。
         - 不選每個 bank 各留一份計數器：$M\times M$ 份一樣的計數器，`clearing` 也有 $M\times M$ 個要挑一個接給 `in_ready`。
-    - 跟著改：`NeuronMemory.sv`(拿掉 bank 的 generate、清除計數器，port 變單一)；`tb_neuron_memory.sv`(自己 generate $M\times M$ 份、自己產生清除，Part 4 重跑)；`tb_salt_conv.sv` 快照路徑改成 `dut.row_banks[r].col_banks[c].neuron_memory.bank`；TODO Part 4、Conv.md 寫到 `NeuronMemory` 結構的地方。答案腳本、答案檔不用動。
-    - 改完拿掉第 327 行的 reviewer 註解。
+    - `NeuronMemory`、`NeuronMemoryClear` 的參數直接收 `BANK_DEPTH`，單一 bank 不用知道層的形狀。
+    - 改的檔案：`NeuronMemory.sv`、`NeuronMemoryClear.sv`(新)、`SaltConv.sv`、`tb_neuron_memory.sv`(一份計數器 + generate $M\times M$ 個 bank)、`tb_salt_conv.sv`(快照路徑改成 `dut.row_banks[r].col_banks[c].neuron_memory.bank`)、`run_tb_neuron_memory.tcl`(第一次跑時把 `NeuronMemoryClear.sv` 加進 sources_1)、TODO Part 4。答案腳本、答案檔沒動。
+    - 結果：`run_tb_neuron_memory.tcl` 9 組 ALL PASS；`run_tb_salt_conv.tcl` 9 組 ALL PASS，比對筆數跟改之前相同；合成見上面的表。
+        - `run_tb_salt_conv.tcl` 第一次跑時，第 1 組 elaborate 報 `Spawn failed: %1 不是有效的 Win32 應用程式`(compile 有過)，原封不動重跑就正常，原因不明，記在 vivado-usage skill 8.7。
 
 ## Part 6 bitmask 優先權排序與輸出(完成)
 
@@ -372,6 +383,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 
 1. **模組切法**：`NeuronMemory` 一個模組包 $M\times M$ 個 bank 跟清除邏輯，port 照 `CandidateGrid` 用 `[r_y][r_x]` 的 unpacked array。
     - 清除要一個共用計數器同時寫所有 bank，放同一個模組。
+    - **2026-10-13 Part 7 code review 改掉**：`NeuronMemory` 改成單一 bank，上層 generate $M\times M$ 份；清除計數器拆成 `NeuronMemoryClear`，一層一份，接進每個 bank；參數改成直接收 `BANK_DEPTH`。見 Part 7「code review 要改的地方」第 1 條。
     - 運算(Part 5)、哪一拍讀寫(Part 7)都不在這裡。
 2. **打包**：一格 $\{t_{last},\hat V\}$，$\hat V$ 在低位，寬 $w+$`TIME_WIDTH`；port 上兩個欄位分開，打包拆包在模組內。
     - 參數直接收 `MEMBRANE_WIDTH`($w$)，記憶體用不到 $i_V$、$f_V$ 的切法。
@@ -388,7 +400,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 結果：
 
 - 模擬：`scripts/gen_neuron_memory_ref.py` 產生答案，`scripts/run_tb_neuron_memory.tcl` 跑 9 組參數，全部 ALL PASS。
-    - testbench 例化 `CandidateGrid` + `NeuronMemory`，讀寫位址都由 RTL 的 `CandidateGrid` 算；上一拍的 `valid`、`bank_addr` 存起來當這一拍的寫入位址(5.3 的時序，讀取延遲 1 拍)。
+    - testbench 例化 `CandidateGrid` + `NeuronMemory`(2026-10-13 起是 `NeuronMemoryClear` + $M\times M$ 份單一 bank 的 `NeuronMemory`，檢查跟答案檔不變)，讀寫位址都由 RTL 的 `CandidateGrid` 算；上一拍的 `valid`、`bank_addr` 存起來當這一拍的寫入位址(5.3 的時序，讀取延遲 1 拍)。
     - 五段：清除 → 全部讀一遍(全 0)→ 隨機讀改寫 → 全部讀一遍(最後寫的值)→ 再清除、全部讀一遍(全 0)。
         - 隨機讀改寫：隨機事件，$o_c$ 照 $0\sim OC-1$；讀出後下一拍寫回隨機值，涵蓋 $w$ 位元有號、`TIME_WIDTH` 位元的上下限；隨機插空拍，讀寫撞到同一顆神經元時也插空拍。
         - 每一拍比對：有候選的 bank 比讀出值，沒有候選的 bank 比保持值，每個 bank 的 `valid` 也跟 Python 比。
@@ -467,6 +479,10 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 - **testbench**：讀答案檔逐筆比對，不一致印出輸入、欄位、預期值、實際值，最後印一行總結(`ALL PASS` / `FAIL`)。
     - 參數用 generic 帶入，答案檔目錄用 `-testplusarg REF_DIR=` 帶入。
     - 範例：`tb_candidate_grid.sv`。
+    - **Part 8 之後：一個 testbench 的目標要小而明確**(2026-10-13 使用者定的)。目標不是「這個模組對不對」，而是「這個模組在某一種情況(某種反壓方式、某個狀態)下對不對」，不同情況拆成不同檔案。
+        - 機制維持現有寫法(一個 `initial` 流程，negedge 給值、posedge 前檢查)，不改用多個並行 process、SVA 這類新機制：之前多個 process 的寫法出過很多錯。
+        - 怎麼拆由規劃時評估。拆不開的不硬拆，例如反壓下「資料有沒有少、有沒有亂」還是要對答案，交握規則跟對答案不一定能分成兩支。
+        - 起因：`tb_salt_conv` 一支同時測計算結果、拍數、4 種反壓模式、交握規則、8 項涵蓋率，review 時看不懂，模式怎麼選也沒能好好討論。這支已經驗證過，先不拆。
 - **跑模擬**：一個 testbench 一個模擬集，`scripts/run_tb_*.tcl` 跑所有參數組，共用流程在 `scripts/sim_common.tcl`。
     - 多組參數一律用 batch 模式跑；從 GUI 的 Tcl Console 跑，連續 elaborate 會不定時出現 `Spawn failed`(原因不明)。
     - GUI 只用來跑 testbench 預設參數的單組模擬、看波形。
