@@ -179,7 +179,7 @@ module SaltConv #(
 	assign last_channel      = (current_channel == OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1));
 	// 沒有 o_c 在做,或這個 o_c 是最後一個:下一個是 FIFO 那筆事件的 o_c = 0;否則是同一筆事件的 o_c + 1
 	assign next_from_fifo    = !oc_in_progress || last_channel;
-	// 同一筆事件的 o_c + 1 一定有;從 FIFO 來的話,FIFO 要有事件
+	// 下一個 oc 可不可用看: 是不是同一筆事件的 oc + 1 (!next_from_fifo) 如果不是就看 fifo 拿不拿的了 (fifo_read_valid)
 	assign next_oc_available = !next_from_fifo || fifo_read_valid;
 
 	// 下一個 o_c 要讀的那筆:新事件用 FIFO 最前面那筆,否則用事件暫存器

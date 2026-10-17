@@ -753,8 +753,7 @@ $$
 ### 5.7 無腦版的狀態機
 
 - 5.2 無腦版每一拍做的事只有三種，用三個`狀態`表示；5.1 的推進規則、5.4 前半(只走 bitmask 的送出)、5.6 的換事件都收在狀態之間的轉移裡
-
-![SaltConvFSM](Conv-image/SaltConvFSM.svg)
+- 這節是無腦版(Part 7)的推導，留著對照；現行的管線化版(5.3)把三個狀態換成兩個 1 bit 暫存器，狀態圖見 [Conv-image/SaltConvControl.md](Conv-image/SaltConvControl.md)，資料流程圖見 [Conv-image/SaltConvDataflow.md](Conv-image/SaltConvDataflow.md)
 
 - **三個狀態**：
 

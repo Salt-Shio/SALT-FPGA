@@ -25,10 +25,25 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 6 | bitmask 優先權排序與輸出 | 第 4 節 | 完成 | `SpikeSelect.sv`、`tb_spike_select.sv` |
 | 6.5 | Part 2 補輸出窗左上角的 bank(`top_row_bank`、`left_col_bank`)給 Part 6 用 | 第 4 節補充 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv` 跟它們的 testbench、答案腳本 |
 | 7 | pipeline FSM 整合，先做無腦版(含只走 bitmask 的反壓) | 5.1、5.2、5.4 前半、5.6、5.7 | 完成 | `SaltConv.sv`、`tb_salt_conv.sv`(8.1 拆成 `tb_salt_conv_*`) |
-| 8.1 | 管線化：算完那一拍直接從 $s$ 挑、直接送下一個 $o_c$ 的讀位址(含快路徑的反壓) | 5.3、5.4 後半 | 實作、驗證完成，等使用者確認 | `SaltConv.sv`、`tb_salt_conv_common.svh`、`tb_salt_conv_ready_{high,random,burst,alternate}.sv` |
-| 8.x | 拆級($R$、$C$)、$o_c$ 重疊 | 5.5、第 5 節開頭 | 8.1 量完速度再規劃，見「Part 8.1 之後」 | |
+| 8.1 | 管線化：算完那一拍直接從 $s$ 挑、直接送下一個 $o_c$ 的讀位址(含快路徑的反壓) | 5.3、5.4 後半 | 完成 | `SaltConv.sv`、`tb_salt_conv_common.svh`、`tb_salt_conv_ready_{high,random,burst,alternate}.sv` |
+| 8.x | 拆級($R$、$C$)、$o_c$ 重疊 | 5.5、第 5 節開頭 | 下一步，待規劃 | |
 
-## 下一步：Part 8.1 管線化(實作、驗證完成，等使用者確認)
+## 下一步：Part 8.1 之後的管線優化(還沒開始，待規劃)
+
+- 下一個 session 的重點。Part 8 一次只處理一個策略或一個機制，規劃時先列出這次要做哪一個、怎麼量、怎麼驗證，給使用者確認。
+- 比較的做法照下面 Part 8.1 開頭的「比較的做法」；8.1 的速度、資源數字在 Part 8.1「結果」，是拆級要比的基準。
+- 8.1 留下的待討論事項見 Part 8.1「之後討論與評估」。
+- 讀現行 RTL：`SaltConv.sv` 照事件流程分 0~6 段(檔頭有目錄)；資料流程圖、狀態圖在 `docs/SNN/Concept/Layer-RTL/Conv-image/SaltConvDataflow.md`、`SaltConvControl.md`。
+- **拆級($R$、$C$)**：$o_c$ 不重疊時，多拆一級每個 $o_c$ 就多 1 拍(5.5 的 $\text{gap}=(R+C-2)+\max(1,k)$)。
+    - $C=2$ 的時脈要超過 8.1 的兩倍、$R=C=2$ 要超過三倍，才比只做 8.1 快。
+    - 時脈翻倍，每條路徑都要在 5 ns 內；`out_ready` → `CandidateGrid` → BRAM 位址那條 Part 7 已經 3.9~4.6 ns(8.1 之後 `out_ready` 起點最長 1.05~1.09 ns)。要量。
+    - 拆級另一個用處：系統時脈被別的模組定死時，這一層要跟得上。
+    - 跟著的：乘法器 DSP 還是 LUT(切在 DSP 內部暫存器上結論可能反過來，見「合成後要確認」)；BRAM 輸出暫存器(`Synth 8-7052`)加了就是 $R=2$；事件暫存器可能每一級各一份；$R$、$C$ 變成參數。
+- **$o_c$ 重疊**(下一個 $o_c$ 先讀、前一個還在算)：Conv.md 第 5 節開頭決定 5.1~5.5 先不做。
+    - 只在拆級能把時脈拉高很多時才有意義：重疊後拆出來的級數不再加到每個 $o_c$ 上。
+    - 「已定案設計 → 目前不做」的理由(省固定 2~3 拍)只在 $R=C=1$ 成立；$R+C>2$ 時重疊每個 $o_c$ 省 $R+C-2$ 拍。
+
+## Part 8.1 管線化(完成)
 
 Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 跟使用者確認)。
 後面的小 Part 等前一個做完、量過速度再規劃，見「Part 8.1 之後」。
@@ -139,6 +154,9 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
     - 每拍都開：讀取開關不用等推進的判斷，量起來稍快(時脈多 0.5~4 MHz，接近布局繞線的變動範圍)；卡住的拍子($k\ge2$、`out_ready=0`)會白讀記憶體，多耗電。
     - 推進才開：不會白讀；讀取開關接在推進的判斷後面，慢一點點。
     - 還沒評估：白讀的次數、多耗多少電。
+- **testbench 重整**(2026-10-17 review 時討論)：`tb_salt_conv_common.svh` 的 `run_sample` 一個 task 把驅動、交握規則檢查、涵蓋統計、拍數、比對混在一起，看不出在測什麼。
+    - 方向：共用可以(避免同一段檢查改四次)，但核心流程(餵資料、比輸出、比神經元狀態)要在一個地方看得完；涵蓋統計拆開，跟核心分開。
+    - 不急著做，碰到要改 testbench 時一起處理。
 
 ### 實作與驗證(2026-10-15，使用者交代 2a~2d 一次做完，之後看 `SaltConv.sv` 理解)
 
@@ -201,6 +219,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 - conv1 → conv2 串接 102.6 MHz；conv1 讀出 → conv2 `EventFIFO` 寫入 8.99 ns，不是最長。
 - `out_ready` 起點最長 1.05~1.09 ns(無腦版 3.9~4.6 ns)。
 - `-lint` 只有 Part 5 記錄過的 `ASSIGN-6`；`Synth 8-7052`(BRAM 沒併入輸出暫存器)照舊，屬於「Part 8.1 之後」的 $R=2$。
+- review 後(2026-10-17)：`SaltConv.sv` 照事件流程重排成 0~6 段(只動位置不動邏輯，排序比對程式碼行 + 四支 × 9 組重跑 ALL PASS)；補資料流程圖、狀態圖(`Conv-image/SaltConvDataflow.md`、`SaltConvControl.md`)，舊的無腦版狀態圖 `SaltConvFSM.drawio/.svg` 刪掉。
 
 ### Conv.md 已經寫到的(不用重新討論)
 
@@ -212,17 +231,6 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 | 換事件時規則不變 | 已定案 | 5.6 |
 | 讀位址不等推進的判斷、「上一拍有沒有推進」暫存器 | 2026-10-15 定案(讀取開關待評估) | 5.3 改動四 |
 | $OC=1$ 算完那一拍一律不推進 | 2026-10-15 定案 | 5.3「$OC=1$」 |
-
-## Part 8.1 之後(還沒開始，8.1 量完速度再規劃)
-
-- **拆級($R$、$C$)**：$o_c$ 不重疊時，多拆一級每個 $o_c$ 就多 1 拍(5.5 的 $\text{gap}=(R+C-2)+\max(1,k)$)。
-    - $C=2$ 的時脈要超過 8.1 的兩倍、$R=C=2$ 要超過三倍，才比只做 8.1 快。
-    - 時脈翻倍，每條路徑都要在 5 ns 內；`out_ready` → `CandidateGrid` → BRAM 位址那條 Part 7 已經 3.9~4.6 ns。要量。
-    - 拆級另一個用處：系統時脈被別的模組定死時，這一層要跟得上。
-    - 跟著的：乘法器 DSP 還是 LUT(切在 DSP 內部暫存器上結論可能反過來，見「合成後要確認」)；BRAM 輸出暫存器(`Synth 8-7052`)加了就是 $R=2$；事件暫存器可能每一級各一份；$R$、$C$ 變成參數。
-- **$o_c$ 重疊**(下一個 $o_c$ 先讀、前一個還在算)：Conv.md 第 5 節開頭決定 5.1~5.5 先不做。
-    - 只在拆級能把時脈拉高很多時才有意義：重疊後拆出來的級數不再加到每個 $o_c$ 上。
-    - 「已定案設計 → 目前不做」的理由(省固定 2~3 拍)只在 $R=C=1$ 成立；$R+C>2$ 時重疊每個 $o_c$ 省 $R+C-2$ 拍。
 
 ## Part 7 pipeline FSM 整合，無腦版(完成)
 
@@ -239,7 +247,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 
 1. **狀態機直接寫在 `SaltConv` 裡**，不另開模組。
     - 狀態機單獨拿出來沒有訓練端的答案可以比，最後都是測整個 `SaltConv`，拆出去沒有換到更好測。
-2. **三個狀態 IDLE、PROCESS、SENDING**：狀態表、轉移條件寫在 Conv.md 5.7，圖是 `docs/SNN/Concept/Layer-RTL/Conv-image/SaltConvFSM.drawio`(Conv.md 嵌的是匯出的 `.svg`)。
+2. **三個狀態 IDLE、PROCESS、SENDING**：狀態表、轉移條件寫在 Conv.md 5.7(原本的圖 `SaltConvFSM.drawio/.svg` 在 8.1 之後刪掉，現行狀態圖見 `Conv-image/SaltConvControl.md`)。
     - IDLE：等事件；FIFO 空、神經元記憶體清除中都停在這裡。
     - PROCESS：讀出的資料就緒，$M\times M$ 份 `NeuronUpdate` 算，合法候選寫回，$s\land valid$ 存進 bitmask。下一拍一定是 SENDING。
     - SENDING：`SpikeSelect` 挑一個送出，`out_ready=1` 才清 bit；bitmask 會變空時同拍送下一個 $o_c$ 的讀位址。
