@@ -24,11 +24,11 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 5 | LIF 膜電位更新 | 第 3 節 | 完成 | `NeuronUpdate.sv`、`tb_neuron_update.sv` |
 | 6 | bitmask 優先權排序與輸出 | 第 4 節 | 完成 | `SpikeSelect.sv`、`tb_spike_select.sv` |
 | 6.5 | Part 2 補輸出窗左上角的 bank(`top_row_bank`、`left_col_bank`)給 Part 6 用 | 第 4 節補充 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv` 跟它們的 testbench、答案腳本 |
-| 7 | pipeline FSM 整合，先做無腦版(含只走 bitmask 的反壓) | 5.1、5.2、5.4 前半、5.6、5.7 | 完成 | `SaltConv.sv`、`tb_salt_conv.sv` |
-| 8.1 | 管線化：算完那一拍直接從 $s$ 挑、直接送下一個 $o_c$ 的讀位址(含快路徑的反壓) | 5.3、5.4 後半 | 討論中，見「下一步」 | |
+| 7 | pipeline FSM 整合，先做無腦版(含只走 bitmask 的反壓) | 5.1、5.2、5.4 前半、5.6、5.7 | 完成 | `SaltConv.sv`、`tb_salt_conv.sv`(8.1 拆成 `tb_salt_conv_*`) |
+| 8.1 | 管線化：算完那一拍直接從 $s$ 挑、直接送下一個 $o_c$ 的讀位址(含快路徑的反壓) | 5.3、5.4 後半 | 實作、驗證完成，等使用者確認 | `SaltConv.sv`、`tb_salt_conv_common.svh`、`tb_salt_conv_ready_{high,random,burst,alternate}.sv` |
 | 8.x | 拆級($R$、$C$)、$o_c$ 重疊 | 5.5、第 5 節開頭 | 8.1 量完速度再規劃，見「Part 8.1 之後」 | |
 
-## 下一步：Part 8.1 管線化(討論中)
+## 下一步：Part 8.1 管線化(實作、驗證完成，等使用者確認)
 
 Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 跟使用者確認)。
 後面的小 Part 等前一個做完、量過速度再規劃，見「Part 8.1 之後」。
@@ -96,7 +96,9 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 - 管線化後讀下一個 $o_c$ 跟寫這個 $o_c$ 在同一拍；$OC=1$ 時下一個 $o_c$ 是下一筆事件的 $o_c=0$，可能是同一顆神經元，讀出值不保證。是管線化本身的問題，跟讀位址的做法無關。
 - **已定案(2026-10-15)**：$OC=1$ 時算完那一拍一律不推進，下一拍才推進，$\text{gap}=\max(2,k)$；只在 $OC=1$ 時產生這段電路。寫在 Conv.md 5.3「$OC=1$」。
     - 不選「撞到才多等」(位址比較接進推進的判斷，路徑更長)、forwarding(二選一接在最長路徑上，拆級後每一級都要轉)。
-    - 驗證：Part 7 人工參數組 1×1、$OC=1$ 每筆事件都撞同一顆神經元，做錯一定抓得到。
+    - 驗證：人工參數組 1×1、$OC=1$ 每筆事件都撞同一顆神經元。
+        - 原本的資料抓不到：唯一的 $o_c$ 套了「最後一個 $o_c$ 門檻壓低、一定 fire」，每筆都 fire 歸零，膜電位永遠是 0，讀到舊值也一樣是 0(反向測試只有拍數錯，見「實作與驗證」)。
+        - 答案腳本改成 $OC=1$ 時權重至少 1、門檻比單筆權重上限高，累積幾筆才 fire；改完反向測試四支 testbench 都抓到膜電位錯。
 
 ### 草稿量測：管線化划不划算(2026-10-15)
 
@@ -138,11 +140,67 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
     - 推進才開：不會白讀；讀取開關接在推進的判斷後面，慢一點點。
     - 還沒評估：白讀的次數、多耗多少電。
 
-### 這個 Part 要跟著改的
+### 實作與驗證(2026-10-15，使用者交代 2a~2d 一次做完，之後看 `SaltConv.sv` 理解)
 
-- `out_ready` 的路徑：管線化後 `out_ready` 多決定「存整批還是存剩下的」、「要不要送讀位址」，要重量。
-- 拍數公式、答案腳本：模式 A 比的拍數改成 5.3 的 $\max(1,k)$。
-- testbench 照「驗證流程」的新原則：一支只測一種情況，拆多個檔案，機制維持單一 `initial` 流程。
+- **RTL(`SaltConv.sv`)**：照草稿寫成正式版，草稿比較用的參數拿掉，註解補完整。
+    - 無腦版的 IDLE / PROCESS / SENDING 換成兩個 1 bit 暫存器：`oc_in_progress`(有 $o_c$ 在做)、`compute_cycle`(這一拍讀出的是這個 $o_c$ 的資料：算、寫回、挑 $s$)。
+    - `SpikeSelect` 的輸入 `pending` 是二選一：`compute_cycle` 時是 $s\land valid$，否則是 bitmask；bitmask 每拍存「這一拍做完剩下的」，`out_ready=0` 時就是整份。
+    - 讀位址來源用 `next_from_fifo`(沒有 $o_c$ 在做，或這個 $o_c$ 是最後一個)選，只看暫存器；讀取開關 `read_enable` = 下一個 $o_c$ 有東西可做，每拍都讀(讀取開關待評估，見「之後討論與評估」)。
+    - $OC=1$：`oc_done` 在 `compute_cycle` 那一拍強制 0，只在 $OC=1$ 時有這一項(常數比較，$OC\ge2$ 合成掉)。
+    - 計數器、事件暫存器沒有 reset 值：沒有 $o_c$ 在做時讀位址一律指向 FIFO，不用計數器；bitmask 在沒有 $o_c$ 在做時存 0。
+- **答案腳本(`gen_salt_conv_ref.py`)**：
+    - 拍數改成 $\sum\max(1,k)$，$OC=1$ 時 $\sum\max(2,k)$；量法是第一個 $o_c$ 算的那一拍到最後一個 $o_c$ 送完那一拍。
+    - 涵蓋行多一項 `stall_on_compute_cycle`(有 fire 就碰得到)：算的那一拍下游不收，是管線化新出現的情況(5.4 後半)。
+    - 人工參數 $OC=1$ 改成累積幾筆才 fire(見「已知問題 2」的驗證)；$OC\ge2$ 的人工資料跟原本完全相同。
+    - 重新產生答案檔：輸出事件、神經元狀態跟原本相同，只有拍數、涵蓋行變了(1×1、$OC=1$ 那組資料本身也變了)。
+- **testbench 拆成四支**，共用的部分放 `tb_salt_conv_common.svh`(各支 `` `include ``)：讀答案、接 DUT、比輸出事件跟神經元狀態、每拍的交握規則檢查、涵蓋計數、總結行。每支只寫驅動方式(四個函式)跟要求哪些涵蓋。機制照舊：一個 `initial` 流程。
+    - 涵蓋要求照「這支的驅動方式一定碰得到」分配，第一輪照舊版四種模式加總的要求分，random、burst、alternate 有參數組碰不到，調整成下表：
+
+| testbench | 下游 `out_ready` | 上游 | 另外比 | 要求的涵蓋 |
+|---|---|---|---|---|
+| `ready_high` | 一直 1 | 一直送 | 拍數 | FIFO 滿擋上游、清除期間送事件 |
+| `ready_random` | 每拍隨機 | 7 成機率送；每筆收走後 2 成機率等整層空下來 | — | 五種被擋的位置、`out_valid=0` 時不收、空下來再接事件、清除期間送事件 |
+| `ready_burst` | 連續 0、連續 1 各 1~80 拍交替 | 7 成機率送，不等 | — | 被擋時是算的那一拍、還剩 2 個以上、$o_c$ 最後一個、事件最後一個且 FIFO 有下一筆；`out_valid=0` 時不收、FIFO 滿擋上游、清除期間送事件 |
+| `ready_alternate` | 0、1 交替 | 一直送 | — | `out_valid=0` 時不收、FIFO 滿擋上游、清除期間送事件 |
+
+- 涵蓋要求調整的理由：
+    - 「事件最後一個且 FIFO 空」：要上游停下來。原本放 burst(等整層空下來)，但整層空下來多半在下游「收」的那一段，接著那一筆在同一段就做完，$OC=3$ 的兩組 0 次；改放 random(下游每拍隨機，空下來後那一筆最後一個 $o_c$ 一半機會被擋)。
+    - 「FIFO 滿擋上游」：burst 原本每 5 筆左右就等空下來，人工參數組塞不滿；改要求一直送的 high、alternate，burst 拿掉等空下來之後也要求。
+    - alternate 不要求被擋的位置：`out_ready` 固定交替，fire 落在哪一拍跟參數綁死，例如 $OC=1$ 一筆 2 拍，算的那一拍永遠是 `out_ready=1`。
+- **模擬腳本(`run_tb_salt_conv.tcl`)**：舊的 `tb_salt_conv.sv` 跟模擬集 `sim_salt_conv` 刪掉，四支各一個模擬集 `sim_salt_conv_ready_*`。
+    - 一個 Vivado session 只跑一個模擬集：同一個 session 依序跑第二個模擬集時，`launch_simulation` 沿用第一個的檔案清單(編譯到第一支 testbench，elaborate 找不到 top)。
+        - 原始碼依據：`<Vivado>/data/XilinxTclStore/tclapp/xilinx/xsim/sim.tcl` 的 `setup` 收到內部旗標 `-int_setup_sim_vars` 時不重新初始化變數、`usf_xsim_setup_simulation` 不重新抓檔案清單；什麼時候帶這個旗標由 C++ 端決定，看不到。記在 vivado-usage skill 8.8。
+        - 腳本改成：只給一支 testbench 時在這個 session 跑；沒給或給多支時，每支 `exec` 一個子 Vivado，log 寫 `SaltConv.sim/<testbench>.log`。
+
+#### 結果
+
+- 模擬：`run_tb_salt_conv.tcl` 四支 × 9 組全部 ALL PASS，輸出事件、神經元狀態 0 錯誤，要求的涵蓋全部碰到。
+    - 每組比對筆數跟 Part 7 相同：訓練端 conv1 約 2.5 萬筆輸出、2.3 萬筆神經元狀態，conv2 約 1.2 萬筆、1.3 萬筆；1×1、$OC=1$ 那組資料改過，52 筆輸出。
+    - `ready_high` 的拍數 9 組全部對上答案($\sum\max(1,k)$，$OC=1$ 是 $\sum\max(2,k)$)：conv1 一筆沒有 fire 的事件 8 拍、conv2 16 拍(不含開頭讀 $o_c=0$ 的 1 拍)。
+- 反向測試(人工參數 5 組 × 四支，跑完 RTL、答案檔都還原，`cmp` 確認跟原本相同)：
+
+| 改壞的地方 | 結果 | 沒抓到的組合，為什麼 |
+|---|---|---|
+| 算的那一拍下游不收，還是清掉挑出的那個 | random、burst 全 FAIL；alternate 4 組 FAIL | high 下游從不擋；alternate 的 $OC=1$ 算的那一拍永遠是 `out_ready=1` |
+| 不是算的那一拍也寫回 | 4 組 × 四支 FAIL；$OC=1$ 在 random、burst FAIL | $OC=1$ 在 high、alternate 算完只多 1 拍：那一拍讀出的是同拍讀寫的舊值，重算結果跟算的那一拍相同，寫回同一個值；random、burst 下游擋住多停幾拍，讀到新值再算一次就錯 |
+| $OC=1$ 算的那一拍照樣推進 | 1×1、$OC=1$ 那組四支都 FAIL(膜電位錯 31~36 筆)，其他組 PASS | 其他組 $OC\ge2$，這條規則不起作用 |
+| 換事件時讀位址的 x 用事件暫存器 | 4 組 × 四支 FAIL | 1×1 輸入座標永遠是 0，分不出來 |
+| 答案檔改一筆輸出的 $t$ | 只有那一組 FAIL，四支各 1 筆 | — |
+
+- 1×1、$OC=1$ 資料改之前，「$OC=1$ 算的那一拍照樣推進」只有 high 報拍數錯。用帶監看的 testbench 副本確認：讀寫相撞 236 次、確實讀到舊值(例如 $t_{last}$ 讀到 5，正確是 6)，但寫回的膜電位每次都是 0，舊值新值一樣。模擬裡同一拍讀寫同一格讀到舊值，另用小 testbench 直接測過。
+- 合成(正式版，條件跟草稿相同)：
+
+| 設定 | 最高時脈 | 一個沒有 fire 的 $o_c$ | LUT | FF | BRAM tile | DSP | 最長路徑 |
+|---|---|---|---|---|---|---|---|
+| conv1 $w$=12 繞回 | 104.4 MHz | 9.6 ns | 591 | 125 | 5 | 4 | 推進判斷 → FIFO 讀指標 CE，9.39 ns，23 層 |
+| conv1 $w$=9 飽和 | 102.3 MHz | 9.8 ns | 934 | 125 | 5 | 0 | 同上，9.58 ns，22 層 |
+| conv2 $w$=14 繞回 | 105.3 MHz | 9.5 ns | 556 | 117 | 3 | 4 | 推進判斷 → 事件暫存器 CE，9.31 ns，23 層 |
+| conv2 $w$=11 飽和 | 102.6 MHz | 9.7 ns | 574 | 117 | 3 | 4 | 推進判斷 → FIFO `full` CE，9.56 ns，23 層 |
+
+- 跟草稿差 1~2 MHz，在布局繞線的變動範圍內；FF、BRAM、DSP、CARRY8 跟無腦版相同。
+- conv1 → conv2 串接 102.6 MHz；conv1 讀出 → conv2 `EventFIFO` 寫入 8.99 ns，不是最長。
+- `out_ready` 起點最長 1.05~1.09 ns(無腦版 3.9~4.6 ns)。
+- `-lint` 只有 Part 5 記錄過的 `ASSIGN-6`；`Synth 8-7052`(BRAM 沒併入輸出暫存器)照舊，屬於「Part 8.1 之後」的 $R=2$。
 
 ### Conv.md 已經寫到的(不用重新討論)
 
@@ -621,7 +679,8 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
     - **Part 8 之後：一個 testbench 的目標要小而明確**(2026-10-13 使用者定的)。目標不是「這個模組對不對」，而是「這個模組在某一種情況(某種反壓方式、某個狀態)下對不對」，不同情況拆成不同檔案。
         - 機制維持現有寫法(一個 `initial` 流程，negedge 給值、posedge 前檢查)，不改用多個並行 process、SVA 這類新機制：之前多個 process 的寫法出過很多錯。
         - 怎麼拆由規劃時評估。拆不開的不硬拆，例如反壓下「資料有沒有少、有沒有亂」還是要對答案，交握規則跟對答案不一定能分成兩支。
-        - 起因：`tb_salt_conv` 一支同時測計算結果、拍數、4 種反壓模式、交握規則、8 項涵蓋率，review 時看不懂，模式怎麼選也沒能好好討論。這支已經驗證過，先不拆。
+        - 起因：`tb_salt_conv` 一支同時測計算結果、拍數、4 種反壓模式、交握規則、8 項涵蓋率，review 時看不懂，模式怎麼選也沒能好好討論。Part 8.1 已拆成四支(一種驅動方式一支，共用部分放 `tb_salt_conv_common.svh`)。
+    - **一個 Vivado session 只跑一個模擬集**(2026-10-15 踩到)：同一個 session 跑第二個模擬集，`launch_simulation` 會沿用第一個的檔案清單。多支 testbench 要連續跑，每支開一個 batch Vivado(見 vivado-usage skill 8.8、`run_tb_salt_conv.tcl`)。
 - **跑模擬**：一個 testbench 一個模擬集，`scripts/run_tb_*.tcl` 跑所有參數組，共用流程在 `scripts/sim_common.tcl`。
     - 多組參數一律用 batch 模式跑；從 GUI 的 Tcl Console 跑，連續 elaborate 會不定時出現 `Spawn failed`(原因不明)。
     - GUI 只用來跑 testbench 預設參數的單組模擬、看波形。

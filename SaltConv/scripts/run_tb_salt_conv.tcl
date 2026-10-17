@@ -1,23 +1,66 @@
-# Run tb_salt_conv once per parameter set, using simulation set sim_salt_conv of the SaltConv project.
+# Run the four tb_salt_conv_* testbenches once per parameter set, each in its own simulation set
+# (sim_salt_conv_ready_high, ..._random, ..._burst, ..._alternate) of the SaltConv project.
+# Each testbench covers one downstream/upstream driving pattern; the shared checks are in tb_salt_conv_common.svh.
 # Generate the reference files first (WSL): gen_salt_conv_ref.py.
 # The parameter list below must match TRAINED_SETS and SYNTHETIC_SETS in that script.
-# The first run also adds SaltConv.sv to sources_1 and creates the simulation set; later runs skip that.
-# Compile runs once; each parameter set changes the simset generic, then elaborates and simulates.
+# The first run also adds SaltConv.sv to sources_1 and creates the simulation sets; later runs skip that.
+# Per testbench, compile runs once; each parameter set changes the simset generic, then elaborates and simulates.
+# One Vivado session runs one simulation set only: in the launch_simulation -step flow, a later simset in the same
+# session can reuse the design file list of the previous one (seen in 2025.2: the compile of the second simset
+# analyzed the first simset's testbench; see the vivado-usage skill). So:
+#   one testbench name in -tclargs : run that testbench in this session
+#   no -tclargs, or several names  : start one child Vivado (batch) per testbench, one after another;
+#                                    each child writes SaltConv.sim/<testbench>.log
 # Usage:
 #   PowerShell (batch mode, close the GUI first):
 #       cd D:\Project\SALT-FPGA\SaltConv\SaltConv.sim
 #       vivado -mode batch -source D:/Project/SALT-FPGA/SaltConv/scripts/run_tb_salt_conv.tcl
+#   Run only some testbenches: add -tclargs followed by their names, e.g. -tclargs tb_salt_conv_ready_high
 #   Do not source this from the GUI Tcl console: there the repeated elaborate steps intermittently fail with
 #   'Spawn failed' (cause unknown, see the vivado-usage skill, section 8.7). Use the GUI only for a single
 #   Run Simulation with the testbench defaults.
 #   (Vivado writes vivado.log/.jou and crash dumps to the launch directory; start it inside SaltConv.sim.)
-# Outputs go to SaltConv.sim/sim_salt_conv/behav/xsim; each set is judged from simulate.log right after it runs.
+# Outputs go to SaltConv.sim/<simset>/behav/xsim; each set is judged from simulate.log right after it runs.
+# All testbenches run even if one fails; the script raises an error at the end if any failed.
 # This file is ASCII only: Vivado reads Tcl sources in the system code page, not UTF-8.
 
 set scripts_dir [file dirname [file normalize [info script]]]
 source [file join $scripts_dir sim_common.tcl]
 
-set simset_name sim_salt_conv
+set testbenches [list tb_salt_conv_ready_high tb_salt_conv_ready_random tb_salt_conv_ready_burst \
+    tb_salt_conv_ready_alternate]
+if {[llength $argv] > 0} {
+    set testbenches $argv
+}
+
+# Several testbenches: one child Vivado per testbench, then report from their logs
+if {[llength $testbenches] > 1} {
+    set sim_dir [file normalize [file join $scripts_dir .. SaltConv.sim]]
+    set vivado_bat [file join $::env(XILINX_VIVADO) bin vivado.bat]
+    set failed_testbenches {}
+    foreach tb_name $testbenches {
+        set log_path [file join $sim_dir $tb_name.log]
+        puts "##### $tb_name: running in a child Vivado, log $log_path"
+        set child_failed [catch {exec -ignorestderr $vivado_bat -mode batch -nojournal -log $log_path \
+            -source [info script] -tclargs $tb_name} child_output]
+        if {$child_failed} {
+            lappend failed_testbenches $tb_name
+        }
+        # Print the child's result block: from the results header to the end of its log
+        set log_fd [open $log_path r]
+        set printing 0
+        foreach line [split [read $log_fd] "\n"] {
+            if {[string match "===== $tb_name results =====" $line]} { set printing 1 }
+            if {$printing && ![string match "#*" $line]} { puts $line }
+        }
+        close $log_fd
+    }
+    if {[llength $failed_testbenches] > 0} {
+        error "failed testbenches: $failed_testbenches"
+    }
+    puts "All testbenches ALL PASS: $testbenches"
+    return
+}
 
 set wrap_dir sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1
 set saturate_dir sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11
@@ -60,27 +103,33 @@ proc salt_conv_generic {param_set} {
     return $generic
 }
 
-# tb_salt_conv prints the integer parameters as NAME=value, followed by a colon
+# tb_salt_conv_* print the integer parameters as NAME=value, followed by a colon
 proc salt_conv_prefix {param_set} {
     return "[salt_conv_integer_params $param_set]:"
 }
 
 open_saltconv_project $scripts_dir
 
-# First run only: register the design source and create the simulation set.
+# First run only: register the design source and create the simulation sets.
 # Files are referenced in place (no copy into the project), same as the other testbenches.
 set srcs_dir [file join [get_property DIRECTORY [current_project]] [get_property NAME [current_project]].srcs]
+set tb_dir [file join $srcs_dir sim_1 new]
 if {[llength [get_files -quiet -of_objects [get_filesets sources_1] */SaltConv.sv]] == 0} {
     add_files -fileset sources_1 -norecurse [file join $srcs_dir sources_1 new SaltConv.sv]
 }
 update_compile_order -fileset sources_1
+
+# One testbench in this session
+set tb_name [lindex $testbenches 0]
+set simset_name [string map {tb_ sim_} $tb_name]
 if {[llength [get_filesets -quiet $simset_name]] == 0} {
     create_fileset -simset $simset_name
-    set_property SOURCE_SET sources_1 [get_filesets $simset_name]
-    add_files -fileset $simset_name -norecurse [file join $srcs_dir sim_1 new tb_salt_conv.sv]
-    set_property top tb_salt_conv [get_filesets $simset_name]
-    set_property top_lib xil_defaultlib [get_filesets $simset_name]
+    set simset [get_filesets $simset_name]
+    set_property SOURCE_SET sources_1 $simset
+    add_files -fileset $simset_name -norecurse [list [file join $tb_dir $tb_name.sv] \
+        [file join $tb_dir tb_salt_conv_common.svh]]
+    set_property top $tb_name $simset
+    set_property top_lib xil_defaultlib $simset
     update_compile_order -fileset $simset_name
 }
-
-run_param_sets $simset_name tb_salt_conv $param_sets salt_conv_generic salt_conv_prefix
+run_param_sets $simset_name $tb_name $param_sets salt_conv_generic salt_conv_prefix

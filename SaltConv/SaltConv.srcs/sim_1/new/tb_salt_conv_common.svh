@@ -1,38 +1,39 @@
-`timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// Module Name: tb_salt_conv
-// Description:
-//   整層 SaltConv 比對,答案由 scripts/gen_salt_conv_ref.py 用訓練端的整層 forward、逐筆迴圈產生。
-//   每筆樣本依序用四種模式各跑一次,中間用 rst_n 重來(清除神經元記憶體):
-//     A:out_ready 一直是 1,輸入一直有。另外比拍數:第一個 PROCESS 到最後一個 SENDING 的拍數要等於答案。
-//     B:out_ready 每拍隨機,輸入隨機斷。
-//     C:out_ready 隨機長度的連續 0、連續 1 交替(長的超過 FIFO 深度);輸入隨機斷,
-//        偶爾等 SaltConv 整個空下來(IDLE、FIFO 空)再送,中途回 IDLE。
-//     D:out_ready 每拍 0、1 交替,輸入一直有。
-//   四種模式都比:輸出事件 (o_c, o_y, o_x, t) 逐筆照順序比;樣本結束時每顆神經元的 (V̂, t_last)
-//   直接從 NeuronMemory 的記憶體內容讀出來比。
-//   上游照 valid/ready 的規則:in_valid 拉高後資料不變,直到 in_ready=1 收走;清除期間也會拉高 in_valid。
-//   每一拍檢查的協定規則:
-//     上一拍 out_valid=1、out_ready=0,這一拍 out_valid 要還是 1,(o_c, o_y, o_x, t) 不變。
-//     同一拍裡改 out_ready,out_valid 不能跟著變(out_valid 不能用到 out_ready)。
-//     清除期間 in_ready=0,FIFO 也沒有收進任何事件。
-//     reset 之後 out_valid、in_ready 不是 X。
-//   涵蓋率:下面幾種情況各數幾次,要求的項目是 0 次就 FAIL。前四項要不要求由答案檔的 coverage 行決定
-//   (這組參數的 fire 分布碰不碰得到),其餘一律要求:
+// tb_salt_conv_common.svh
+//   tb_salt_conv_*.sv 四支共用的部分,在各自的 module 裡 `include,不單獨編譯。
+//   每支 testbench 只測一種下游/上游的驅動方式,共用的檢查都在這裡:
+//     輸出事件 (o_c, o_y, o_x, t) 逐筆照順序比;樣本結束時每顆神經元的 (V̂, t_last)
+//     直接從 NeuronMemory 的記憶體內容讀出來比。答案由 scripts/gen_salt_conv_ref.py 產生。
+//     每一拍檢查的協定規則:
+//       上一拍 out_valid=1、out_ready=0,這一拍 out_valid 要還是 1,(o_c, o_y, o_x, t) 不變。
+//       同一拍裡改 out_ready,out_valid 不能跟著變(out_valid 不能用到 out_ready)。
+//       清除期間 in_ready=0,FIFO 也沒有收進任何事件。
+//       reset 之後 out_valid、in_ready 不是 X。
+//     上游照 valid/ready 的規則:in_valid 拉高後資料不變,直到 in_ready=1 收走;清除期間也會拉高 in_valid。
+//   每筆樣本跑一次,開始前用 rst_n 重來(清除神經元記憶體)。
+//   只用一個 initial 流程:negedge 驅動輸入、#1 等組合邏輯穩定後取樣,posedge 後 #1 依取樣結果判斷。
+//
+//   include 這個檔案的 module 要在 include 之前定義:
+//     localparam bit CHECK_CYCLE_COUNT   out_ready 一直是 1、輸入一直有時才設 1:比拍數
+//   include 之後(或之前)定義這幾個函式,決定這支 testbench 的驅動方式:
+//     function automatic void reset_driver();           每筆樣本開始前,把驅動用的狀態回到初始值
+//     function automatic bit  drive_out_ready(int cycle); 這一拍的 out_ready
+//     function automatic bit  input_starts_now();        上游這一拍要不要開始送下一筆事件
+//     function automatic void input_taken();             上游的一筆事件剛被收走
+//     function automatic bit  coverage_wanted(int item); 這支 testbench 要求哪些涵蓋項目
+//   涵蓋項目(要求的項目 0 次就 FAIL;前五項還要看答案檔的 coverage 行,這組參數的 fire 分布碰不碰得到):
+//     stall_on_compute_cycle           下游不收,這一拍是算的那一拍(挑的是剛算出的 s)
 //     stall_with_more_left            下游不收,這個 o_c 還剩 2 個以上
 //     stall_last_of_oc                下游不收,是這個 o_c 的最後一個,後面還有 o_c
 //     stall_last_of_event_next_queued 下游不收,是這筆事件的最後一個,FIFO 有下一筆
 //     stall_last_of_event             下游不收,是這筆事件的最後一個,FIFO 是空的
 //     ready_low_without_valid         下游不收,可是 out_valid=0
 //     upstream_blocked                上游 in_valid=1 被擋(FIFO 滿)
-//     resume_from_idle                樣本中途回 IDLE 之後,事件進來
+//     resume_from_idle                樣本中途整層空下來之後,事件進來
 //     valid_during_clearing           清除期間上游送事件
 //   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入,
 //   檔名照參數組出來,規則跟 gen_salt_conv_ref.py 的 ParamSet.stem 相同。
-//   只用一個 initial 流程:negedge 驅動輸入、#1 等組合邏輯穩定後取樣,posedge 後 #1 依取樣結果判斷。
 //////////////////////////////////////////////////////////////////////////////////
-
-module tb_salt_conv;
 
 	// 預設值是訓練端 conv1 飽和版
 	parameter integer X_WIDTH             = 6;
@@ -69,31 +70,26 @@ module tb_salt_conv;
 	localparam integer BANK_DEPTH        = OUT_CHANNELS * ROW_SLOTS * COL_SLOTS;
 	localparam integer WORD_WIDTH        = MEMBRANE_WIDTH + TIME_WIDTH;
 
-	localparam integer CLOCK_PERIOD     = 10;
-	localparam integer RESET_CYCLES     = 3;
-	localparam integer MODE_COUNT       = 4;
-	localparam integer MAX_PRINTED      = 20;    // 錯誤訊息最多印幾筆,之後只計數
-	localparam integer BURST_MAX        = 80;    // 模式 C 連續 0 或連續 1 的最長拍數
+	localparam integer CLOCK_PERIOD = 10;
+	localparam integer RESET_CYCLES = 3;
+	localparam integer MAX_PRINTED  = 20;   // 錯誤訊息最多印幾筆,之後只計數
 
-	// 模式
-	localparam integer MODE_A = 0;
-	localparam integer MODE_B = 1;
-	localparam integer MODE_C = 2;
-	localparam integer MODE_D = 3;
-
-	// 涵蓋項目
-	localparam integer COVER_STALL_WITH_MORE_LEFT            = 0;
-	localparam integer COVER_STALL_LAST_OF_OC                = 1;
-	localparam integer COVER_STALL_LAST_OF_EVENT_NEXT_QUEUED = 2;
-	localparam integer COVER_STALL_LAST_OF_EVENT             = 3;
-	localparam integer COVER_READY_LOW_WITHOUT_VALID         = 4;
-	localparam integer COVER_UPSTREAM_BLOCKED                = 5;
-	localparam integer COVER_RESUME_FROM_IDLE                = 6;
-	localparam integer COVER_VALID_DURING_CLEARING           = 7;
-	localparam integer COVER_COUNT                           = 8;
+	// 涵蓋項目;前 FIRE_COVER_COUNT 項由答案檔的 coverage 行決定碰不碰得到
+	localparam integer COVER_STALL_ON_COMPUTE_CYCLE          = 0;
+	localparam integer COVER_STALL_WITH_MORE_LEFT            = 1;
+	localparam integer COVER_STALL_LAST_OF_OC                = 2;
+	localparam integer COVER_STALL_LAST_OF_EVENT_NEXT_QUEUED = 3;
+	localparam integer COVER_STALL_LAST_OF_EVENT             = 4;
+	localparam integer COVER_READY_LOW_WITHOUT_VALID         = 5;
+	localparam integer COVER_UPSTREAM_BLOCKED                = 6;
+	localparam integer COVER_RESUME_FROM_IDLE                = 7;
+	localparam integer COVER_VALID_DURING_CLEARING           = 8;
+	localparam integer COVER_COUNT                           = 9;
+	localparam integer FIRE_COVER_COUNT                      = 5;
 	localparam string  COVER_NAMES [0:COVER_COUNT-1] = '{
-		"stall_with_more_left", "stall_last_of_oc", "stall_last_of_event_next_queued", "stall_last_of_event",
-		"ready_low_without_valid", "upstream_blocked", "resume_from_idle", "valid_during_clearing"};
+		"stall_on_compute_cycle", "stall_with_more_left", "stall_last_of_oc", "stall_last_of_event_next_queued",
+		"stall_last_of_event", "ready_low_without_valid", "upstream_blocked", "resume_from_idle",
+		"valid_during_clearing"};
 
 	logic clk;
 	logic rst_n;
@@ -163,9 +159,9 @@ module tb_salt_conv;
 	int state_row_bank[$], state_col_bank[$], state_addr[$], state_membrane[$], state_last_time[$];
 
 	// 統計
-	int error_count     = 0;
-	int run_count       = 0;
-	int out_check_count = 0;
+	int error_count       = 0;
+	int run_count         = 0;
+	int out_check_count   = 0;
 	int state_check_count = 0;
 	int cycle_check_count = 0;
 	int cover_count    [0:COVER_COUNT-1];
@@ -232,16 +228,17 @@ module tb_salt_conv;
 		return 1'b1;
 	endfunction
 
-	// SaltConv 整個空下來:IDLE,FIFO 也沒有事件
+	// SaltConv 整個空下來:沒有 o_c 在做,FIFO 也沒有事件
 	function automatic bit dut_idle();
-		return (dut.state == dut.IDLE) && !dut.fifo_read_valid && !dut.clearing;
+		return !dut.oc_in_progress && !dut.fifo_read_valid && !dut.clearing;
 	endfunction
 
+	// 這一拍還沒送出的 fire 數(算的那一拍是剛算出的 s && valid,之後是 bitmask)
 	function automatic int pending_fire_count();
 		int count = 0;
 		for (int row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
 			for (int col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
-				count += dut.bitmask[row_bank][col_bank];
+				count += dut.pending[row_bank][col_bank];
 			end
 		end
 		return count;
@@ -256,19 +253,15 @@ module tb_salt_conv;
 		rst_n = 1'b1;
 	endtask
 
-	// 一筆樣本、一種模式
-	task automatic run_sample(int sample_index, int mode);
+	// 一筆樣本
+	task automatic run_sample(int sample_index);
 		int  in_index      = 0;
 		int  out_index     = 0;
 		bit  presenting    = 1'b0;
-		bit  wait_for_idle = 1'b0;   // 模式 C:等 SaltConv 整個空下來才送下一筆
-		int  gap_left      = 0;      // 等到空下來之後再空幾拍
-		int  burst_left    = 0;      // 模式 C:out_ready 這一段還剩幾拍
-		bit  burst_level   = 1'b1;
-		int  events_taken  = 0;      // 這筆樣本已經從 FIFO 拿出幾筆事件
+		int  events_taken  = 0;    // 這筆樣本已經從 FIFO 拿出幾筆事件
 		int  cycle         = 0;
-		int  first_process_cycle = -1;
-		int  last_sending_cycle  = -1;
+		int  first_compute_cycle = -1;
+		int  last_done_cycle     = -1;
 		int  max_cycles;
 		bit  previous_stalled = 1'b0;
 		logic [OUT_CHANNEL_WIDTH-1:0] previous_channel;
@@ -280,53 +273,20 @@ module tb_salt_conv;
 		string where;
 
 		max_cycles = 20 * (expected_cycle_count + in_count) + BANK_DEPTH + 10000;
+		reset_driver();
 		apply_reset();
 
 		forever begin
-			where = $sformatf("sample=%0d mode=%0d cycle=%0d", sample_index, mode, cycle);
+			where = $sformatf("sample=%0d cycle=%0d", sample_index, cycle);
 
 			// ---------------- negedge:驅動輸入 ----------------
-			case (mode)
-				MODE_A: out_ready = 1'b1;
-				MODE_B: out_ready = $urandom_range(0, 1);
-				MODE_C: begin
-					if (burst_left == 0) begin
-						burst_level = ~burst_level;
-						burst_left  = $urandom_range(1, BURST_MAX);
-					end
-					out_ready = burst_level;
-					burst_left--;
-				end
-				default: out_ready = cycle[0];
-			endcase
-
-			if (!presenting && in_index < in_count) begin
-				bit start_now;
-				case (mode)
-					MODE_B: start_now = ($urandom_range(0, 9) < 7);
-					MODE_C: begin
-						if (wait_for_idle) begin
-							if (dut_idle()) begin
-								wait_for_idle = 1'b0;
-								gap_left = $urandom_range(0, 3);
-							end
-							start_now = 1'b0;
-						end else if (gap_left > 0) begin
-							gap_left--;
-							start_now = 1'b0;
-						end else begin
-							start_now = ($urandom_range(0, 9) < 7);
-						end
-					end
-					default: start_now = 1'b1;
-				endcase
-				if (start_now) begin
-					presenting = 1'b1;
-					in_x       = X_WIDTH'(expected_in_x[in_index]);
-					in_y       = Y_WIDTH'(expected_in_y[in_index]);
-					in_channel = IN_CHANNEL_WIDTH'(expected_in_c[in_index]);
-					in_time    = TIME_WIDTH'(expected_in_t[in_index]);
-				end
+			out_ready = drive_out_ready(cycle);
+			if (!presenting && in_index < in_count && input_starts_now()) begin
+				presenting = 1'b1;
+				in_x       = X_WIDTH'(expected_in_x[in_index]);
+				in_y       = Y_WIDTH'(expected_in_y[in_index]);
+				in_channel = IN_CHANNEL_WIDTH'(expected_in_c[in_index]);
+				in_time    = TIME_WIDTH'(expected_in_t[in_index]);
 			end
 			in_valid = presenting;
 
@@ -364,6 +324,7 @@ module tb_salt_conv;
 
 			if (out_valid && !out_ready) begin
 				int left = pending_fire_count();
+				if (dut.compute_cycle) cover_count[COVER_STALL_ON_COMPUTE_CYCLE]++;
 				if (left >= 2) cover_count[COVER_STALL_WITH_MORE_LEFT]++;
 				else if (!dut.last_channel) cover_count[COVER_STALL_LAST_OF_OC]++;
 				else if (dut.fifo_read_valid) cover_count[COVER_STALL_LAST_OF_EVENT_NEXT_QUEUED]++;
@@ -371,10 +332,10 @@ module tb_salt_conv;
 			end
 			if (!out_valid && !out_ready && !dut.clearing) cover_count[COVER_READY_LOW_WITHOUT_VALID]++;
 			if (in_valid && !in_ready && !dut.clearing) cover_count[COVER_UPSTREAM_BLOCKED]++;
-			if (dut.state == dut.IDLE && dut.begin_next_oc && events_taken > 0) cover_count[COVER_RESUME_FROM_IDLE]++;
+			if (!dut.oc_in_progress && dut.begin_next_oc && events_taken > 0) cover_count[COVER_RESUME_FROM_IDLE]++;
 
-			if (dut.state == dut.PROCESS && first_process_cycle < 0) first_process_cycle = cycle;
-			if (dut.state == dut.SENDING) last_sending_cycle = cycle;
+			if (dut.compute_cycle && first_compute_cycle < 0) first_compute_cycle = cycle;
+			if (dut.oc_in_progress && dut.oc_done) last_done_cycle = cycle;
 			if (dut.take_new_event) events_taken++;
 
 			sampled_in_handshake  = in_valid && in_ready;
@@ -406,7 +367,7 @@ module tb_salt_conv;
 			if (sampled_in_handshake) begin
 				presenting = 1'b0;
 				in_index++;
-				if (mode == MODE_C && $urandom_range(0, 9) < 2) wait_for_idle = 1'b1;
+				input_taken();
 			end
 
 			if (in_index == in_count && !presenting && dut_idle()) break;
@@ -419,12 +380,13 @@ module tb_salt_conv;
 		end
 
 		if (out_index != out_count) begin
-			report_error($sformatf("sample=%0d mode=%0d 輸出 %0d 筆,答案 %0d 筆", sample_index, mode, out_index, out_count));
+			report_error($sformatf("sample=%0d 輸出 %0d 筆,答案 %0d 筆", sample_index, out_index, out_count));
 		end
-		if (mode == MODE_A) begin
-			int measured = (first_process_cycle < 0) ? 0 : last_sending_cycle - first_process_cycle + 1;
+		// 拍數:第一個 o_c 算的那一拍到最後一個 o_c 送完那一拍;中途空下來多一拍也會被抓到
+		if (CHECK_CYCLE_COUNT) begin
+			int measured = (first_compute_cycle < 0) ? 0 : last_done_cycle - first_compute_cycle + 1;
 			if (measured != expected_cycle_count) begin
-				report_error($sformatf("sample=%0d mode=A 拍數:expected=%0d actual=%0d", sample_index,
+				report_error($sformatf("sample=%0d 拍數:expected=%0d actual=%0d", sample_index,
 				                       expected_cycle_count, measured));
 			end
 			cycle_check_count++;
@@ -441,8 +403,8 @@ module tb_salt_conv;
 			membrane  = word[MEMBRANE_WIDTH-1:0];
 			last_time = word[WORD_WIDTH-1:MEMBRANE_WIDTH];
 			if (membrane != MEMBRANE_WIDTH'(state_membrane[i]) || last_time != TIME_WIDTH'(state_last_time[i])) begin
-				report_error($sformatf("sample=%0d mode=%0d bank=(%0d,%0d) addr=%0d:expected=(%0d,%0d) actual=(%0d,%0d)",
-				                       sample_index, mode, state_row_bank[i], state_col_bank[i], state_addr[i],
+				report_error($sformatf("sample=%0d bank=(%0d,%0d) addr=%0d:expected=(%0d,%0d) actual=(%0d,%0d)",
+				                       sample_index, state_row_bank[i], state_col_bank[i], state_addr[i],
 				                       state_membrane[i], state_last_time[i], membrane, last_time));
 			end
 			state_check_count++;
@@ -457,16 +419,12 @@ module tb_salt_conv;
 		int    scan_count;
 		int    sample_index;
 		string kind;
-		int    required [0:3];
+		int    fire_reachable [0:FIRE_COVER_COUNT-1];
 		bit    coverage_ok;
 		string coverage_text;
 		string verdict;
 
 		// 亂數不另外設種子:xsim 不支援 $urandom(seed),用預設的 -sv_seed,每次跑都是同一串
-		for (int i = 0; i < COVER_COUNT; i++) begin
-			cover_count[i]    = 0;
-			cover_required[i] = 1'b1;
-		end
 		rst_n     = 1'b0;
 		in_valid  = 1'b0;
 		out_ready = 1'b0;
@@ -480,15 +438,17 @@ module tb_salt_conv;
 		ref_fd = $fopen(ref_path, "r");
 		if (ref_fd == 0) $fatal(1, "打不開答案檔 %s", ref_path);
 
-		scan_count = $fscanf(ref_fd, "%s %d %d %d %d", kind, required[0], required[1], required[2], required[3]);
-		if (scan_count != 5 || kind != "coverage") $fatal(1, "答案檔第一行不是 coverage");
-		for (int i = 0; i < 4; i++) cover_required[i] = (required[i] != 0);
+		scan_count = $fscanf(ref_fd, "%s %d %d %d %d %d", kind, fire_reachable[0], fire_reachable[1],
+		                     fire_reachable[2], fire_reachable[3], fire_reachable[4]);
+		if (scan_count != 6 || kind != "coverage") $fatal(1, "答案檔第一行不是 coverage");
+		for (int i = 0; i < COVER_COUNT; i++) begin
+			cover_count[i]    = 0;
+			cover_required[i] = coverage_wanted(i) && (i >= FIRE_COVER_COUNT || fire_reachable[i] != 0);
+		end
 
 		sample_index = 0;
 		while (read_sample(ref_fd, sample_index)) begin
-			for (int mode = 0; mode < MODE_COUNT; mode++) begin
-				run_sample(sample_index, mode);
-			end
+			run_sample(sample_index);
 			sample_index++;
 		end
 		$fclose(ref_fd);
@@ -516,5 +476,3 @@ module tb_salt_conv;
 		         error_count, coverage_text, verdict);
 		$finish;
 	end
-
-endmodule

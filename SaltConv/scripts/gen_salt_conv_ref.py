@@ -1,4 +1,4 @@
-"""產生 tb_salt_conv.sv 用的參考答案,人工參數組另外產生權重檔、門檻檔、衰減表檔。
+"""產生 tb_salt_conv_*.sv(四支,清單見 run_tb_salt_conv.tcl)共用的參考答案,人工參數組另外產生權重檔、門檻檔、衰減表檔。
 
 整層 SaltConv 的答案:每筆樣本餵進一串輸入事件,比對輸出事件的順序、樣本結束時每顆神經元的 (V̂, t_last)、
 out_ready 一直是 1 時的拍數。
@@ -13,8 +13,8 @@ out_ready 一直是 1 時的拍數。
   逐筆迴圈補上同一步之後要等於官方的 v_final,輸出事件序列也要完全相同。
 硬體不做 catch-up,所以 testbench 比的是 catch-up 之前的 V̂。
 
-拍數(Conv.md 5.7):out_ready 一直是 1、輸入一直有時,從第一個 PROCESS 到最後一個 SENDING 共
-Σ_事件 Σ_o_c (1 + max(1, k)) 拍。
+拍數(Conv.md 5.3、5.3「OC=1」):out_ready 一直是 1、輸入一直有時,從第一個 o_c 算的那一拍到最後一個 o_c
+送完那一拍共 Σ_事件 Σ_o_c max(1, k) 拍;OC = 1 時算的那一拍一律不算送完,是 Σ_事件 max(2, k) 拍。
 
 參數組分兩種:
 - 訓練端的 conv1、conv2,繞回版、飽和版各一份,輸入是 test 的前 SAMPLE_COUNT 筆(量化資料夾 eval/test.yaml
@@ -25,8 +25,9 @@ out_ready 一直是 1 時的拍數。
   三個資料檔用訓練端 salt_core.fpga_export 的函式寫,跟答案放在同一個目錄。
 
 答案檔一行一筆,第一個欄位是種類,欄位以空白分隔,全部十進位,有號數直接寫負號:
-    coverage <stall_with_more_left> <stall_last_of_oc> <stall_last_of_event_next_queued> <stall_last_of_event>
-        testbench 的涵蓋項目裡,跟 fire 分布有關的四項這組參數碰不碰得到(1:要求至少發生一次):
+    coverage <stall_on_compute_cycle> <stall_with_more_left> <stall_last_of_oc> <stall_last_of_event_next_queued> <stall_last_of_event>
+        testbench 的涵蓋項目裡,跟 fire 分布有關的五項這組參數碰不碰得到(1:要求至少發生一次):
+          stall_on_compute_cycle:有 (事件, o_c) fire 1 個以上(算的那一拍就有東西送)
           stall_with_more_left:有 (事件, o_c) fire 2 個以上
           stall_last_of_oc:有 o_c < OC-1 的 (事件, o_c) fire 1 個以上
           stall_last_of_event_next_queued:不是樣本最後一筆的事件,在 o_c = OC-1 fire 1 個以上
@@ -62,7 +63,7 @@ SEED = 0
 
 @dataclasses.dataclass(frozen=True)
 class ParamSet:
-    """一組 SaltConv 參數。整數欄位跟 run_tb_salt_conv.tcl 的清單、tb_salt_conv.sv 的 parameter 一致。"""
+    """一組 SaltConv 參數。整數欄位跟 run_tb_salt_conv.tcl 的清單、tb_salt_conv_common.svh 的 parameter 一致。"""
     kernel_size: int
     stride: int
     padding: int
@@ -243,7 +244,8 @@ class LayerModel:
                 outputs.append((int(oc_index[slot]), int(oy_index[slot]), int(ox_index[slot]), int(t)))
                 fire_counts[event_index, oc_index[slot]] += 1
 
-        cycle_count = int(np.sum(1 + np.maximum(1, fire_counts)))
+        min_cycles_per_oc = 2 if p.out_channels == 1 else 1
+        cycle_count = int(np.sum(np.maximum(min_cycles_per_oc, fire_counts)))
         return {"outputs": outputs, "fire_counts": fire_counts, "cycle_count": cycle_count,
                 "membrane": membrane, "last_time": last_time}
 
@@ -297,12 +299,14 @@ def sample_lines(params: ParamSet, events: np.ndarray, loop_result: dict) -> lis
 
 
 def coverage_line(params: ParamSet, sample_fire_counts: list[np.ndarray]) -> str:
-    """跟 fire 分布有關的四個涵蓋項目,這組參數碰不碰得到。"""
+    """跟 fire 分布有關的五個涵蓋項目,這組參數碰不碰得到。"""
+    on_compute_cycle = any(np.any(counts >= 1) for counts in sample_fire_counts)
     more_left = any(np.any(counts >= 2) for counts in sample_fire_counts)
     last_of_oc = any(np.any(counts[:, :-1] >= 1) for counts in sample_fire_counts)
     last_of_event_next_queued = any(np.any(counts[:-1, -1] >= 1) for counts in sample_fire_counts)
     last_of_event = any(np.any(counts[:, -1] >= 1) for counts in sample_fire_counts)
-    return f"coverage {int(more_left)} {int(last_of_oc)} {int(last_of_event_next_queued)} {int(last_of_event)}"
+    return (f"coverage {int(on_compute_cycle)} {int(more_left)} {int(last_of_oc)} "
+            f"{int(last_of_event_next_queued)} {int(last_of_event)}")
 
 
 def check_time_width(params: ParamSet, events: np.ndarray) -> None:
@@ -433,6 +437,12 @@ def synthetic_parameters(rng: np.random.Generator, params: ParamSet) -> tuple[np
     # 最後一個 o_c 權重取絕對值、用低門檻,一定會 fire:換事件那一拍(送最後一個 fire)被 out_ready 擋住的情況才碰得到
     q[-1] = np.abs(q[-1])
     thresholds[-1] = low_thresholds[-1]
+    # OC = 1 時唯一的 o_c 就是最後一個:每筆都 fire 歸零的話膜電位永遠是 0,連續兩筆事件讀寫同一顆神經元時
+    # 讀到舊值也看不出來(Conv.md 5.3「OC=1」的反向測試抓不到)。改成權重至少 1、門檻比單筆權重的上限高,
+    # 累積幾筆事件才 fire,膜電位帶著非 0 的值跨事件。
+    if params.out_channels == 1:
+        q[-1] = np.maximum(q[-1], 1)
+        thresholds[-1] = min(weight_high * weight_step + low_thresholds[-1], membrane_high)
     code_max = (1 << params.decay_frac_width) - 1
     decay_table = rng.integers(0, code_max + 1, size=params.decay_table_depth)
     decay_table[0] = code_max
