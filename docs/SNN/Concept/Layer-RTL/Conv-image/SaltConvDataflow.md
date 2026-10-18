@@ -18,8 +18,9 @@
 - 中間：同一拍裡同時做的兩件事，「讀下一個 o_c」和「算這個 o_c」。
 - 最下面：這一拍結束的時脈邊緣存起來的東西，下一拍就變成最上面那一排。
 
-例子：算 o_c=0 的那一拍，同時已經在送 o_c=1 的讀位址。
+例子（讀取延遲 R=1）：算 o_c=0 的那一拍，同時已經在送 o_c=1 的讀位址。
 o_c=0 沒有 fire 的話，下一拍就直接算 o_c=1，中間不空拍。
+R=2 時資料晚 1 拍出來，中間多 1 拍等資料；這一拍「算這個 o_c」那塊不動作，「讀下一個 o_c」照樣送。
 
 ```mermaid
 flowchart TD
@@ -28,10 +29,10 @@ flowchart TD
         FIFO["EventFIFO（第 1 段）<br/>看得到最前面那筆事件"]
         EVREG["事件暫存器（第 1 段）<br/>event_x/y/channel/time"]
         CUR["current_channel（第 2 段）<br/>這個 o_c"]
-        CTRL["oc_in_progress、compute_cycle<br/>（第 6 段）"]
+        CTRL["oc_in_progress、read_delay_flags<br/>（第 6 段）"]
         CAND["候選暫存器（第 4 段）<br/>神經元位置、bank 位址、權重 tap"]
         BM["bitmask（第 6 段）<br/>之前沒送出的 fire"]
-        RDATA["上一拍讀出的資料<br/>膜電位、上次更新時間、整組權重"]
+        RDATA["R 拍前送的讀位址讀出的資料<br/>膜電位、上次更新時間、整組權重"]
     end
 
     subgraph READ["讀下一個 o_c"]
@@ -55,8 +56,8 @@ flowchart TD
 
     subgraph NEXT["時脈邊緣存起來，下一拍變成最上面那一排"]
         direction LR
-        N_RDATA["讀出的資料"]
-        N_REGS["begin_next_oc=1 時才存<br/>候選暫存器、current_channel<br/>compute_cycle=1"]
+        N_RDATA["讀出的資料往後推一級<br/>（R=2 的第二級是 BRAM 輸出暫存器）"]
+        N_REGS["begin_next_oc=1 時才存<br/>候選暫存器、current_channel<br/>read_delay_flags 最低位放進 1"]
         N_EV["開始新事件時<br/>事件暫存器存 FIFO 那筆<br/>FIFO 拿走那筆"]
         N_BM["bitmask"]
     end
@@ -97,9 +98,9 @@ flowchart TD
 ## 看圖的重點
 
 - 讀位址只看最上面那排暫存器和 FIFO（第 2 段），不等同一拍的 `begin_next_oc`：下一個 o_c 是誰，這一拍一開始就知道。
-- 讀出的資料要下一拍才出來，所以候選、o_c、事件也要在同一個時脈邊緣存起來，下一拍才對得上。
+- 讀出的資料要 R 拍後才出來，所以候選、o_c、事件也要在同一個時脈邊緣存起來，一直留到資料出來、算完、送完。
 - 讀用中間「讀下一個 o_c」那塊的 `grid_*`，寫用最上面的 `candidate_*`：同一拍讀的跟寫的是不同的 o_c。
-- 沒開始下一個 o_c 的拍子（還在送剩下的 fire、下游不收），下一拍讀出的資料不用，再讀一次。
+- 沒開始下一個 o_c 的拍子（等資料、還在送剩下的 fire、下游不收），這一拍讀的資料不用，之後再讀一次。
   下一個 o_c 的神經元在它被算之前不會被寫，重讀拿到的值一樣。
 - 下游 `out_ready=0` 時，挑出的那個沒送出去，就留在「送出後還剩的 fire」裡，這個 o_c 不算做完，不會換下一個 o_c。
 - 控制訊號怎麼算、每拍的值，見 [SaltConvControl.md](SaltConvControl.md)。

@@ -26,22 +26,144 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 6.5 | Part 2 補輸出窗左上角的 bank(`top_row_bank`、`left_col_bank`)給 Part 6 用 | 第 4 節補充 | 完成 | `CandidateAxis.sv`、`CandidateGrid.sv` 跟它們的 testbench、答案腳本 |
 | 7 | pipeline FSM 整合，先做無腦版(含只走 bitmask 的反壓) | 5.1、5.2、5.4 前半、5.6、5.7 | 完成 | `SaltConv.sv`、`tb_salt_conv.sv`(8.1 拆成 `tb_salt_conv_*`) |
 | 8.1 | 管線化：算完那一拍直接從 $s$ 挑、直接送下一個 $o_c$ 的讀位址(含快路徑的反壓) | 5.3、5.4 後半 | 完成 | `SaltConv.sv`、`tb_salt_conv_common.svh`、`tb_salt_conv_ready_{high,random,burst,alternate}.sv` |
-| 8.x | 拆級($R$、$C$)、$o_c$ 重疊 | 5.5、第 5 節開頭 | 下一步，待規劃 | |
+| 8.2 | 讀取延遲 $R$ 做成參數，$R=2$ 用 BRAM 輸出暫存器 | 5.5「實作」 | 實作、驗證完，待使用者 review | `SaltConv.sv`、`NeuronMemory.sv`、`NeuronMemoryArray.sv`(新)、`WeightMemory.sv`、`tb_salt_conv_common.svh`、`gen_salt_conv_ref.py`、`run_tb_salt_conv.tcl` |
+| 8.x | 拆計算($C$)、$o_c$ 重疊 | 5.5、第 5 節開頭 | 下一步，待規劃 | |
 
-## 下一步：Part 8.1 之後的管線優化(還沒開始，待規劃)
+## 下一步：Part 8.2 之後的管線優化(還沒開始，待規劃)
 
 - 下一個 session 的重點。Part 8 一次只處理一個策略或一個機制，規劃時先列出這次要做哪一個、怎麼量、怎麼驗證，給使用者確認。
-- 比較的做法照下面 Part 8.1 開頭的「比較的做法」；8.1 的速度、資源數字在 Part 8.1「結果」，是拆級要比的基準。
-- 8.1 留下的待討論事項見 Part 8.1「之後討論與評估」。
+- 比較的做法照 Part 8.1 開頭的「比較的做法」；速度、資源的基準是 Part 8.1「結果」跟 Part 8.2「結果」。
 - 讀現行 RTL：`SaltConv.sv` 照事件流程分 0~6 段(檔頭有目錄)；資料流程圖、狀態圖在 `docs/SNN/Concept/Layer-RTL/Conv-image/SaltConvDataflow.md`、`SaltConvControl.md`。
-- **拆級($R$、$C$)**：$o_c$ 不重疊時，多拆一級每個 $o_c$ 就多 1 拍(5.5 的 $\text{gap}=(R+C-2)+\max(1,k)$)。
-    - $C=2$ 的時脈要超過 8.1 的兩倍、$R=C=2$ 要超過三倍，才比只做 8.1 快。
-    - 時脈翻倍，每條路徑都要在 5 ns 內；`out_ready` → `CandidateGrid` → BRAM 位址那條 Part 7 已經 3.9~4.6 ns(8.1 之後 `out_ready` 起點最長 1.05~1.09 ns)。要量。
-    - 拆級另一個用處：系統時脈被別的模組定死時，這一層要跟得上。
-    - 跟著的：乘法器 DSP 還是 LUT(切在 DSP 內部暫存器上結論可能反過來，見「合成後要確認」)；BRAM 輸出暫存器(`Synth 8-7052`)加了就是 $R=2$；事件暫存器可能每一級各一份；$R$、$C$ 變成參數。
+- **Part 8.2 的結論**：只做 $R=2$ 不划算。一個沒有 fire 的 $o_c$ 從 1 拍變 2 拍，時脈只高 2~10%，整體比 $R=1$ 慢 1.8~2 倍。
+    - $R=2$ 只拿掉 BRAM 讀出那段約 1 ns；最長路徑換成從事件暫存器出發，經過 `NeuronUpdate` → `SpikeSelect` → 推進的判斷，8.5~9.4 ns，長度幾乎不變。
+    - $R$ 留著當參數(預設 1)：系統時脈被別的模組定死時可以用，之後 $o_c$ 重疊也要用。
+- **拆計算($C$)**：把 `NeuronUpdate` 那串切開，才碰得到現在的最長路徑。
+    - $o_c$ 不重疊時，多拆一級每個 $o_c$ 就多 1 拍(5.5 的 $\text{gap}=(R+C-2)+\max(1,k)$)：$C=2$ 的時脈要超過 8.1 的兩倍、$R=C=2$ 要超過三倍，才比只做 8.1 快。
+    - 跟著的：乘法器 DSP 還是 LUT(切在 DSP 內部暫存器上結論可能反過來，見「合成後要確認」)；事件暫存器可能每一級各一份；$C$ 變成參數。
 - **$o_c$ 重疊**(下一個 $o_c$ 先讀、前一個還在算)：Conv.md 第 5 節開頭決定 5.1~5.5 先不做。
     - 只在拆級能把時脈拉高很多時才有意義：重疊後拆出來的級數不再加到每個 $o_c$ 上。
     - 「已定案設計 → 目前不做」的理由(省固定 2~3 拍)只在 $R=C=1$ 成立；$R+C>2$ 時重疊每個 $o_c$ 省 $R+C-2$ 拍。
+- 8.1、8.2 留下的待討論事項：Part 8.1「之後討論與評估」、Part 8.2「之後討論」。
+
+## Part 8.2 讀取延遲 $R$(實作、驗證完，待使用者 review)
+
+在分支 `part8-read-latency` 上做(2026-10-18 使用者要求，不 commit 到 `test`)。
+
+### 目標與範圍
+
+- 把讀取延遲 $R$(送出讀位址到資料可用的拍數)做成參數 `READ_LATENCY`，預設 1，行為跟 8.1 相同。
+- $R=2$ 用 BRAM 內建的輸出暫存器，不佔一般 FF；量 $R=2$ 換到多少時脈，當作之後拆計算、$o_c$ 重疊的依據。
+- 只做 $R$，不拆計算($C=1$)，$o_c$ 不重疊。
+
+### 改的是什麼
+
+- **控制**(`SaltConv.sv`)：無腦版之後的 `compute_cycle` 暫存器換成 `read_delay_flags`，$R$ 個 bit 的移位暫存器。
+    - 開始一個 $o_c$ 那拍最低位放進 1，每拍往高位推；同一時間最多一個 bit 是 1。
+    - 最高位是 1 就是 `compute_cycle`(算的那一拍)；其他 bit 有 1 就是 `waiting_read`(等資料)，這些拍子 `oc_done` 一律 0，不推進。
+    - $R=1$ 時 `waiting_read` 是常數 0(generate)，電路跟 8.1 相同。
+    - 讀位址、候選、bitmask、送出的邏輯都沒改；等資料的拍子 bitmask 是空的，不送出、不寫回。
+    - 一個 $o_c$ 占 $(R-1)+\max(1,k)$ 拍；$OC=1$ 是 $(R-1)+\max(2,k)$ 拍。
+- **記憶體**：讀出的第一級是 BRAM 本身的讀出暫存器，$R=2$ 時多一級，併進 BRAM 的輸出暫存器(`DOB_REG`)。
+    - `NeuronMemoryArray.sv`(新)：一個 bank 的陣列 + 讀出暫存器，模組加 `keep_hierarchy = "soft"`。
+    - `NeuronMemory.sv`：只留清除邏輯，例化 `NeuronMemoryArray`。
+    - `WeightMemory.sv`：讀出管線同樣做法，整個模組加 `keep_hierarchy = "soft"`(模組裡只有位址計算、陣列、讀出暫存器)。
+    - 為什麼要 `soft`、為什麼不用 XPM，見下面「BRAM 輸出暫存器併不進去」。
+- **答案腳本、testbench、模擬腳本**：
+    - `gen_salt_conv_ref.py`：`READ_LATENCIES = (1, 2)`，拍數 $=\sum\max(1,k)+(R-1)(N-1)$，$N$ 是 (事件, $o_c$) 的個數；`sample` 行改成 `<in> <out> <state> <R=1 拍數> <R=2 拍數>`。
+        - 第一個 $o_c$ 的等待在「算的那一拍」之前，量拍數時不算在內，所以是 $N-1$ 次。
+        - 重新產生後跟舊答案檔比對：只有 `sample` 行變了，$R=1$ 的拍數跟原本相同。
+    - `tb_salt_conv_common.svh`：參數 `READ_LATENCY` 傳給 DUT、印在總結行；`REF_READ_LATENCY_MAX = 2`，超出就 `$fatal`；照 `READ_LATENCY` 挑拍數。
+    - `run_tb_salt_conv.tcl`：每組參數各跑 `READ_LATENCY` = 1、2(四支各 18 組)。
+    - `tb_salt_conv_common.svh` 加「算的那一拍讀出值」檢查，由來見「反向測試」。
+
+### 草稿量測：只做 $R=2$ 划不划算(2026-10-18)
+
+- 條件跟 Part 7、8.1 相同(xck26，out-of-context，10 ns，輸入輸出延遲 0，布局繞線後，最高時脈用 slack 換算)。這時記憶體還是推斷寫法、沒加 `soft`。
+
+| 設定 | $R=1$ | $R=2$ | 一個沒 fire 的 $o_c$：$R=1$ → $R=2$ | LUT | FF |
+|---|---|---|---|---|---|
+| conv1 $w$=12 繞回 | 106.3 MHz | 108.2 MHz | 9.4 → 18.5 ns | 577 → 553 | 125 → 238 |
+| conv1 $w$=9 飽和 | 100.5 MHz | 104.7 MHz | 10.0 → 19.1 ns | 893 → 824 | 125 → 201 |
+| conv2 $w$=14 繞回 | 105.2 MHz | 114.8 MHz | 9.5 → 17.4 ns | 579 → 564 | 117 → 238 |
+| conv2 $w$=11 飽和 | 102.4 MHz | 112.5 MHz | 9.8 → 17.8 ns | 558 → 559 | 117 → 226 |
+
+- $R=1$ 跟 8.1 正式版差 2 MHz 以內，FF 相同：改成參數後 $R=1$ 的電路就是 8.1。
+- 最長路徑：$R=1$ 從 BRAM 讀出出發，9.2~9.8 ns；$R=2$ 換成從事件暫存器 `event_time` 出發($\Delta t=t-t_{last}$ 是 `NeuronUpdate` 第一步)，8.6~9.4 ns，22~23 層。
+- FF 多 76~121 個：`NeuronMemory` 的輸出暫存器沒有併進 BRAM，見下一小節。
+- 結論見「下一步」：只做 $R=2$ 不划算，$R$ 留著當參數。
+
+### BRAM 輸出暫存器併不進去(2026-10-18 查到可控的做法，Vivado 內部原因不明)
+
+- 現象：$R=2$ 合成報 `Synth 8-7052`(no optional output register could be merged)，`NeuronMemory` 4 個 bank 的輸出暫存器做成一般 FF；`WeightMemory` 有併入。
+- 實際是兩件事混在一起：
+    - 合成時沒併入(印 `Synth 8-7052`)。
+    - 合成時有併入，布局時 `place_design` 的 BRAM register optimization 判斷搬出來時序比較好，搬到 FF(`Physopt 32-665 ... registers were pushed out`)。UG904 寫明是預設行為，時序改善才搬，不用處理。conv1 飽和版「4 個 bank 有 1 個併入、沒印 `Synth 8-7052`」就是這種。
+- 實驗(conv1 繞回版，$R=2$，只跑合成)：
+
+| 實驗 | 結果 |
+|---|---|
+| `NeuronMemory` 單獨合成 | 併入 |
+| 單獨合成，加讀出 → 運算 → 寫回同一個 bank 的回授 | 併入 |
+| `SaltConv` 整個不攤平(`-flatten_hierarchy none`) | 併入 |
+| `SaltConv` 照常攤平，只在 `NeuronMemory` 加 `keep_hierarchy` | 併入 |
+| `SaltConv` 照常攤平，一次改一條 `NeuronMemory` 的接線(讀取開關、清除、寫入資料、寫入開關) | 4 條都沒用，還是不併入 |
+| 攤平跟 `keep_hierarchy` 兩份 log 的訊息種類、次數、BRAM/DSP 對映表 | 除了 `Synth 8-7052` 本身完全相同；`Synth 8-7052` 在 Technology Mapping 階段印出，沒有原因 |
+| 攤平後的 netlist | BRAM 讀出腳扇出 1、FF 的 CE 接常數 1、`DOB_REG=0`；照 UG949 列的條件(多扇出、reset、回授)應該可以併入 |
+
+- 結論：上層攤平時，跨模組的最佳化讓輸出暫存器併不進 BRAM；是哪一步最佳化、為什麼，log 跟官方文件都沒寫，查不到。
+- 試過 XPM(`xpm_memory_sdpram`，`READ_LATENCY_B=2`，UG974 寫明 2 會用輸出暫存器)：4 組設定合成都併入，時脈、LUT 跟推斷版差不多。
+    - 讀 `xpm_memory.sv`(Vivado 2025.2)：第二級暫存器的寫法跟我們的一樣(多的 reset、enable 接常數後相同)；差別在 `xpm_memory_sdpram`、`xpm_memory_base` 模組上帶 `KEEP_HIERARCHY = "SOFT"`。UG901：`SOFT` 只留常數傳遞，其他跨模組邊界的最佳化都擋掉。
+    - 所以 XPM 會併入跟上面 `keep_hierarchy` 的實驗是同一個機制。
+    - XPM 用起來的限制：記憶體至少 2 個字(`XPM_MEMORY 40-22`，每個 bank 1 格的人工參數組會報錯)；`MEMORY_INIT_FILE` 只能給檔名、不能帶路徑，檔案要加進專案(UG974)，跟我們每組參數用路徑指定權重檔、不同資料夾檔名重複的做法衝突；模擬在專案模式下會自動編譯 XPM 函式庫。
+- **定案(2026-10-18 使用者決定)**：改回推斷寫法，照 XPM 的做法自己加 `keep_hierarchy = "soft"`，可控性比較好。
+    - 第一版整個 `NeuronMemory` 加 `soft`：會併入，但清除邏輯不能跟外面一起最佳化，LUT 多 18~68 個($R=1$ 也多)。
+    - 改成跟 XPM 一樣只框陣列和讀出暫存器(拆出 `NeuronMemoryArray`)：LUT 回到跟原本推斷版差不多。
+    - `WeightMemory` 整個模組加 `soft`，LUT 沒有增加，不用拆。
+    - 「推斷 + `soft` 一定會併入」沒有官方文件明寫，靠下面每組設定合成後檢查 `DOB_REG` 確認。`XPM_MODULE = "TRUE"` 這個屬性不在 UG901 清單裡，XPM 有沒有另外的特殊處理查不到，所以不說兩者完全等價。
+
+#### 結果(正式版：推斷 + `NeuronMemoryArray` 加 `soft`)
+
+| 設定 | 最高時脈 | 一個沒 fire 的 $o_c$ | LUT | FF | 合成後用到輸出暫存器 | 布局後還在 BRAM 裡 |
+|---|---|---|---|---|---|---|
+| conv1 $w$=12 繞回 $R=1$ | 106.0 MHz | 9.4 ns | 581 | 125 | —($R=1$ 不用) | — |
+| conv1 $w$=12 繞回 $R=2$ | 105.3 MHz | 19.0 ns | 567 | 210 | 5 顆全部 | 神經元 1/4、權重 1/1(其他被布局搬出) |
+| conv1 $w$=9 飽和 $R=2$ | 109.1 MHz | 18.3 ns | 793 | 176 | 5 顆全部 | 神經元 2/4、權重 1/1 |
+| conv2 $w$=14 繞回 $R=2$ | 113.5 MHz | 17.6 ns | 564 | 118 | 5 顆全部 | 全部 |
+| conv2 $w$=11 飽和 $R=2$ | 105.1 MHz | 19.0 ns | 559 | 118 | 5 顆全部 | 全部 |
+
+- $R=2$ 4 組都沒有 `Synth 8-7052`；$R=1$ 照舊有(本來就沒有輸出暫存器可併)。
+- 時脈跟推斷版、XPM 版差 4 MHz 以內，在布局繞線的變動範圍內；BRAM、DSP 不變。
+- `-lint` 只有 Part 5 記錄過的 `ASSIGN-6`；hold 照舊 -0.18 ns(輸入 port 進 FIFO，out-of-context 輸入延遲 0 造成)。
+
+### 驗證(2026-10-18)
+
+- `tb_neuron_memory` 9 組 ALL PASS($R=1$)。
+- `tb_salt_conv_ready_{high,random,burst,alternate}` 各 18 組(9 組參數 × $R$=1、2)ALL PASS，涵蓋項目都碰到。
+    - $R=2$ 的輸出事件、神經元狀態比對筆數跟 $R=1$ 相同；`ready_high` 的 $R=2$ 拍數全部對上答案。
+    - `read_check_count` = 事件數 × $OC$(例如 conv1 20000 × 8 = 160000)，每個 $o_c$ 算的那一拍都有檢查。
+
+### 反向測試(5 組人工參數 × 四支，$R=2$；跑完 `git checkout` 還原，確認跟 commit 相同)
+
+| 改壞的地方 | 結果 |
+|---|---|
+| 等資料的拍子照樣推進(`oc_done` 不看 `waiting_read`) | 四支 × 5 組全部 FAIL |
+| 只有神經元記憶體 $R=2$，權重記憶體固定 $R=1$ | 四支 × 5 組全部 FAIL |
+| 算的那一拍取錯位元(`compute_cycle` 取 `read_delay_flags[0]`，提早一拍算) | 加讀出值檢查之前：K=1、S=2、$OC=3$ 那組只有 `high` 靠拍數抓到(719 對 720)，`random`、`burst`、`alternate` 判 PASS；加了之後四支 × 5 組全部 FAIL |
+
+- 第一輪 `random` 有 4 組報 `Spawn failed: %1 不是有效的 Win32 應用程式`(vivado-usage skill 8.7 記過的偶發錯誤)，重跑正常。
+- **K=1 那組為什麼沒抓到**(用帶監看的 `ready_high` 副本確認，每個算的那一拍比對讀出值跟記憶體陣列裡的內容)：
+    - 讀錯只發生在每筆樣本的第一個 $o_c$：層從空著開始時，前一拍沒有送讀位址，提早一拍讀到的是記憶體出口的舊值。其他時候前一拍已經送了同一個 $o_c$ 的讀位址(每拍都讀)，提早算也讀到對的值。
+    - 第 0 筆樣本讀到 X：這組是飽和版，模擬器把 `if` 條件裡的 X 當成不成立，`NeuronUpdate` 的飽和判斷走到最後一個分支(最大正數)，一定 fire 並歸零，寫回確定的 0；那顆神經元清除後本來就是 0，剛好等於答案。實際硬體沒有 X，讀到的舊值會讓結果不確定。
+    - 第 1~3 筆樣本讀到上一筆樣本留下的舊權重：那幾筆的第一筆事件座標是奇數，K=1、S=2 碰不到任何輸出神經元，讀錯的權重沒用到。
+    - 監看結果：正確 RTL 兩組參數(K=1、K=3)都是 0 次不同；改壞的 RTL，K=1 那組神經元 1 次、權重 4 次，全部在樣本的第一個 $o_c$。
+- **補上的檢查**(2026-10-18 使用者同意)：每個算的那一拍，`NeuronUpdate` 用到的 $(\hat V,t_{last})$ 要等於 `NeuronMemoryArray` 陣列裡候選位址那一格(只比合法候選)，權重寬字要等於權重 ROM 的 $(o_c,c)$ 那一格。
+    - 每個 bank 一個 process 複製兩個值(generate 的 bank 只能用常數 index 取，跟神經元狀態快照同一種做法)，主流程在取樣的最後觸發、比對，不影響原本的取樣時間點。
+
+### 之後討論
+
+- **讀取開關每拍都開，還是推進那一拍才開**：Part 8.1 留下的，$R=2$ 時等資料的拍子也會白讀一次，一起評估。
+- **攤平後輸出暫存器為什麼併不進 BRAM**：Vivado 內部原因查不到；現在靠 `soft` 加上每次合成檢查 `DOB_REG` 確認。換 Vivado 版本後要再確認一次。
+- **權重記憶體要不要改 XPM**：要先解決 `MEMORY_INIT_FILE` 只能給檔名的問題(權重檔改成不重複的檔名、加進專案，訓練端匯出的命名可能也要改)，目前不做。
 
 ## Part 8.1 管線化(完成)
 
@@ -218,7 +340,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 - 跟草稿差 1~2 MHz，在布局繞線的變動範圍內；FF、BRAM、DSP、CARRY8 跟無腦版相同。
 - conv1 → conv2 串接 102.6 MHz；conv1 讀出 → conv2 `EventFIFO` 寫入 8.99 ns，不是最長。
 - `out_ready` 起點最長 1.05~1.09 ns(無腦版 3.9~4.6 ns)。
-- `-lint` 只有 Part 5 記錄過的 `ASSIGN-6`；`Synth 8-7052`(BRAM 沒併入輸出暫存器)照舊，屬於「Part 8.1 之後」的 $R=2$。
+- `-lint` 只有 Part 5 記錄過的 `ASSIGN-6`；`Synth 8-7052`(BRAM 沒併入輸出暫存器)照舊，$R=1$ 本來就沒有輸出暫存器可併；$R=2$ 見 Part 8.2。
 - review 後(2026-10-17)：`SaltConv.sv` 照事件流程重排成 0~6 段(只動位置不動邏輯，排序比對程式碼行 + 四支 × 9 組重跑 ALL PASS)；補資料流程圖、狀態圖(`Conv-image/SaltConvDataflow.md`、`SaltConvControl.md`)，舊的無腦版狀態圖 `SaltConvFSM.drawio/.svg` 刪掉。
 
 ### Conv.md 已經寫到的(不用重新討論)
@@ -627,7 +749,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 | conv2，$w$=14 | 4 個 RAMB18(2 個 tile) | 90 | 10 |
 | conv2，$w$=11 | 4 個 RAMB18 | 84 | 10 |
 
-- 合成報 `Synth 8-7052`(BRAM 沒有併入輸出暫存器)，跟 `WeightMemory` 相同，到 Part 8 一起看。
+- 合成報 `Synth 8-7052`(BRAM 沒有併入輸出暫存器)，跟 `WeightMemory` 相同，到 Part 8 一起看。(Part 8.2：$R=1$ 本來就沒有輸出暫存器；$R=2$ 的處理見 Part 8.2)
 
 ## Part 3 權重 BRAM 讀取與 tap 選擇(完成)
 
@@ -673,7 +795,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
     - `WeightMemory` 用 `(* rom_style = "block" *)` 固定成 BRAM，不交給 Vivado 依大小判斷，各層同一種資源才好比較功耗、用量。
         - 不指定時 conv1(深度 16)會被做成 32 LUT + 63 FF，conv2(深度 128)是 1 個 RAMB36。
         - 指定後 conv1、conv2 都是 1 個 RAMB36，0 LUT。
-        - 合成報 `Synth 8-7052`：BRAM 沒有併入輸出暫存器，timing 可能不是最好。加輸出暫存器會讓讀取延遲變 2 拍，屬於 Conv.md 5.5 的 $R\ne1$，到 Part 8 再看。
+        - 合成報 `Synth 8-7052`：BRAM 沒有併入輸出暫存器，timing 可能不是最好。加輸出暫存器會讓讀取延遲變 2 拍，屬於 Conv.md 5.5 的 $R\ne1$，到 Part 8 再看。(Part 8.2 做成參數 `READ_LATENCY`)
     - `WeightTapSelect` $K=3,S=2$($M=2$，4 個 9 選 1)：112 LUT。
 
 ## 驗證流程(Part 1、2 用的做法，Part 3 之後照做)
