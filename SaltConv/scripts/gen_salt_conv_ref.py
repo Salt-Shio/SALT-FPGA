@@ -13,8 +13,11 @@ out_ready 一直是 1 時的拍數。
   逐筆迴圈補上同一步之後要等於官方的 v_final,輸出事件序列也要完全相同。
 硬體不做 catch-up,所以 testbench 比的是 catch-up 之前的 V̂。
 
-拍數(Conv.md 5.3、5.3「OC=1」):out_ready 一直是 1、輸入一直有時,從第一個 o_c 算的那一拍到最後一個 o_c
-送完那一拍共 Σ_事件 Σ_o_c max(1, k) 拍;OC = 1 時算的那一拍一律不算送完,是 Σ_事件 max(2, k) 拍。
+拍數(Conv.md 5.3、5.3「OC=1」、5.5):out_ready 一直是 1、輸入一直有時,從第一個 o_c 算的那一拍到最後一個 o_c
+送完那一拍共 Σ_事件 Σ_o_c max(1, k) + (R-1)·(N-1) 拍;OC = 1 時算的那一拍一律不算送完,max(1, k) 換成 max(2, k)。
+    R 是讀取延遲(SaltConv 的 READ_LATENCY),N 是 (事件, o_c) 的個數 = 事件數 × OC。
+    每個 o_c 讀位址送出後要等 R-1 拍資料才出來;第一個 o_c 的等待在「算的那一拍」之前,不算在內,所以是 N-1 次。
+    答案檔對 READ_LATENCIES 裡每個 R 各列一個拍數,testbench 照自己的 READ_LATENCY 挑。
 
 參數組分兩種:
 - 訓練端的 conv1、conv2,繞回版、飽和版各一份,輸入是 test 的前 SAMPLE_COUNT 筆(量化資料夾 eval/test.yaml
@@ -32,7 +35,7 @@ out_ready 一直是 1 時的拍數。
           stall_last_of_oc:有 o_c < OC-1 的 (事件, o_c) fire 1 個以上
           stall_last_of_event_next_queued:不是樣本最後一筆的事件,在 o_c = OC-1 fire 1 個以上
           stall_last_of_event:有事件在 o_c = OC-1 fire 1 個以上
-    sample <in_count> <out_count> <cycle_count> <state_count>
+    sample <in_count> <out_count> <state_count> <cycle_count R=1> <cycle_count R=2> ...   R 照 READ_LATENCIES 的順序
     in <x> <y> <c> <t>                                        × in_count,照輸入順序
     out <o_c> <o_y> <o_x> <t>                                 × out_count,照送出順序
     state <row_bank> <col_bank> <bank_addr> <membrane> <last_time>   × state_count,每顆神經元一行
@@ -59,6 +62,7 @@ SAMPLE_COUNT = 10
 TRAINED_TIME_WIDTH = 16
 TRAINED_WEIGHT_WIDTH = 7
 SEED = 0
+READ_LATENCIES = (1, 2)   # 答案檔列拍數的 R;tb_salt_conv_common.svh 的 REF_READ_LATENCY_MAX 要等於最大值
 
 
 @dataclasses.dataclass(frozen=True)
@@ -245,8 +249,11 @@ class LayerModel:
                 fire_counts[event_index, oc_index[slot]] += 1
 
         min_cycles_per_oc = 2 if p.out_channels == 1 else 1
-        cycle_count = int(np.sum(np.maximum(min_cycles_per_oc, fire_counts)))
-        return {"outputs": outputs, "fire_counts": fire_counts, "cycle_count": cycle_count,
+        send_cycle_count = int(np.sum(np.maximum(min_cycles_per_oc, fire_counts)))
+        oc_count = fire_counts.size   # (事件, o_c) 的個數
+        cycle_counts = [send_cycle_count + (read_latency - 1) * max(oc_count - 1, 0)
+                        for read_latency in READ_LATENCIES]
+        return {"outputs": outputs, "fire_counts": fire_counts, "cycle_counts": cycle_counts,
                 "membrane": membrane, "last_time": last_time}
 
     def catch_up(self, membrane: np.ndarray, last_time: np.ndarray, end_time: int) -> np.ndarray:
@@ -285,7 +292,8 @@ def sample_lines(params: ParamSet, events: np.ndarray, loop_result: dict) -> lis
     row_slots = -(-params.out_rows // bank_count)
     col_slots = -(-params.out_cols // bank_count)
     state_count = params.out_channels * params.out_rows * params.out_cols
-    lines = [f"sample {len(events)} {len(loop_result['outputs'])} {loop_result['cycle_count']} {state_count}"]
+    cycle_text = " ".join(str(count) for count in loop_result["cycle_counts"])
+    lines = [f"sample {len(events)} {len(loop_result['outputs'])} {state_count} {cycle_text}"]
     lines += [f"in {x} {y} {c} {t}" for x, y, c, t in events]
     lines += [f"out {oc} {oy} {ox} {t}" for oc, oy, ox, t in loop_result["outputs"]]
     membrane, last_time = loop_result["membrane"], loop_result["last_time"]

@@ -33,6 +33,8 @@
 //     valid_during_clearing           清除期間上游送事件
 //   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入,
 //   檔名照參數組出來,規則跟 gen_salt_conv_ref.py 的 ParamSet.stem 相同。
+//   READ_LATENCY(R)不影響答案,只影響拍數:答案檔的 sample 行列出 R = 1..REF_READ_LATENCY_MAX 各自的拍數,
+//   照 READ_LATENCY 挑一個比。
 //////////////////////////////////////////////////////////////////////////////////
 
 	// 預設值是訓練端 conv1 飽和版
@@ -55,7 +57,8 @@
 	parameter bit     ROUND               = 1;
 	parameter bit     SATURATE            = 1;
 	parameter integer FIFO_DEPTH          = 16;
-	parameter WEIGHT_FILE    = "../../../../SaltConv.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11/conv1_weight.mem";
+	parameter integer READ_LATENCY        = 1;
+	parameter WEIGHT_FILE   = "../../../../SaltConv.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11/conv1_weight.mem";
 	parameter THRESHOLD_FILE = "../../../../SaltConv.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11/conv1_threshold.mem";
 	parameter DECAY_FILE     = "../../../../SaltConv.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11/conv1_decay.mem";
 
@@ -73,6 +76,7 @@
 	localparam integer CLOCK_PERIOD = 10;
 	localparam integer RESET_CYCLES = 3;
 	localparam integer MAX_PRINTED  = 20;   // 錯誤訊息最多印幾筆,之後只計數
+	localparam integer REF_READ_LATENCY_MAX = 2;   // 答案檔 sample 行列到哪個 R,跟 gen_salt_conv_ref.py 的 READ_LATENCIES 相同
 
 	// 涵蓋項目;前 FIRE_COVER_COUNT 項由答案檔的 coverage 行決定碰不碰得到
 	localparam integer COVER_STALL_ON_COMPUTE_CYCLE          = 0;
@@ -128,7 +132,8 @@
 		.WEIGHT_FILE        (WEIGHT_FILE),
 		.THRESHOLD_FILE     (THRESHOLD_FILE),
 		.DECAY_FILE         (DECAY_FILE),
-		.FIFO_DEPTH         (FIFO_DEPTH)
+		.FIFO_DEPTH         (FIFO_DEPTH),
+		.READ_LATENCY       (READ_LATENCY)
 	) dut (.*);
 
 	initial clk = 1'b0;
@@ -171,10 +176,11 @@
 		return $sformatf({"X_WIDTH=%0d Y_WIDTH=%0d IN_CHANNEL_WIDTH=%0d IN_CHANNELS=%0d OUT_CHANNELS=%0d ",
 		                  "OUT_ROWS=%0d OUT_COLS=%0d KERNEL_SIZE=%0d STRIDE=%0d PADDING=%0d TIME_WIDTH=%0d ",
 		                  "WEIGHT_WIDTH=%0d MEMBRANE_INT_WIDTH=%0d MEMBRANE_FRAC_WIDTH=%0d DECAY_FRAC_WIDTH=%0d ",
-		                  "DECAY_TABLE_DEPTH=%0d ROUND=%0d SATURATE=%0d FIFO_DEPTH=%0d"},
+		                  "DECAY_TABLE_DEPTH=%0d ROUND=%0d SATURATE=%0d FIFO_DEPTH=%0d READ_LATENCY=%0d"},
 		                 X_WIDTH, Y_WIDTH, IN_CHANNEL_WIDTH, IN_CHANNELS, OUT_CHANNELS, OUT_ROWS, OUT_COLS,
 		                 KERNEL_SIZE, STRIDE, PADDING, TIME_WIDTH, WEIGHT_WIDTH, MEMBRANE_INT_WIDTH,
-		                 MEMBRANE_FRAC_WIDTH, DECAY_FRAC_WIDTH, DECAY_TABLE_DEPTH, ROUND, SATURATE, FIFO_DEPTH);
+		                 MEMBRANE_FRAC_WIDTH, DECAY_FRAC_WIDTH, DECAY_TABLE_DEPTH, ROUND, SATURATE, FIFO_DEPTH,
+		                 READ_LATENCY);
 	endfunction
 
 	function automatic void report_error(string message);
@@ -203,8 +209,17 @@
 		if (kind != "sample") begin
 			$fatal(1, "答案檔第 %0d 筆樣本開頭不是 sample,是 %s", sample_index, kind);
 		end
-		scan_count = $fscanf(fd, "%d %d %d %d", in_count, out_count, expected_cycle_count, state_count);
-		if (scan_count != 4) $fatal(1, "sample 行格式不對");
+		scan_count = $fscanf(fd, "%d %d %d", in_count, out_count, state_count);
+		if (scan_count != 3) $fatal(1, "sample 行格式不對");
+		// 拍數:R = 1..REF_READ_LATENCY_MAX 各一個,挑 READ_LATENCY 那一個
+		if (READ_LATENCY < 1 || READ_LATENCY > REF_READ_LATENCY_MAX) begin
+			$fatal(1, "READ_LATENCY=%0d,答案檔只有 R=1..%0d 的拍數", READ_LATENCY, REF_READ_LATENCY_MAX);
+		end
+		for (int read_latency = 1; read_latency <= REF_READ_LATENCY_MAX; read_latency++) begin
+			scan_count = $fscanf(fd, "%d", a);
+			if (scan_count != 1) $fatal(1, "sample 行少了 R=%0d 的拍數", read_latency);
+			if (read_latency == READ_LATENCY) expected_cycle_count = a;
+		end
 
 		expected_in_x.delete(); expected_in_y.delete(); expected_in_c.delete(); expected_in_t.delete();
 		for (int i = 0; i < in_count; i++) begin
