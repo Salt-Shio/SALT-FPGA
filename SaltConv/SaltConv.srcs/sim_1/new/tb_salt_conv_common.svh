@@ -9,6 +9,9 @@
 //       同一拍裡改 out_ready,out_valid 不能跟著變(out_valid 不能用到 out_ready)。
 //       清除期間 in_ready=0,FIFO 也沒有收進任何事件。
 //       reset 之後 out_valid、in_ready 不是 X。
+//       算的那一拍,NeuronUpdate 用到的讀出值要等於記憶體裡的內容:每個合法候選的 (V̂, t_last) 等於
+//       NeuronMemory 陣列裡候選位址那一格(這一拍寫入之前),權重寬字等於權重 ROM 裡 (o_c, c) 那一格。
+//       只比最後結果時,讀錯資料但結果剛好對(例如讀到 X、飽和判斷剛好算出會 fire 的值)會漏掉,這一項在讀錯的那一拍就抓到。
 //     上游照 valid/ready 的規則:in_valid 拉高後資料不變,直到 in_ready=1 收走;清除期間也會拉高 in_valid。
 //   每筆樣本跑一次,開始前用 rst_n 重來(清除神經元記憶體)。
 //   只用一個 initial 流程:negedge 驅動輸入、#1 等組合邏輯穩定後取樣,posedge 後 #1 依取樣結果判斷。
@@ -72,6 +75,7 @@
 	localparam integer COL_SLOTS         = (OUT_COLS + AXIS_BANK_COUNT - 1) / AXIS_BANK_COUNT;
 	localparam integer BANK_DEPTH        = OUT_CHANNELS * ROW_SLOTS * COL_SLOTS;
 	localparam integer WORD_WIDTH        = MEMBRANE_WIDTH + TIME_WIDTH;
+	localparam integer KERNEL_WORD_WIDTH = KERNEL_SIZE * KERNEL_SIZE * WEIGHT_WIDTH;
 
 	localparam integer CLOCK_PERIOD = 10;
 	localparam integer RESET_CYCLES = 3;
@@ -156,6 +160,25 @@
 	end
 
 	// ---------------------------------------------------------------
+	// 算的那一拍的讀出值檢查:同樣因為 bank 只能用常數 index 取,每個 bank 一個 process 複製兩個值,
+	// 主流程觸發 read_check_request 後比對
+	// ---------------------------------------------------------------
+	logic [WORD_WIDTH-1:0] read_used  [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];   // NeuronUpdate 用到的 {t_last, V̂}
+	logic [WORD_WIDTH-1:0] read_truth [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];   // 陣列裡候選位址那一格
+	event read_check_request;
+
+	for (genvar row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin : read_check_rows
+		for (genvar col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin : read_check_cols
+			always @(read_check_request) begin
+				read_used[row_bank][col_bank]  = {dut.row_banks[row_bank].col_banks[col_bank].last_time,
+				                                  dut.row_banks[row_bank].col_banks[col_bank].membrane};
+				read_truth[row_bank][col_bank] = dut.row_banks[row_bank].col_banks[col_bank].neuron_memory.memory_array
+				                                     .bank[dut.candidate_bank_addr[row_bank][col_bank]];
+			end
+		end
+	end
+
+	// ---------------------------------------------------------------
 	// 一筆樣本的答案
 	// ---------------------------------------------------------------
 	int in_count, out_count, expected_cycle_count, state_count;
@@ -169,6 +192,7 @@
 	int out_check_count   = 0;
 	int state_check_count = 0;
 	int cycle_check_count = 0;
+	int read_check_count  = 0;   // 檢查過讀出值的「算的那一拍」數
 	int cover_count    [0:COVER_COUNT-1];
 	bit cover_required [0:COVER_COUNT-1];
 
@@ -258,6 +282,29 @@
 		end
 		return count;
 	endfunction
+
+	// 算的那一拍:用到的讀出值要等於記憶體裡的內容;posedge 之前呼叫,記憶體還沒被這一拍寫入
+	task automatic check_read_data(string where);
+		logic [KERNEL_WORD_WIDTH-1:0] weight_truth;
+		-> read_check_request;
+		#1;
+		weight_truth = dut.weight_memory.rom[dut.current_channel * IN_CHANNELS + dut.event_channel];
+		if (dut.kernel_word !== weight_truth) begin
+			report_error($sformatf("%s 算的那一拍權重讀錯:o_c=%0d c=%0d used=%h truth=%h", where,
+			                       dut.current_channel, dut.event_channel, dut.kernel_word, weight_truth));
+		end
+		for (int row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
+			for (int col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
+				if (dut.candidate_valid[row_bank][col_bank]
+				    && read_used[row_bank][col_bank] !== read_truth[row_bank][col_bank]) begin
+					report_error($sformatf("%s 算的那一拍神經元讀錯:bank=(%0d,%0d) addr=%0d used=%h truth=%h", where,
+					                       row_bank, col_bank, dut.candidate_bank_addr[row_bank][col_bank],
+					                       read_used[row_bank][col_bank], read_truth[row_bank][col_bank]));
+				end
+			end
+		end
+		read_check_count++;
+	endtask
 
 	task automatic apply_reset();
 		@(negedge clk);
@@ -375,6 +422,9 @@
 				out_index++;
 			end
 
+			// 放在取樣的最後:裡面多等的 #1 不影響上面的取樣時間點
+			if (dut.compute_cycle) check_read_data(where);
+
 			// ---------------- posedge ----------------
 			@(posedge clk);
 			#1;
@@ -486,8 +536,8 @@
 		else coverage_text = "missing";
 		if (error_count == 0 && coverage_ok && run_count > 0) verdict = "ALL PASS";
 		else verdict = "FAIL";
-		$display("%s: sample_count=%0d run_count=%0d out_check_count=%0d state_check_count=%0d cycle_check_count=%0d error_count=%0d coverage=%s %s",
+		$display("%s: sample_count=%0d run_count=%0d out_check_count=%0d state_check_count=%0d cycle_check_count=%0d read_check_count=%0d error_count=%0d coverage=%s %s",
 		         parameter_text(), sample_index, run_count, out_check_count, state_check_count, cycle_check_count,
-		         error_count, coverage_text, verdict);
+		         read_check_count, error_count, coverage_text, verdict);
 		$finish;
 	end
