@@ -7,7 +7,8 @@
 //   名稱用描述性完整拼字,行尾註解標 Conv.md 的數學符號。
 //
 //   一個 o_c 一個 o_c 做;算這個 o_c 的同一拍,送下一個 o_c 的讀位址。
-//   一個 o_c 占 max(1, k) 拍(OC = 1 時 max(2, k) 拍),k 是這個 o_c fire 的個數(out_ready 一直是 1 時)。
+//   讀位址送出後 READ_LATENCY(R)拍資料才出來,中間 R-1 拍只能等(Conv.md 5.5)。
+//   一個 o_c 占 (R-1) + max(1, k) 拍(OC = 1 時 (R-1) + max(2, k) 拍),k 是這個 o_c fire 的個數(out_ready 一直是 1 時)。
 //
 //   檔案照一筆事件的流程由上往下排:
 //     0 共用控制:宣告(第 6 段才算出來,前面就要用)
@@ -58,6 +59,9 @@ module SaltConv #(
 	// 輸入 FIFO
 	parameter integer FIFO_DEPTH = 16,
 
+	// 管線(Conv.md 5.5)
+	parameter integer READ_LATENCY = 1,   // R,送讀位址到資料可用的拍數;2 = 開 BRAM 輸出暫存器
+
 	// 推導出來的位寬($clog2(1)=0 時至少保留 1 bit)
 	localparam integer MEMBRANE_WIDTH    = MEMBRANE_INT_WIDTH + MEMBRANE_FRAC_WIDTH,   // w
 	localparam integer OUT_CHANNEL_WIDTH = (OUT_CHANNELS > 1) ? $clog2(OUT_CHANNELS) : 1,
@@ -99,7 +103,7 @@ module SaltConv #(
 	// 0 共用控制:第 6 段算,第 1 段起就要用
 	// ===============================================================
 	logic oc_in_progress;   // 有一個 o_c 在做
-	logic compute_cycle;    // 這一拍讀出的是這個 o_c 的資料:算、寫回、挑 s
+	logic compute_cycle;    // 這一拍讀出的是這個 o_c 的資料:算、寫回、挑 s(讀位址送出後第 R 拍)
 	logic oc_done;          // 這一拍做完,這個 o_c 的 fire 都送完了
 	logic begin_next_oc;    // 這一拍開始做下一個 o_c
 	logic take_new_event;   // 這一拍開始做新事件的 o_c = 0,從 FIFO 拿出最前面那筆
@@ -236,7 +240,7 @@ module SaltConv #(
 	);
 
 	// ===============================================================
-	// 4 開始下一個 o_c 時存起來:讀出的資料下一拍才出來,候選也存一拍對齊
+	// 4 開始下一個 o_c 時存起來:讀出的資料 R 拍後才出來,候選存著等它,一直用到下一個 o_c 開始
 	// ===============================================================
 	// 候選暫存器:算的那一拍跟讀出的資料對齊,之後清剩下的 fire 也用這一份
 	logic                        candidate_valid     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
@@ -274,6 +278,7 @@ module SaltConv #(
 		.OUT_CHANNELS    (OUT_CHANNELS),
 		.KERNEL_SIZE     (KERNEL_SIZE),
 		.WEIGHT_WIDTH    (WEIGHT_WIDTH),
+		.READ_LATENCY    (READ_LATENCY),
 		.WEIGHT_FILE     (WEIGHT_FILE)
 	) weight_memory (
 		.clk        (clk),
@@ -314,7 +319,8 @@ module SaltConv #(
 			NeuronMemory #(
 				.BANK_DEPTH    (BANK_DEPTH),
 				.MEMBRANE_WIDTH(MEMBRANE_WIDTH),
-				.TIME_WIDTH    (TIME_WIDTH)
+				.TIME_WIDTH    (TIME_WIDTH),
+				.READ_LATENCY  (READ_LATENCY)
 			) neuron_memory (
 				.clk            (clk),
 				.clearing       (clearing),
@@ -406,10 +412,23 @@ module SaltConv #(
 	assign out_time    = event_time;
 	assign spike_sent  = out_valid && out_ready;
 
+	// 讀出的資料出來沒:開始一個 o_c 那拍送讀位址,第 R 拍是算的那一拍,中間的 R-1 拍只能等
+	logic [READ_LATENCY-1:0] read_delay_flags;   // [i] = 1:這個 o_c 的讀位址是 i+1 拍前送的
+	logic                    waiting_read;       // 這一拍資料還沒出來
+
+	assign compute_cycle = read_delay_flags[READ_LATENCY-1];
+
+	if (READ_LATENCY == 1) begin : no_read_wait
+		assign waiting_read = 1'b0;
+	end else begin : read_wait
+		assign waiting_read = |read_delay_flags[READ_LATENCY-2:0];
+	end
+
 	// 做完沒:挑出的那個沒送出去(out_ready=0)就不清,留著;算的那一拍 out_ready=0,整份 s && valid 留下
 	always_comb begin
+		// 等資料的拍子還沒算,不算送完
 		// OC = 1:算的那一拍一律不算送完,下一筆事件的 o_c = 0 等這一拍寫回之後才讀
-		oc_done = oc_in_progress && !((OUT_CHANNELS == 1) && compute_cycle);
+		oc_done = oc_in_progress && !waiting_read && !((OUT_CHANNELS == 1) && compute_cycle);
 		for (int unsigned row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
 			for (int unsigned col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
 				pending_left[row_bank][col_bank] = pending[row_bank][col_bank]
@@ -437,10 +456,11 @@ module SaltConv #(
 
 	always_ff @(posedge clk or negedge rst_n) begin
 		if (!rst_n) begin
-			oc_in_progress <= 1'b0;
-			compute_cycle  <= 1'b0;
+			oc_in_progress   <= 1'b0;
+			read_delay_flags <= '0;
 		end else begin
-			compute_cycle <= begin_next_oc;
+			// 往高位推一格,最低位放這一拍有沒有送新的 o_c 讀位址;截掉的是最高位
+			read_delay_flags <= READ_LATENCY'({read_delay_flags, begin_next_oc});
 			if (begin_next_oc) begin
 				oc_in_progress <= 1'b1;
 			end else if (oc_done) begin

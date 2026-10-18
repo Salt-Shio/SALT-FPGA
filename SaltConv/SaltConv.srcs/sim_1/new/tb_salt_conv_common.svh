@@ -144,7 +144,7 @@
 		for (genvar col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin : snapshot_cols
 			always @(snapshot_request) begin
 				for (int addr = 0; addr < BANK_DEPTH; addr++) begin
-					bank_snapshot[row_bank][col_bank][addr] = dut.row_banks[row_bank].col_banks[col_bank].neuron_memory.bank[addr];
+					bank_snapshot[row_bank][col_bank][addr] = dut.row_banks[row_bank].col_banks[col_bank].neuron_memory.memory_array.bank[addr];
 				end
 			end
 		end

@@ -6,7 +6,7 @@
 //   上層例化 AXIS_BANK_COUNT x AXIS_BANK_COUNT 份,bank (r_y, r_x) 存 o_y mod M = r_y、o_x mod M = r_x 的神經元。
 //   bank 內位址由上層(CandidateGrid 的 bank_addr)算好送進來,一律開 BANK_DEPTH 格。
 //   一個讀 port、一個寫 port(simple dual port),位址各自獨立:
-//     讀:read_enable 那拍送 read_addr,下一拍 read_membrane、read_last_time 有效;
+//     讀:read_enable 那拍送 read_addr,READ_LATENCY 拍後 read_membrane、read_last_time 有效(R,Conv.md 5.5);
 //         read_enable=0 時保持上一次讀出的值。
 //     寫:write_enable 那拍的 posedge 寫入。
 //   同一拍讀、寫同一個位址時,讀出的值不保證,上層要避開。
@@ -14,12 +14,14 @@
 //   清除(Conv.md 第 2 節「清除」):clearing、clear_addr 由 NeuronMemoryClear 給,每個 bank 共用同一份;
 //   clearing=1 的每個 posedge 把 clear_addr 那一格寫 0,外部寫入一律忽略。
 //   上層保證 read_addr、write_addr 小於 BANK_DEPTH,超出時讀寫的結果不保證。
+//   這一層只放清除;陣列和讀出暫存器在 NeuronMemoryArray(BRAM 輸出暫存器怎麼保證併入,見那個檔頭)。
 //////////////////////////////////////////////////////////////////////////////////
 
 module NeuronMemory #(
 	parameter integer BANK_DEPTH     = 1024,   // 佔位預設值,實際深度由例化端決定(每個 bank 的格數)
 	parameter integer MEMBRANE_WIDTH = 9,      // w,膜電位暫存器位元寬(有號)
 	parameter integer TIME_WIDTH     = 16,     // t_last 位元寬,單位:整數 ms
+	parameter integer READ_LATENCY   = 1,      // R,送讀位址到資料可用的拍數,至少 1
 
 	// 推導出來的值($clog2(1)=0 時至少保留 1 bit)
 	localparam integer BANK_ADDR_WIDTH = (BANK_DEPTH > 1) ? $clog2(BANK_DEPTH) : 1,
@@ -44,31 +46,30 @@ module NeuronMemory #(
 	input  logic        [TIME_WIDTH-1:0]      write_last_time    // t
 );
 
-	// 一律用 BRAM,不交給 Vivado 依大小判斷:各層同一種資源,功耗、用量才能比較
-	(* ram_style = "block" *) logic [WORD_WIDTH-1:0] bank [0:BANK_DEPTH-1];
-
 	logic                       bank_write_enable;
 	logic [BANK_ADDR_WIDTH-1:0] bank_write_addr;
 	logic [WORD_WIDTH-1:0]      bank_write_word;
-	logic [WORD_WIDTH-1:0]      bank_read_word;   // BRAM 的讀出暫存器
+	logic [WORD_WIDTH-1:0]      bank_read_word;
 
 	// 清除期間寫 0,外部寫入忽略
 	assign bank_write_enable = clearing || write_enable;
 	assign bank_write_addr   = clearing ? clear_addr : write_addr;
 	assign bank_write_word   = clearing ? '0 : {write_last_time, write_membrane};
 
-	always_ff @(posedge clk) begin
-		if (bank_write_enable) begin
-			bank[bank_write_addr] <= bank_write_word;
-		end
-	end
-
 	// 讀取端清除不接管,直接用外部的
-	always_ff @(posedge clk) begin
-		if (read_enable) begin
-			bank_read_word <= bank[read_addr];
-		end
-	end
+	NeuronMemoryArray #(
+		.DEPTH       (BANK_DEPTH),
+		.WORD_WIDTH  (WORD_WIDTH),
+		.READ_LATENCY(READ_LATENCY)
+	) memory_array (
+		.clk         (clk),
+		.write_enable(bank_write_enable),
+		.write_addr  (bank_write_addr),
+		.write_word  (bank_write_word),
+		.read_enable (read_enable),
+		.read_addr   (read_addr),
+		.read_word   (bank_read_word)
+	);
 
 	assign read_membrane  = bank_read_word[MEMBRANE_WIDTH-1:0];
 	assign read_last_time = bank_read_word[WORD_WIDTH-1:MEMBRANE_WIDTH];

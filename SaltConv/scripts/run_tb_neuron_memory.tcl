@@ -49,7 +49,7 @@ open_saltconv_project $scripts_dir
 # First run only: register the design source and create the simulation set.
 # Files are referenced in place (no copy into the project), same as the other testbenches.
 set srcs_dir [file join [get_property DIRECTORY [current_project]] [get_property NAME [current_project]].srcs]
-foreach source_name {NeuronMemory.sv NeuronMemoryClear.sv} {
+foreach source_name {NeuronMemory.sv NeuronMemoryArray.sv NeuronMemoryClear.sv} {
     if {[llength [get_files -quiet -of_objects [get_filesets sources_1] */$source_name]] == 0} {
         add_files -fileset sources_1 -norecurse [file join $srcs_dir sources_1 new $source_name]
     }
