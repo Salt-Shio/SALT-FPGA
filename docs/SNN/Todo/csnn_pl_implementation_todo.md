@@ -31,18 +31,28 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 
 ## 下一步：Part 8.2 之後的管線優化(還沒開始，待規劃)
 
+- **分支狀態(2026-10-18)**：Part 8.2 的改動都在分支 `part8-read-latency`(從 `test` 的 `5507967` 開出)，還沒合併回 `test`。
+    - 使用者還沒 review 8.2，review 完才把進度表改成完成、決定要不要合併回 `test`。
+    - 使用者要求這個任務不 commit 到 `test`；之後的工作要開新分支還是接在 `part8-read-latency` 上，先問使用者。
+    - 跟 `test` 的差異：`git diff test..part8-read-latency`。
 - 下一個 session 的重點。Part 8 一次只處理一個策略或一個機制，規劃時先列出這次要做哪一個、怎麼量、怎麼驗證，給使用者確認。
+- **建議的順序**(2026-10-18 跟使用者討論過)：先做 $C=2$ 的草稿量測(只合成、不驗證，做法見「驗證流程 → 合成量測」)，看把計算切開後時脈能高到哪裡；數字出來再決定要不要規劃 $o_c$ 重疊。
 - 比較的做法照 Part 8.1 開頭的「比較的做法」；速度、資源的基準是 Part 8.1「結果」跟 Part 8.2「結果」。
 - 讀現行 RTL：`SaltConv.sv` 照事件流程分 0~6 段(檔頭有目錄)；資料流程圖、狀態圖在 `docs/SNN/Concept/Layer-RTL/Conv-image/SaltConvDataflow.md`、`SaltConvControl.md`。
 - **Part 8.2 的結論**：只做 $R=2$ 不划算。一個沒有 fire 的 $o_c$ 從 1 拍變 2 拍，時脈只高 2~10%，整體比 $R=1$ 慢 1.8~2 倍。
     - $R=2$ 只拿掉 BRAM 讀出那段約 1 ns；最長路徑換成從事件暫存器出發，經過 `NeuronUpdate` → `SpikeSelect` → 推進的判斷，8.5~9.4 ns，長度幾乎不變。
-    - $R$ 留著當參數(預設 1)：系統時脈被別的模組定死時可以用，之後 $o_c$ 重疊也要用。
+    - $R$ 留著當參數(預設 1)，現在不用：單獨用時脈只多一點，連「系統時脈被別的模組定得比較高、這一層要跟上」也幫不上。
+    - 可能有用的時機(推估，沒量過)：拆計算之後每一級變短(例如 4~5 ns)，BRAM 讀出那 1 ns 占的比例才大；而且要有 $o_c$ 重疊，多的那 1 拍才不會加在每個 $o_c$ 上。
 - **拆計算($C$)**：把 `NeuronUpdate` 那串切開，才碰得到現在的最長路徑。
     - $o_c$ 不重疊時，多拆一級每個 $o_c$ 就多 1 拍(5.5 的 $\text{gap}=(R+C-2)+\max(1,k)$)：$C=2$ 的時脈要超過 8.1 的兩倍、$R=C=2$ 要超過三倍，才比只做 8.1 快。
     - 跟著的：乘法器 DSP 還是 LUT(切在 DSP 內部暫存器上結論可能反過來，見「合成後要確認」)；事件暫存器可能每一級各一份；$C$ 變成參數。
 - **$o_c$ 重疊**(下一個 $o_c$ 先讀、前一個還在算)：Conv.md 第 5 節開頭決定 5.1~5.5 先不做。
     - 只在拆級能把時脈拉高很多時才有意義：重疊後拆出來的級數不再加到每個 $o_c$ 上。
     - 「已定案設計 → 目前不做」的理由(省固定 2~3 拍)只在 $R=C=1$ 成立；$R+C>2$ 時重疊每個 $o_c$ 省 $R+C-2$ 拍。
+    - 改動比 $R$ 大很多，同一時間會有好幾個 $o_c$ 在不同的級裡：
+        - 輸出要照 $o_c$ 順序送：前一個 $o_c$ 的 fire 還沒送完時，後面已經在算的 $o_c$ 要等。
+        - 下游 `out_ready=0` 時，路上的幾個 $o_c$ 都要停住。
+        - 讀寫衝突：$OC$ 比管線級數小時，下一筆事件的同一個 $o_c$ 可能在前一筆寫回前就讀，跟現在 $OC=1$ 的問題同一種，範圍變大。
 - 8.1、8.2 留下的待討論事項：Part 8.1「之後討論與評估」、Part 8.2「之後討論」。
 
 ## Part 8.2 讀取延遲 $R$(實作、驗證完，待使用者 review)
@@ -132,6 +142,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | conv2 $w$=11 飽和 $R=2$ | 105.1 MHz | 19.0 ns | 559 | 118 | 5 顆全部 | 全部 |
 
 - $R=2$ 4 組都沒有 `Synth 8-7052`；$R=1$ 照舊有(本來就沒有輸出暫存器可併)。
+- $R=1$ 的最終版只重量了 conv1 繞回；另外三組 $R=1$ 是用加 `soft` 之前的草稿量的(跟 8.1 差 2 MHz 以內、FF 相同)，最終版沒重量。要拿 $R=1$ 當基準比較時先補量。
 - 時脈跟推斷版、XPM 版差 4 MHz 以內，在布局繞線的變動範圍內；BRAM、DSP 不變。
 - `-lint` 只有 Part 5 記錄過的 `ASSIGN-6`；hold 照舊 -0.18 ns(輸入 port 進 FIFO，out-of-context 輸入延遲 0 造成)。
 
@@ -817,6 +828,21 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 - **Vivado 的已知陷阱**記在本機的 `.claude/skills/vivado-usage/SKILL.md`(不進 repo)。
     - 最常碰到的是：GUI 開著專案時，外面用 batch 改的專案設定會被 GUI 存檔蓋掉。GUI 開著就在專案副本上跑，不要動正式專案的 `.xpr`。
 - **單獨合成子模組**用 out-of-context(`synth_design -mode out_of_context`)，不然 port 會被當成晶片接腳算進 IOB。
+- **合成量測**(Part 7 起量速度、資源都用這套；腳本沒有進 repo，每次在 session 暫存目錄重寫)：
+    - non-project 模式，不動 `.xpr`。每組參數一個包裝 module：port 位寬寫死、例化 `SaltConv` 帶入整組參數，資料檔用絕對路徑。
+    - 4 組設定：訓練端 conv1、conv2 × 繞回、飽和，參數照 `run_tb_salt_conv.tcl` 的前 4 組，資料檔在 `SaltConv.srcs/sources_1/mem/<量化資料夾>/`。
+    - Tcl 步驟：
+        - `read_verilog -sv` 讀 `sources_1/new/` 的全部 `.sv` 跟包裝 module。
+        - `synth_design -top <包裝> -part xck26-sfvc784-2LV-c -lint`，接著 `catch {close_design}`(`-lint` 跑完沒有開著的設計)。
+        - `synth_design -top <包裝> -part xck26-sfvc784-2LV-c -mode out_of_context`。
+        - `create_clock -period 10.000 -name clk [get_ports clk]`；除了 `clk` 的輸入、全部輸出 `set_input_delay 0`、`set_output_delay 0`。
+        - `opt_design`、`place_design`、`route_design`。
+        - `report_timing_summary`、`report_timing -max_paths 1`(最長路徑)、`report_timing -from [get_ports out_ready]`、`report_utilization`(加 `-hierarchical` 看各模組)。
+    - 最高時脈用 10 ns 的 slack 換算：$1000/(10-\text{WNS})$ MHz；10 ns 只是量測用，不是目標。
+    - $R=2$ 要確認輸出暫存器：合成完(布局前)跟繞線後各查一次每顆 BRAM 的 `DOB_REG`；繞線後變 0 可能是布局搬出去的，看 log 有沒有 `Physopt 32-665`(見 Part 8.2)。
+    - hold 有 -0.18 ns 的違規是輸入 port 進 FIFO，out-of-context 把輸入延遲設 0 造成的，不用管。
+    - 一次平行開 8 個 batch Vivado 時，出現過一組 `opt_design` 報空白的 `Synth 20-411`，單獨重跑就好。
+    - 從 agent 的 shell 跑 Vivado 要先 `env -u NoDefaultCurrentDirectoryInExePath`(vivado-usage skill 8.6)。
 
 ## 專案狀態備註
 
