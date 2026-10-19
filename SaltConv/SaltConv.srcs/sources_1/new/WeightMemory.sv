@@ -7,7 +7,7 @@
 //   位址 o_c * IN_CHANNELS + c,深度 OUT_CHANNELS * IN_CHANNELS,緊密排列,不補到 2 的次方。
 //   寬字 KERNEL_SIZE*KERNEL_SIZE*WEIGHT_WIDTH bits,tap k_y*K + k_x 從第 (k_y*K + k_x)*WEIGHT_WIDTH bit 起。
 //   內容用 $readmemh 從 WEIGHT_FILE 載入,檔案格式見 Conv.md 第 2 節「權重」的「檔案格式」。
-//   read_enable=0 時第一級保持上一次讀出的值;第二級起 shift_enable=1 才往後推,0 時保持。
+//   read_enable=0 時第一級保持上一次讀出的值,後面的級照常往後推。
 //   上層保證 in_channel < IN_CHANNELS、out_channel < OUT_CHANNELS,超出時讀出的值不保證。
 //   模組加 keep_hierarchy = "soft"(照 AMD XPM 記憶體模組的做法):上層攤平時,跨模組的最佳化會讓
 //   輸出暫存器併不進 BRAM(Synth 8-7052,Vivado 沒有說明原因);soft 只留常數傳遞,其他跨邊界最佳化都擋掉(UG901)。
@@ -35,7 +35,6 @@ module WeightMemory #(
 	input  logic clk,
 
 	input  logic                         read_enable,
-	input  logic                         shift_enable,  // 第二級起往後推的開關(接 BRAM 輸出暫存器的 CE)
 	input  logic [OUT_CHANNEL_WIDTH-1:0] out_channel,   // o_c
 	input  logic [IN_CHANNEL_WIDTH-1:0]  in_channel,    // c
 	output logic [KERNEL_WORD_WIDTH-1:0] kernel_word    // q[o_c,c],read_enable 那拍的 READ_LATENCY 拍後有效
@@ -60,12 +59,10 @@ module WeightMemory #(
 		end
 	end
 
-	// 第二級起 shift_enable=1 往後推;第二級 Vivado 併進 BRAM 的輸出暫存器
+	// 第二級起每拍往後推;第二級 Vivado 併進 BRAM 的輸出暫存器
 	for (genvar stage = 1; stage < READ_LATENCY; stage++) begin : read_stages
 		always_ff @(posedge clk) begin
-			if (shift_enable) begin
-				read_stage[stage] <= read_stage[stage-1];
-			end
+			read_stage[stage] <= read_stage[stage-1];
 		end
 	end
 

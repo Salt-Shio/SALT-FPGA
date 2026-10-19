@@ -11,7 +11,7 @@
 //       reset 之後 out_valid、in_ready 不是 X。
 //       讀出的資料出來那一拍(位置 R 剛到,dut.data_cycle),讀出值要等於記憶體裡的內容:每個合法候選的 (V̂, t_last)
 //       等於 NeuronMemory 陣列裡候選位址那一格(這一拍寫入之前),權重寬字等於權重 ROM 裡 (o_c, c) 那一格;
-//       (o_c, c) 由 testbench 在送讀位址那一拍記下來,照順序對。
+//       (o_c, c) 由 testbench 在送讀位址那一拍記下來,照順序對;重送時丟掉的 o_c 還沒到位置 R 的,從清單拿掉。
 //       只比最後結果時,讀錯資料但結果剛好對(例如讀到 X、飽和判斷剛好算出會 fire 的值)會漏掉,這一項在讀錯的那一拍就抓到。
 //     上游照 valid/ready 的規則:in_valid 拉高後資料不變,直到 in_ready=1 收走;清除期間也會拉高 in_valid。
 //   每筆樣本跑一次,開始前用 rst_n 重來(清除神經元記憶體)。
@@ -285,9 +285,18 @@
 		return 1'b0;
 	endfunction
 
-	// SaltConv 整個空下來:管線裡沒有 o_c,FIFO 也沒有事件
+	// 管線位置 first..last 有幾個 o_c
+	function automatic int pipe_count(int first, int last);
+		int count = 0;
+		for (int position = first; position <= last; position++) begin
+			count += dut.pipe_valid[position];
+		end
+		return count;
+	endfunction
+
+	// SaltConv 整個空下來:管線裡沒有 o_c,也沒有還沒送的 o_c(重送、同一筆事件後面的),FIFO 也沒有事件
 	function automatic bit dut_idle();
-		return !pipe_occupied(1, PIPELINE_DEPTH) && !dut.fifo_read_valid && !dut.clearing;
+		return !pipe_occupied(1, PIPELINE_DEPTH) && dut.next_from_fifo && !dut.fifo_read_valid && !dut.clearing;
 	endfunction
 
 	// 這一拍還沒送出的 fire 數(算的那一拍是剛算出的 s && valid,之後是 bitmask)
@@ -455,6 +464,13 @@
 			end
 
 			// 放在取樣的最後:裡面多等的 #1 不影響上面的取樣時間點
+			// 丟掉的 o_c 在位置 1..L-1;位置 R..L-1 的已經檢查過、拿出清單了,位置 1..R-1 的是清單最後面幾個
+			if (dut.rewind) begin
+				repeat (pipe_count(1, READ_LATENCY - 1)) begin
+					void'(sent_out_channel.pop_back());
+					void'(sent_in_channel.pop_back());
+				end
+			end
 			if (dut.begin_next_oc) begin
 				sent_out_channel.push_back(dut.read_out_channel);
 				sent_in_channel.push_back(dut.read_channel);

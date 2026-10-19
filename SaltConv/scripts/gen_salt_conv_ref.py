@@ -16,15 +16,13 @@ out_ready 一直是 1 時的拍數。
 拍數(Conv.md 5.3、5.3「OC=1」、5.5):out_ready 一直是 1、輸入一直有時,從第一個 o_c 算的那一拍到最後一個 o_c
 送完那一拍。R 是讀取延遲(READ_LATENCY),C 是計算級數(COMPUTE_LATENCY),L = R + C - 1:讀位址送出後第 L 拍
 是計算第 2 級(C = 1 時就是算的那一拍)。
-    管線只在計算第 2 級的 o_c 送不完時停住;沒停住的拍子叫「往前一步」,停住的拍子每個 o_c 有 max(0, k-1) 拍。
-    往前一步時有沒有送讀位址:送了的 o_c 依序到計算第 2 級,沒送的那一步到計算第 2 級時是空拍。
-    所以拍數 = Σ_(事件, o_c) max(1, k) + 第一個到最後一個送讀位址之間沒送的步數。
-    沒送的步數(cycle_count 逐筆算):
-        重疊(OVERLAP=1):每一步都可以送下一個 o_c。
-        不重疊(OVERLAP=0):前一個 o_c 到計算第 2 級才送下一個,兩次送之間隔 L 步。
-        讀寫衝突(OC <= L):新事件的 o_c 跟上一筆事件同一個 o_c 要隔 L + 1 步(第 L 步到計算第 2 級、那一拍寫回,
-        同一拍不能讀)。同一筆事件的 o_c 一步接一步送,所以只看 o_c = 0。
-        例外只有 OC = 1:上一筆的 k >= 2 時停住期間已經寫回,隔 L 步;OC >= 2 時後面的 o_c 不一定停住,一律 L + 1 步。
+    每個 o_c 第 s 拍送讀位址,第 s + L 拍到計算第 2 級(算、寫回),送完是第 s + L + max(1, k) - 1 拍(d)。
+    計算第 2 級的 o_c 送不完時(k >= 2),它後面已經送了讀位址的 o_c 丟掉,送完那一拍(d)從下一個 o_c 重送。
+    下一個 o_c 最早第幾拍送(cycle_count 逐筆算,只算最後留下來的那一次):
+        重疊(OVERLAP=1):上一個 o_c 送的下一拍;上一個 k >= 2 時,等它送完那一拍。
+        不重疊(OVERLAP=0):上一個 o_c 送完那一拍。
+        讀寫衝突(OC <= L):上一筆事件同一個 o_c 還在管線裡就不送,OC >= 2 時等它送完的下一拍;
+        OC = 1 時它在計算第 2 級送不完的拍子已經寫回,等它到計算第 2 級的下一拍、也等它送完。
     OC = 1、R = C = 1 時跟 Part 8.2 之前的 max(2, k) 只差最後一個 o_c:最後一個沒有下一個要讀,不用多等一拍。
     答案檔對 CYCLE_CONFIGS 裡每組 (R, C, OVERLAP) 各列一個拍數,testbench 照自己的參數挑。
 
@@ -81,27 +79,34 @@ def cycle_count(fire_counts: np.ndarray, read_latency: int, compute_latency: int
     """fire_counts[事件, o_c] 是 k;算法見檔頭「拍數」。"""
     event_count, oc_count = fire_counts.shape
     pipeline_depth = read_latency + compute_latency - 1   # L
-    send_gap = 1 if overlap else pipeline_depth
-    skipped_steps = 0
-    previous_step = None        # 上一個 o_c 送讀位址的那一步
-    previous_zero_step = None   # 上一筆事件 o_c = 0 送讀位址的那一步
-    previous_zero_fires = 0
+    previous = None          # 上一個 o_c 的 (送讀位址, 送完, k)
+    previous_same = {}       # o_c -> 上一筆事件那個 o_c 的 (到計算第 2 級, 送完)
+    first_compute = None
+    last_done = None
     for event_index in range(event_count):
         for oc_index in range(oc_count):
-            if previous_step is None:
-                step = 0
+            k = int(fire_counts[event_index, oc_index])
+            if previous is None:
+                send = 0
             else:
-                step = previous_step + send_gap
-                if oc_index == 0 and oc_count <= pipeline_depth:
-                    written_while_stalled = oc_count == 1 and previous_zero_fires >= 2
-                    write_gap = pipeline_depth + (0 if written_while_stalled else 1)
-                    step = max(step, previous_zero_step + write_gap)
-                skipped_steps += step - previous_step - 1
-            if oc_index == 0:
-                previous_zero_step = step
-                previous_zero_fires = int(fire_counts[event_index, 0])
-            previous_step = step
-    return int(np.sum(np.maximum(1, fire_counts))) + skipped_steps
+                previous_send, previous_done, previous_k = previous
+                send = previous_send + 1 if overlap else previous_done
+                if previous_k >= 2:
+                    send = max(send, previous_done)
+            if oc_count <= pipeline_depth and oc_index in previous_same:
+                same_compute, same_done = previous_same[oc_index]
+                if oc_count == 1:
+                    send = max(send, same_compute + 1, same_done)
+                else:
+                    send = max(send, same_done + 1)
+            compute = send + pipeline_depth
+            done = compute + max(1, k) - 1
+            if first_compute is None:
+                first_compute = compute
+            last_done = done
+            previous = (send, done, k)
+            previous_same[oc_index] = (compute, done)
+    return last_done - first_compute + 1
 
 
 @dataclasses.dataclass(frozen=True)

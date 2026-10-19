@@ -113,7 +113,6 @@ module tb_neuron_memory;
 				.clearing       (clearing),
 				.clear_addr     (clear_addr),
 				.read_enable    (read_enable[row_bank][col_bank]),
-				.shift_enable   (1'b1),   // READ_LATENCY 用預設 1,用不到
 				.read_addr      (read_addr[row_bank][col_bank]),
 				.read_membrane  (read_membrane[row_bank][col_bank]),
 				.read_last_time (read_last_time[row_bank][col_bank]),
