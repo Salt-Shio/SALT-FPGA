@@ -14,10 +14,19 @@ out_ready 一直是 1 時的拍數。
 硬體不做 catch-up,所以 testbench 比的是 catch-up 之前的 V̂。
 
 拍數(Conv.md 5.3、5.3「OC=1」、5.5):out_ready 一直是 1、輸入一直有時,從第一個 o_c 算的那一拍到最後一個 o_c
-送完那一拍共 Σ_事件 Σ_o_c max(1, k) + (R-1)·(N-1) 拍;OC = 1 時算的那一拍一律不算送完,max(1, k) 換成 max(2, k)。
-    R 是讀取延遲(SaltConv 的 READ_LATENCY),N 是 (事件, o_c) 的個數 = 事件數 × OC。
-    每個 o_c 讀位址送出後要等 R-1 拍資料才出來;第一個 o_c 的等待在「算的那一拍」之前,不算在內,所以是 N-1 次。
-    答案檔對 READ_LATENCIES 裡每個 R 各列一個拍數,testbench 照自己的 READ_LATENCY 挑。
+送完那一拍。R 是讀取延遲(READ_LATENCY),C 是計算級數(COMPUTE_LATENCY),L = R + C - 1:讀位址送出後第 L 拍
+是計算第 2 級(C = 1 時就是算的那一拍)。
+    管線只在計算第 2 級的 o_c 送不完時停住;沒停住的拍子叫「往前一步」,停住的拍子每個 o_c 有 max(0, k-1) 拍。
+    往前一步時有沒有送讀位址:送了的 o_c 依序到計算第 2 級,沒送的那一步到計算第 2 級時是空拍。
+    所以拍數 = Σ_(事件, o_c) max(1, k) + 第一個到最後一個送讀位址之間沒送的步數。
+    沒送的步數(cycle_count 逐筆算):
+        重疊(OVERLAP=1):每一步都可以送下一個 o_c。
+        不重疊(OVERLAP=0):前一個 o_c 到計算第 2 級才送下一個,兩次送之間隔 L 步。
+        讀寫衝突(OC <= L):新事件的 o_c 跟上一筆事件同一個 o_c 要隔 L + 1 步(第 L 步到計算第 2 級、那一拍寫回,
+        同一拍不能讀)。同一筆事件的 o_c 一步接一步送,所以只看 o_c = 0。
+        例外只有 OC = 1:上一筆的 k >= 2 時停住期間已經寫回,隔 L 步;OC >= 2 時後面的 o_c 不一定停住,一律 L + 1 步。
+    OC = 1、R = C = 1 時跟 Part 8.2 之前的 max(2, k) 只差最後一個 o_c:最後一個沒有下一個要讀,不用多等一拍。
+    答案檔對 CYCLE_CONFIGS 裡每組 (R, C, OVERLAP) 各列一個拍數,testbench 照自己的參數挑。
 
 參數組分兩種:
 - 訓練端的 conv1、conv2,繞回版、飽和版各一份,輸入是 test 的前 SAMPLE_COUNT 筆(量化資料夾 eval/test.yaml
@@ -35,7 +44,7 @@ out_ready 一直是 1 時的拍數。
           stall_last_of_oc:有 o_c < OC-1 的 (事件, o_c) fire 1 個以上
           stall_last_of_event_next_queued:不是樣本最後一筆的事件,在 o_c = OC-1 fire 1 個以上
           stall_last_of_event:有事件在 o_c = OC-1 fire 1 個以上
-    sample <in_count> <out_count> <state_count> <cycle_count R=1> <cycle_count R=2> ...   R 照 READ_LATENCIES 的順序
+    sample <in_count> <out_count> <state_count> <cycle_count> ...   每組 (R, C, OVERLAP) 一個,照 CYCLE_CONFIGS 的順序
     in <x> <y> <c> <t>                                        × in_count,照輸入順序
     out <o_c> <o_y> <o_x> <t>                                 × out_count,照送出順序
     state <row_bank> <col_bank> <bank_addr> <membrane> <last_time>   × state_count,每顆神經元一行
@@ -62,7 +71,37 @@ SAMPLE_COUNT = 10
 TRAINED_TIME_WIDTH = 16
 TRAINED_WEIGHT_WIDTH = 7
 SEED = 0
-READ_LATENCIES = (1, 2)   # 答案檔列拍數的 R;tb_salt_conv_common.svh 的 REF_READ_LATENCY_MAX 要等於最大值
+# 答案檔列拍數的 (R, C, OVERLAP),R、C 各 1~2,順序是 ((R-1)*2 + (C-1))*2 + OVERLAP;
+# tb_salt_conv_common.svh 挑拍數用同一個順序
+CYCLE_CONFIGS = tuple((read_latency, compute_latency, overlap)
+                      for read_latency in (1, 2) for compute_latency in (1, 2) for overlap in (0, 1))
+
+
+def cycle_count(fire_counts: np.ndarray, read_latency: int, compute_latency: int, overlap: int) -> int:
+    """fire_counts[事件, o_c] 是 k;算法見檔頭「拍數」。"""
+    event_count, oc_count = fire_counts.shape
+    pipeline_depth = read_latency + compute_latency - 1   # L
+    send_gap = 1 if overlap else pipeline_depth
+    skipped_steps = 0
+    previous_step = None        # 上一個 o_c 送讀位址的那一步
+    previous_zero_step = None   # 上一筆事件 o_c = 0 送讀位址的那一步
+    previous_zero_fires = 0
+    for event_index in range(event_count):
+        for oc_index in range(oc_count):
+            if previous_step is None:
+                step = 0
+            else:
+                step = previous_step + send_gap
+                if oc_index == 0 and oc_count <= pipeline_depth:
+                    written_while_stalled = oc_count == 1 and previous_zero_fires >= 2
+                    write_gap = pipeline_depth + (0 if written_while_stalled else 1)
+                    step = max(step, previous_zero_step + write_gap)
+                skipped_steps += step - previous_step - 1
+            if oc_index == 0:
+                previous_zero_step = step
+                previous_zero_fires = int(fire_counts[event_index, 0])
+            previous_step = step
+    return int(np.sum(np.maximum(1, fire_counts))) + skipped_steps
 
 
 @dataclasses.dataclass(frozen=True)
@@ -248,11 +287,8 @@ class LayerModel:
                 outputs.append((int(oc_index[slot]), int(oy_index[slot]), int(ox_index[slot]), int(t)))
                 fire_counts[event_index, oc_index[slot]] += 1
 
-        min_cycles_per_oc = 2 if p.out_channels == 1 else 1
-        send_cycle_count = int(np.sum(np.maximum(min_cycles_per_oc, fire_counts)))
-        oc_count = fire_counts.size   # (事件, o_c) 的個數
-        cycle_counts = [send_cycle_count + (read_latency - 1) * max(oc_count - 1, 0)
-                        for read_latency in READ_LATENCIES]
+        cycle_counts = [cycle_count(fire_counts, read_latency, compute_latency, overlap)
+                        for read_latency, compute_latency, overlap in CYCLE_CONFIGS]
         return {"outputs": outputs, "fire_counts": fire_counts, "cycle_counts": cycle_counts,
                 "membrane": membrane, "last_time": last_time}
 

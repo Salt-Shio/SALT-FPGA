@@ -7,7 +7,7 @@
 //   bank 內位址由上層(CandidateGrid 的 bank_addr)算好送進來,一律開 BANK_DEPTH 格。
 //   一個讀 port、一個寫 port(simple dual port),位址各自獨立:
 //     讀:read_enable 那拍送 read_addr,READ_LATENCY 拍後 read_membrane、read_last_time 有效(R,Conv.md 5.5);
-//         read_enable=0 時保持上一次讀出的值。
+//         read_enable=0 時保持上一次讀出的值;R >= 2 時第二級起 shift_enable=1 才往後推。
 //     寫:write_enable 那拍的 posedge 寫入。
 //   同一拍讀、寫同一個位址時,讀出的值不保證,上層要避開。
 //   每格存一個字 {t_last, V̂},V̂ 在低位,寬 MEMBRANE_WIDTH + TIME_WIDTH。
@@ -35,6 +35,7 @@ module NeuronMemory #(
 
 	// 讀 port
 	input  logic                              read_enable,
+	input  logic                              shift_enable,      // 讀出第二級起往後推的開關
 	input  logic        [BANK_ADDR_WIDTH-1:0] read_addr,
 	output logic signed [MEMBRANE_WIDTH-1:0]  read_membrane,     // V̂
 	output logic        [TIME_WIDTH-1:0]      read_last_time,    // t_last
@@ -67,6 +68,7 @@ module NeuronMemory #(
 		.write_addr  (bank_write_addr),
 		.write_word  (bank_write_word),
 		.read_enable (read_enable),
+		.shift_enable(shift_enable),
 		.read_addr   (read_addr),
 		.read_word   (bank_read_word)
 	);

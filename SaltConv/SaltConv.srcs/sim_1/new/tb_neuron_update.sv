@@ -44,6 +44,7 @@ module tb_neuron_update;
 		.SATURATE           (SATURATE),
 		.DECAY_FILE         (DECAY_FILE)
 	) dut (
+		.clk         (1'b0),   // COMPUTE_LATENCY 用預設 1,純組合邏輯
 		.weight_code (weight_code),
 		.membrane    (membrane),
 		.last_time   (last_time),

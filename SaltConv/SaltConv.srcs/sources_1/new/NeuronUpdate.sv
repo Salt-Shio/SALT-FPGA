@@ -2,7 +2,12 @@
 //////////////////////////////////////////////////////////////////////////////////
 // Module Name: NeuronUpdate
 // Description:
-//   一顆神經元收到一筆事件後的膜電位更新(Conv.md 第 3 節 ①~④),純組合邏輯。
+//   一顆神經元收到一筆事件後的膜電位更新(Conv.md 第 3 節 ①~④)。
+//   COMPUTE_LATENCY(C)= 1:純組合邏輯。
+//   COMPUTE_LATENCY = 2:② 之後切一排暫存器(存 D、q),①② 是計算第 1 級,③④ 是計算第 2 級,
+//     第 2 級在輸入的下一拍出 spike、new_membrane。切點暫存器每拍都存,不接開關:
+//     第 2 級的結果上層只在算的那一拍用,之後停住的拍子用的是 bitmask(SaltConv 第 6 段)。
+//     event_time 在第 1 級用,threshold 在第 2 級用,上層各接那一級的 o_c 的值。
 //   上層一拍要算 M x M 顆候選,就例化 M x M 份;門檻、寫不寫回、送不送出 spike 都由上層決定。
 //     ① Δt = t - t_last:Δt=0 不衰減;1 <= Δt <= Δt_max 查衰減表 A[Δt];Δt > Δt_max 時 A=0。
 //     ② D = r(A·V̂),r 是 round(先加半格)或 truncate,都是算術右移 f_a 位。
@@ -31,6 +36,8 @@ module NeuronUpdate #(
 	// 不寫型別:Vivado 不支援 SystemVerilog string 型別參數,也不支援空字串參數(UG901)
 	parameter DECAY_FILE = "decay.mem",   // 衰減表,位址 Δt-1,每字 DECAY_FRAC_WIDTH bits 無號
 
+	parameter integer COMPUTE_LATENCY = 1,   // C:1 或 2
+
 	// 推導出來的位寬
 	localparam integer MEMBRANE_WIDTH = MEMBRANE_INT_WIDTH + MEMBRANE_FRAC_WIDTH,   // w
 	// A·V̂:f_a 位元無號乘 w 位元有號,f_a+w 位元有號放得下,round 加半格之後也放得下(Conv.md 第 3 節 ②)
@@ -39,6 +46,7 @@ module NeuronUpdate #(
 	localparam integer SUM_WIDTH      = ((MEMBRANE_WIDTH > WEIGHT_WIDTH + MEMBRANE_FRAC_WIDTH)
 	                                     ? MEMBRANE_WIDTH : WEIGHT_WIDTH + MEMBRANE_FRAC_WIDTH) + 1
 )(
+	input  logic                             clk,            // C = 1 時用不到
 	input  logic signed [WEIGHT_WIDTH-1:0]   weight_code,    // q
 	input  logic signed [MEMBRANE_WIDTH-1:0] membrane,       // V̂
 	input  logic        [TIME_WIDTH-1:0]     last_time,      // t_last
@@ -47,6 +55,12 @@ module NeuronUpdate #(
 	output logic                             spike,          // s
 	output logic signed [MEMBRANE_WIDTH-1:0] new_membrane    // V̂_new
 );
+
+	initial begin
+		if (COMPUTE_LATENCY != 1 && COMPUTE_LATENCY != 2) begin
+			$fatal(1, "NeuronUpdate: COMPUTE_LATENCY=%0d not supported", COMPUTE_LATENCY);
+		end
+	end
 
 	// 一律用 LUT,讀取是組合邏輯,同一拍 M x M 份各查各的位址
 	(* rom_style = "distributed" *) logic [DECAY_FRAC_WIDTH-1:0] decay_table [0:DECAY_TABLE_DEPTH-1];
@@ -94,14 +108,32 @@ module NeuronUpdate #(
 	// D 一定落在 0 跟 V̂ 之間,取低 w 位不會丟資料;Δt=0 時直接用 V̂
 	assign decayed = is_same_time ? membrane : shifted_product[MEMBRANE_WIDTH-1:0];
 
+	// C = 2 的切點:存 D、q
+	logic signed [MEMBRANE_WIDTH-1:0] step3_decayed;
+	logic signed [WEIGHT_WIDTH-1:0]   step3_weight_code;
+
+	if (COMPUTE_LATENCY == 2) begin : cut_after_step2
+		logic signed [MEMBRANE_WIDTH-1:0] stage_decayed;
+		logic signed [WEIGHT_WIDTH-1:0]   stage_weight_code;
+		always_ff @(posedge clk) begin
+			stage_decayed     <= decayed;
+			stage_weight_code <= weight_code;
+		end
+		assign step3_decayed     = stage_decayed;
+		assign step3_weight_code = stage_weight_code;
+	end else begin : no_cut
+		assign step3_decayed     = decayed;
+		assign step3_weight_code = weight_code;
+	end
+
 	// ③ 加權重碼
 	logic signed [SUM_WIDTH-1:0] decayed_extended;
 	logic signed [SUM_WIDTH-1:0] weight_extended;
 	logic signed [SUM_WIDTH-1:0] unfitted;   // U,溢位處理之前的真實值
 
 	// 有號數指定到較寬的變數會做符號延伸
-	assign decayed_extended = decayed;
-	assign weight_extended  = weight_code;
+	assign decayed_extended = step3_decayed;
+	assign weight_extended  = step3_weight_code;
 	assign unfitted         = decayed_extended + (weight_extended <<< MEMBRANE_FRAC_WIDTH);
 
 	// ④ 放回 w 位元,再判斷 fire

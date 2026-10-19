@@ -69,7 +69,7 @@ set ref_dir sim_1/new/ref
 # X_WIDTH Y_WIDTH IN_CHANNEL_WIDTH IN_CHANNELS OUT_CHANNELS OUT_ROWS OUT_COLS KERNEL_SIZE STRIDE PADDING
 # TIME_WIDTH WEIGHT_WIDTH MEMBRANE_INT_WIDTH MEMBRANE_FRAC_WIDTH DECAY_FRAC_WIDTH DECAY_TABLE_DEPTH ROUND SATURATE
 # FIFO_DEPTH, then the data file prefix (relative to SaltConv.srcs; _weight.mem, _threshold.mem, _decay.mem follow).
-# READ_LATENCY is added below.
+# READ_LATENCY, COMPUTE_LATENCY, OVERLAP are added below.
 set param_sets [list \
     [list 6 6 1 2 8 17 17 3 2 1 16 7 12 0 6 75 1 0 16 $wrap_dir/conv1] \
     [list 6 6 1 2 8 17 17 3 2 1 16 7 9 0 6 75 1 1 16 $saturate_dir/conv1] \
@@ -82,15 +82,16 @@ set param_sets [list \
     [list 1 1 1 2 1 1 1 3 1 1 8 4 5 0 3 3 1 1 16 $ref_dir/salt_conv_K3_S1_P1_R1_C1_IC2_OC1_IV5_FV0_RD1_SAT1] \
 ]
 
-# Each set above runs once per READ_LATENCY (R) below. R only changes the cycle count; the reference files list
-# the cycle count for every R in READ_LATENCIES of gen_salt_conv_ref.py, so this list must be a subset of it.
-# READ_LATENCY is inserted after FIFO_DEPTH, before the data file prefix.
-set read_latencies {1 2}
+# Each set above runs once per {READ_LATENCY COMPUTE_LATENCY OVERLAP} below. They only change the cycle count;
+# the reference files list the cycle count for every entry of CYCLE_CONFIGS in gen_salt_conv_ref.py (R, C in 1..2).
+# OVERLAP only matters when R + C > 2, so {1 1 1} is not listed.
+# The three values are inserted after FIFO_DEPTH, before the data file prefix.
+set pipeline_configs {{1 1 0} {2 1 0} {2 1 1} {1 2 0} {1 2 1} {2 2 0} {2 2 1}}
 set base_param_sets $param_sets
 set param_sets {}
 foreach base_set $base_param_sets {
-    foreach read_latency $read_latencies {
-        lappend param_sets [concat [lrange $base_set 0 end-1] $read_latency [list [lindex $base_set end]]]
+    foreach pipeline_config $pipeline_configs {
+        lappend param_sets [concat [lrange $base_set 0 end-1] $pipeline_config [list [lindex $base_set end]]]
     }
 }
 
@@ -98,8 +99,8 @@ foreach base_set $base_param_sets {
 proc salt_conv_integer_params {param_set} {
     lassign $param_set x_width y_width in_channel_width in_channels out_channels out_rows out_cols \
         kernel_size stride padding time_width weight_width membrane_int_width membrane_frac_width \
-        decay_frac_width decay_table_depth round saturate fifo_depth read_latency
-    return "X_WIDTH=$x_width Y_WIDTH=$y_width IN_CHANNEL_WIDTH=$in_channel_width IN_CHANNELS=$in_channels OUT_CHANNELS=$out_channels OUT_ROWS=$out_rows OUT_COLS=$out_cols KERNEL_SIZE=$kernel_size STRIDE=$stride PADDING=$padding TIME_WIDTH=$time_width WEIGHT_WIDTH=$weight_width MEMBRANE_INT_WIDTH=$membrane_int_width MEMBRANE_FRAC_WIDTH=$membrane_frac_width DECAY_FRAC_WIDTH=$decay_frac_width DECAY_TABLE_DEPTH=$decay_table_depth ROUND=$round SATURATE=$saturate FIFO_DEPTH=$fifo_depth READ_LATENCY=$read_latency"
+        decay_frac_width decay_table_depth round saturate fifo_depth read_latency compute_latency overlap
+    return "X_WIDTH=$x_width Y_WIDTH=$y_width IN_CHANNEL_WIDTH=$in_channel_width IN_CHANNELS=$in_channels OUT_CHANNELS=$out_channels OUT_ROWS=$out_rows OUT_COLS=$out_cols KERNEL_SIZE=$kernel_size STRIDE=$stride PADDING=$padding TIME_WIDTH=$time_width WEIGHT_WIDTH=$weight_width MEMBRANE_INT_WIDTH=$membrane_int_width MEMBRANE_FRAC_WIDTH=$membrane_frac_width DECAY_FRAC_WIDTH=$decay_frac_width DECAY_TABLE_DEPTH=$decay_table_depth ROUND=$round SATURATE=$saturate FIFO_DEPTH=$fifo_depth READ_LATENCY=$read_latency COMPUTE_LATENCY=$compute_latency OVERLAP=$overlap"
 }
 
 proc salt_conv_generic {param_set} {

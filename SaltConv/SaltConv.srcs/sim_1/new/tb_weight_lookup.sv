@@ -59,6 +59,7 @@ module tb_weight_lookup;
 	) memory (
 		.clk        (clk),
 		.read_enable(read_enable),
+		.shift_enable(1'b1),   // READ_LATENCY 用預設 1,用不到
 		.out_channel(out_channel),
 		.in_channel (in_channel),
 		.kernel_word(kernel_word)

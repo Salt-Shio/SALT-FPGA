@@ -9,8 +9,9 @@
 //       同一拍裡改 out_ready,out_valid 不能跟著變(out_valid 不能用到 out_ready)。
 //       清除期間 in_ready=0,FIFO 也沒有收進任何事件。
 //       reset 之後 out_valid、in_ready 不是 X。
-//       算的那一拍,NeuronUpdate 用到的讀出值要等於記憶體裡的內容:每個合法候選的 (V̂, t_last) 等於
-//       NeuronMemory 陣列裡候選位址那一格(這一拍寫入之前),權重寬字等於權重 ROM 裡 (o_c, c) 那一格。
+//       讀出的資料出來那一拍(位置 R 剛到,dut.data_cycle),讀出值要等於記憶體裡的內容:每個合法候選的 (V̂, t_last)
+//       等於 NeuronMemory 陣列裡候選位址那一格(這一拍寫入之前),權重寬字等於權重 ROM 裡 (o_c, c) 那一格;
+//       (o_c, c) 由 testbench 在送讀位址那一拍記下來,照順序對。
 //       只比最後結果時,讀錯資料但結果剛好對(例如讀到 X、飽和判斷剛好算出會 fire 的值)會漏掉,這一項在讀錯的那一拍就抓到。
 //     上游照 valid/ready 的規則:in_valid 拉高後資料不變,直到 in_ready=1 收走;清除期間也會拉高 in_valid。
 //   每筆樣本跑一次,開始前用 rst_n 重來(清除神經元記憶體)。
@@ -36,8 +37,8 @@
 //     valid_during_clearing           清除期間上游送事件
 //   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入,
 //   檔名照參數組出來,規則跟 gen_salt_conv_ref.py 的 ParamSet.stem 相同。
-//   READ_LATENCY(R)不影響答案,只影響拍數:答案檔的 sample 行列出 R = 1..REF_READ_LATENCY_MAX 各自的拍數,
-//   照 READ_LATENCY 挑一個比。
+//   READ_LATENCY(R)、COMPUTE_LATENCY(C)、OVERLAP 不影響答案,只影響拍數:答案檔的 sample 行列出每組
+//   (R, C, OVERLAP) 的拍數(順序見 gen_salt_conv_ref.py 的 CYCLE_CONFIGS),照自己的參數挑一個比。
 //////////////////////////////////////////////////////////////////////////////////
 
 	// 預設值是訓練端 conv1 飽和版
@@ -61,6 +62,8 @@
 	parameter bit     SATURATE            = 1;
 	parameter integer FIFO_DEPTH          = 16;
 	parameter integer READ_LATENCY        = 1;
+	parameter integer COMPUTE_LATENCY     = 1;
+	parameter bit     OVERLAP             = 0;
 	parameter WEIGHT_FILE   = "../../../../SaltConv.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11/conv1_weight.mem";
 	parameter THRESHOLD_FILE = "../../../../SaltConv.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11/conv1_threshold.mem";
 	parameter DECAY_FILE     = "../../../../SaltConv.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11/conv1_decay.mem";
@@ -76,11 +79,14 @@
 	localparam integer BANK_DEPTH        = OUT_CHANNELS * ROW_SLOTS * COL_SLOTS;
 	localparam integer WORD_WIDTH        = MEMBRANE_WIDTH + TIME_WIDTH;
 	localparam integer KERNEL_WORD_WIDTH = KERNEL_SIZE * KERNEL_SIZE * WEIGHT_WIDTH;
+	localparam integer PIPELINE_DEPTH    = READ_LATENCY + COMPUTE_LATENCY - 1;
 
 	localparam integer CLOCK_PERIOD = 10;
 	localparam integer RESET_CYCLES = 3;
 	localparam integer MAX_PRINTED  = 20;   // 錯誤訊息最多印幾筆,之後只計數
-	localparam integer REF_READ_LATENCY_MAX = 2;   // 答案檔 sample 行列到哪個 R,跟 gen_salt_conv_ref.py 的 READ_LATENCIES 相同
+	// 答案檔 sample 行的拍數:R、C 各 1~2、OVERLAP 0~1,共 8 個,順序 ((R-1)*2 + (C-1))*2 + OVERLAP,
+	// 跟 gen_salt_conv_ref.py 的 CYCLE_CONFIGS 相同
+	localparam integer CYCLE_CONFIG_COUNT = 8;
 
 	// 涵蓋項目;前 FIRE_COVER_COUNT 項由答案檔的 coverage 行決定碰不碰得到
 	localparam integer COVER_STALL_ON_COMPUTE_CYCLE          = 0;
@@ -137,7 +143,9 @@
 		.THRESHOLD_FILE     (THRESHOLD_FILE),
 		.DECAY_FILE         (DECAY_FILE),
 		.FIFO_DEPTH         (FIFO_DEPTH),
-		.READ_LATENCY       (READ_LATENCY)
+		.READ_LATENCY       (READ_LATENCY),
+		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
+		.OVERLAP            (OVERLAP)
 	) dut (.*);
 
 	initial clk = 1'b0;
@@ -160,7 +168,7 @@
 	end
 
 	// ---------------------------------------------------------------
-	// 算的那一拍的讀出值檢查:同樣因為 bank 只能用常數 index 取,每個 bank 一個 process 複製兩個值,
+	// 讀出值檢查:同樣因為 bank 只能用常數 index 取,每個 bank 一個 process 複製兩個值,
 	// 主流程觸發 read_check_request 後比對
 	// ---------------------------------------------------------------
 	logic [WORD_WIDTH-1:0] read_used  [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];   // NeuronUpdate 用到的 {t_last, V̂}
@@ -173,7 +181,7 @@
 				read_used[row_bank][col_bank]  = {dut.row_banks[row_bank].col_banks[col_bank].last_time,
 				                                  dut.row_banks[row_bank].col_banks[col_bank].membrane};
 				read_truth[row_bank][col_bank] = dut.row_banks[row_bank].col_banks[col_bank].neuron_memory.memory_array
-				                                     .bank[dut.candidate_bank_addr[row_bank][col_bank]];
+				                                     .bank[dut.pipe_bank_addr[READ_LATENCY][row_bank][col_bank]];
 			end
 		end
 	end
@@ -184,6 +192,7 @@
 	int in_count, out_count, expected_cycle_count, state_count;
 	int expected_in_x[$], expected_in_y[$], expected_in_c[$], expected_in_t[$];
 	int expected_out_c[$], expected_out_y[$], expected_out_x[$], expected_out_t[$];
+	int sent_out_channel[$], sent_in_channel[$];   // 送過讀位址、資料還沒出來的 (o_c, c),照送的順序
 	int state_row_bank[$], state_col_bank[$], state_addr[$], state_membrane[$], state_last_time[$];
 
 	// 統計
@@ -192,7 +201,7 @@
 	int out_check_count   = 0;
 	int state_check_count = 0;
 	int cycle_check_count = 0;
-	int read_check_count  = 0;   // 檢查過讀出值的「算的那一拍」數
+	int read_check_count  = 0;   // 檢查過讀出值的拍數(位置 R 剛到)
 	int cover_count    [0:COVER_COUNT-1];
 	bit cover_required [0:COVER_COUNT-1];
 
@@ -200,11 +209,12 @@
 		return $sformatf({"X_WIDTH=%0d Y_WIDTH=%0d IN_CHANNEL_WIDTH=%0d IN_CHANNELS=%0d OUT_CHANNELS=%0d ",
 		                  "OUT_ROWS=%0d OUT_COLS=%0d KERNEL_SIZE=%0d STRIDE=%0d PADDING=%0d TIME_WIDTH=%0d ",
 		                  "WEIGHT_WIDTH=%0d MEMBRANE_INT_WIDTH=%0d MEMBRANE_FRAC_WIDTH=%0d DECAY_FRAC_WIDTH=%0d ",
-		                  "DECAY_TABLE_DEPTH=%0d ROUND=%0d SATURATE=%0d FIFO_DEPTH=%0d READ_LATENCY=%0d"},
+		                  "DECAY_TABLE_DEPTH=%0d ROUND=%0d SATURATE=%0d FIFO_DEPTH=%0d READ_LATENCY=%0d ",
+		                  "COMPUTE_LATENCY=%0d OVERLAP=%0d"},
 		                 X_WIDTH, Y_WIDTH, IN_CHANNEL_WIDTH, IN_CHANNELS, OUT_CHANNELS, OUT_ROWS, OUT_COLS,
 		                 KERNEL_SIZE, STRIDE, PADDING, TIME_WIDTH, WEIGHT_WIDTH, MEMBRANE_INT_WIDTH,
 		                 MEMBRANE_FRAC_WIDTH, DECAY_FRAC_WIDTH, DECAY_TABLE_DEPTH, ROUND, SATURATE, FIFO_DEPTH,
-		                 READ_LATENCY);
+		                 READ_LATENCY, COMPUTE_LATENCY, OVERLAP);
 	endfunction
 
 	function automatic void report_error(string message);
@@ -235,14 +245,14 @@
 		end
 		scan_count = $fscanf(fd, "%d %d %d", in_count, out_count, state_count);
 		if (scan_count != 3) $fatal(1, "sample 行格式不對");
-		// 拍數:R = 1..REF_READ_LATENCY_MAX 各一個,挑 READ_LATENCY 那一個
-		if (READ_LATENCY < 1 || READ_LATENCY > REF_READ_LATENCY_MAX) begin
-			$fatal(1, "READ_LATENCY=%0d,答案檔只有 R=1..%0d 的拍數", READ_LATENCY, REF_READ_LATENCY_MAX);
+		// 拍數:每組 (R, C, OVERLAP) 一個,挑自己那一組
+		if (READ_LATENCY < 1 || READ_LATENCY > 2 || COMPUTE_LATENCY < 1 || COMPUTE_LATENCY > 2) begin
+			$fatal(1, "READ_LATENCY=%0d COMPUTE_LATENCY=%0d,答案檔只有 R、C 各 1~2 的拍數", READ_LATENCY, COMPUTE_LATENCY);
 		end
-		for (int read_latency = 1; read_latency <= REF_READ_LATENCY_MAX; read_latency++) begin
+		for (int config_index = 0; config_index < CYCLE_CONFIG_COUNT; config_index++) begin
 			scan_count = $fscanf(fd, "%d", a);
-			if (scan_count != 1) $fatal(1, "sample 行少了 R=%0d 的拍數", read_latency);
-			if (read_latency == READ_LATENCY) expected_cycle_count = a;
+			if (scan_count != 1) $fatal(1, "sample 行少了第 %0d 組的拍數", config_index);
+			if (config_index == ((READ_LATENCY - 1) * 2 + (COMPUTE_LATENCY - 1)) * 2 + OVERLAP) expected_cycle_count = a;
 		end
 
 		expected_in_x.delete(); expected_in_y.delete(); expected_in_c.delete(); expected_in_t.delete();
@@ -267,9 +277,17 @@
 		return 1'b1;
 	endfunction
 
-	// SaltConv 整個空下來:沒有 o_c 在做,FIFO 也沒有事件
+	// 管線位置 first..last 有沒有 o_c
+	function automatic bit pipe_occupied(int first, int last);
+		for (int position = first; position <= last; position++) begin
+			if (dut.pipe_valid[position]) return 1'b1;
+		end
+		return 1'b0;
+	endfunction
+
+	// SaltConv 整個空下來:管線裡沒有 o_c,FIFO 也沒有事件
 	function automatic bit dut_idle();
-		return !dut.oc_in_progress && !dut.fifo_read_valid && !dut.clearing;
+		return !pipe_occupied(1, PIPELINE_DEPTH) && !dut.fifo_read_valid && !dut.clearing;
 	endfunction
 
 	// 這一拍還沒送出的 fire 數(算的那一拍是剛算出的 s && valid,之後是 bitmask)
@@ -283,22 +301,33 @@
 		return count;
 	endfunction
 
-	// 算的那一拍:用到的讀出值要等於記憶體裡的內容;posedge 之前呼叫,記憶體還沒被這一拍寫入
+	// 位置 R 剛到:讀出值要等於記憶體裡的內容;posedge 之前呼叫,記憶體還沒被這一拍寫入
 	task automatic check_read_data(string where);
 		logic [KERNEL_WORD_WIDTH-1:0] weight_truth;
+		int out_channel_sent, in_channel_sent;
+		if (sent_out_channel.size() == 0) begin
+			report_error($sformatf("%s 資料出來了,可是沒有送過讀位址", where));
+			return;
+		end
+		out_channel_sent = sent_out_channel.pop_front();
+		in_channel_sent  = sent_in_channel.pop_front();
+		if (out_channel_sent != dut.pipe_channel[READ_LATENCY]) begin
+			report_error($sformatf("%s 位置 R 的 o_c=%0d,送讀位址的順序是 o_c=%0d", where,
+			                       dut.pipe_channel[READ_LATENCY], out_channel_sent));
+		end
 		-> read_check_request;
 		#1;
-		weight_truth = dut.weight_memory.rom[dut.current_channel * IN_CHANNELS + dut.event_channel];
+		weight_truth = dut.weight_memory.rom[out_channel_sent * IN_CHANNELS + in_channel_sent];
 		if (dut.kernel_word !== weight_truth) begin
-			report_error($sformatf("%s 算的那一拍權重讀錯:o_c=%0d c=%0d used=%h truth=%h", where,
-			                       dut.current_channel, dut.event_channel, dut.kernel_word, weight_truth));
+			report_error($sformatf("%s 權重讀錯:o_c=%0d c=%0d used=%h truth=%h", where,
+			                       out_channel_sent, in_channel_sent, dut.kernel_word, weight_truth));
 		end
 		for (int row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
 			for (int col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
-				if (dut.candidate_valid[row_bank][col_bank]
+				if (dut.pipe_candidate_valid[READ_LATENCY][row_bank][col_bank]
 				    && read_used[row_bank][col_bank] !== read_truth[row_bank][col_bank]) begin
-					report_error($sformatf("%s 算的那一拍神經元讀錯:bank=(%0d,%0d) addr=%0d used=%h truth=%h", where,
-					                       row_bank, col_bank, dut.candidate_bank_addr[row_bank][col_bank],
+					report_error($sformatf("%s 神經元讀錯:bank=(%0d,%0d) addr=%0d used=%h truth=%h", where,
+					                       row_bank, col_bank, dut.pipe_bank_addr[READ_LATENCY][row_bank][col_bank],
 					                       read_used[row_bank][col_bank], read_truth[row_bank][col_bank]));
 				end
 			end
@@ -335,6 +364,8 @@
 		string where;
 
 		max_cycles = 20 * (expected_cycle_count + in_count) + BANK_DEPTH + 10000;
+		sent_out_channel.delete();
+		sent_in_channel.delete();
 		reset_driver();
 		apply_reset();
 
@@ -388,16 +419,17 @@
 				int left = pending_fire_count();
 				if (dut.compute_cycle) cover_count[COVER_STALL_ON_COMPUTE_CYCLE]++;
 				if (left >= 2) cover_count[COVER_STALL_WITH_MORE_LEFT]++;
-				else if (!dut.last_channel) cover_count[COVER_STALL_LAST_OF_OC]++;
-				else if (dut.fifo_read_valid) cover_count[COVER_STALL_LAST_OF_EVENT_NEXT_QUEUED]++;
+				else if (out_channel != OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1)) cover_count[COVER_STALL_LAST_OF_OC]++;
+				// 下一筆事件在 FIFO,或已經在管線位置 1..L-1
+				else if (dut.fifo_read_valid || pipe_occupied(1, PIPELINE_DEPTH - 1)) cover_count[COVER_STALL_LAST_OF_EVENT_NEXT_QUEUED]++;
 				else cover_count[COVER_STALL_LAST_OF_EVENT]++;
 			end
 			if (!out_valid && !out_ready && !dut.clearing) cover_count[COVER_READY_LOW_WITHOUT_VALID]++;
 			if (in_valid && !in_ready && !dut.clearing) cover_count[COVER_UPSTREAM_BLOCKED]++;
-			if (!dut.oc_in_progress && dut.begin_next_oc && events_taken > 0) cover_count[COVER_RESUME_FROM_IDLE]++;
+			if (!pipe_occupied(1, PIPELINE_DEPTH) && dut.begin_next_oc && events_taken > 0) cover_count[COVER_RESUME_FROM_IDLE]++;
 
 			if (dut.compute_cycle && first_compute_cycle < 0) first_compute_cycle = cycle;
-			if (dut.oc_in_progress && dut.oc_done) last_done_cycle = cycle;
+			if (dut.oc_done) last_done_cycle = cycle;
 			if (dut.take_new_event) events_taken++;
 
 			sampled_in_handshake  = in_valid && in_ready;
@@ -423,7 +455,11 @@
 			end
 
 			// 放在取樣的最後:裡面多等的 #1 不影響上面的取樣時間點
-			if (dut.compute_cycle) check_read_data(where);
+			if (dut.begin_next_oc) begin
+				sent_out_channel.push_back(dut.read_out_channel);
+				sent_in_channel.push_back(dut.read_channel);
+			end
+			if (dut.data_cycle) check_read_data(where);
 
 			// ---------------- posedge ----------------
 			@(posedge clk);

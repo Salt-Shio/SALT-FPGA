@@ -6,20 +6,24 @@
 //   流程圖、狀態圖見 Conv-image/SaltConvDataflow.md、SaltConvControl.md。
 //   名稱用描述性完整拼字,行尾註解標 Conv.md 的數學符號。
 //
-//   一個 o_c 一個 o_c 做;算這個 o_c 的同一拍,送下一個 o_c 的讀位址。
-//   讀位址送出後 READ_LATENCY(R)拍資料才出來,中間 R-1 拍只能等(Conv.md 5.5)。
-//   一個 o_c 占 (R-1) + max(1, k) 拍(OC = 1 時 (R-1) + max(2, k) 拍),k 是這個 o_c fire 的個數(out_ready 一直是 1 時)。
+//   讀位址送出後 READ_LATENCY(R)拍資料才出來;COMPUTE_LATENCY(C)= 2 時計算再分兩級(Conv.md 5.5)。
+//   讀位址送出後第 p 拍,這個 o_c 在「管線位置 p」(p = 1..L,L = R + C - 1):
+//     位置 R 是計算第 1 級(讀出的資料在這一拍出來),位置 L 是計算第 2 級(寫回、送 fire);C = 1 時兩個是同一個。
+//   OVERLAP = 0:前一個 o_c 到位置 L 才送下一個 o_c 的讀位址,一個 o_c 占 (L-1) + max(1, k) 拍。
+//   OVERLAP = 1:每拍都送下一個 o_c 的讀位址;位置 L 的 o_c 送不完時整條管線停住,一個 o_c 占 max(1, k) 拍。
+//   L = 1(R = C = 1)時兩種是同一個電路。k 是這個 o_c fire 的個數(out_ready 一直是 1 時)。
+//   OC <= L 時,新事件的 o_c = 0 要等上一筆事件的 o_c = 0 寫回才讀(讀寫衝突,第 6 段)。
 //
 //   檔案照一筆事件的流程由上往下排:
 //     0 共用控制:宣告(第 6 段才算出來,前面就要用)
 //     1 事件進來:清除、FIFO、事件暫存器
 //     2 下一個 o_c 是誰、讀位址
 //     3 下一個 o_c 碰到哪些神經元(CandidateGrid)
-//     4 開始下一個 o_c 時存起來:候選暫存器
+//     4 管線位置 1..L:每個位置一份那個 o_c 的候選、t、o_c
 //     5 讀出、算、寫回:權重、門檻、NeuronMemory + NeuronUpdate
 //     6 送出、做完沒、換不換
 //   排列規則:變數的宣告跟設定它的邏輯放在同一段;要用到的變數,設定它的那段排在前面。
-//   互相依賴的(例如 current_channel 和 read_out_channel)放同一段,宣告在段首。
+//   互相依賴的(例如 sent_channel 和 read_out_channel)放同一段,宣告在段首。
 //   例外只有第 0 段的控制訊號:要等第 6 段整串算完才知道,第 1 段起就要用。
 //////////////////////////////////////////////////////////////////////////////////
 
@@ -60,7 +64,9 @@ module SaltConv #(
 	parameter integer FIFO_DEPTH = 16,
 
 	// 管線(Conv.md 5.5)
-	parameter integer READ_LATENCY = 1,   // R,送讀位址到資料可用的拍數;2 = 開 BRAM 輸出暫存器
+	parameter integer READ_LATENCY    = 1,   // R,送讀位址到資料可用的拍數;2 = 開 BRAM 輸出暫存器
+	parameter integer COMPUTE_LATENCY = 1,   // C,計算級數:1 或 2(2 = NeuronUpdate 在 ② 之後切開)
+	parameter bit     OVERLAP         = 0,   // 1:o_c 重疊,下一個 o_c 先讀、前一個還在算
 
 	// 推導出來的位寬($clog2(1)=0 時至少保留 1 bit)
 	localparam integer MEMBRANE_WIDTH    = MEMBRANE_INT_WIDTH + MEMBRANE_FRAC_WIDTH,   // w
@@ -98,15 +104,17 @@ module SaltConv #(
 	localparam integer BANK_INDEX_WIDTH  = (AXIS_BANK_COUNT > 1) ? $clog2(AXIS_BANK_COUNT) : 1;
 	localparam integer KERNEL_WORD_WIDTH = KERNEL_SIZE * KERNEL_SIZE * WEIGHT_WIDTH;
 	localparam integer EVENT_WIDTH       = TIME_WIDTH + IN_CHANNEL_WIDTH + Y_WIDTH + X_WIDTH;   // FIFO 一格 {t, c, y, x}
+	localparam integer PIPELINE_DEPTH    = READ_LATENCY + COMPUTE_LATENCY - 1;                  // L,計算第 2 級的位置
+	// 重疊時停住的拍子,位置 1..L-1 的 o_c 還要用讀出的資料,讀出暫存器要留著;L = 1 時沒有這種位置
+	localparam bit     FREEZE_READ       = OVERLAP && (PIPELINE_DEPTH > 1);
 
 	// ===============================================================
 	// 0 共用控制:第 6 段算,第 1 段起就要用
 	// ===============================================================
-	logic oc_in_progress;   // 有一個 o_c 在做
-	logic compute_cycle;    // 這一拍讀出的是這個 o_c 的資料:算、寫回、挑 s(讀位址送出後第 R 拍)
-	logic oc_done;          // 這一拍做完,這個 o_c 的 fire 都送完了
-	logic begin_next_oc;    // 這一拍開始做下一個 o_c
-	logic take_new_event;   // 這一拍開始做新事件的 o_c = 0,從 FIFO 拿出最前面那筆
+	logic stall;            // 位置 L 的 o_c 這一拍送不完:整條管線停住
+	logic oc_done;          // 位置 L 的 o_c 這一拍送完
+	logic begin_next_oc;    // 這一拍送下一個 o_c 的讀位址
+	logic take_new_event;   // 送的是新事件的 o_c = 0,從 FIFO 拿出最前面那筆
 
 	// ===============================================================
 	// 1 事件進來
@@ -154,7 +162,8 @@ module SaltConv #(
 
 	assign {fifo_time, fifo_channel, fifo_y, fifo_x} = fifo_read_data;
 
-	// 事件暫存器:正在處理的那筆。換事件那一拍,FIFO 最前面已經是下一筆,舊事件的 t 和 (x, y, c) 要自己留著
+	// 事件暫存器:正在送讀位址的那筆。換事件那一拍,FIFO 最前面已經是下一筆,舊事件的 t 和 (x, y, c) 要自己留著
+	// (管線位置上的 o_c 各自帶 t,見第 4 段)
 	logic [X_WIDTH-1:0]          event_x;
 	logic [Y_WIDTH-1:0]          event_y;
 	logic [IN_CHANNEL_WIDTH-1:0] event_channel;
@@ -172,17 +181,15 @@ module SaltConv #(
 	// ===============================================================
 	// 2 下一個 o_c 是誰、讀位址(只看暫存器和 FIFO,不等 oc_done)
 	// ===============================================================
-	// 這個 o_c、下一個 o_c:下一個 = 這個 + 1(或新事件的 0),開始下一個 o_c 時 這個 ← 下一個
-	logic [OUT_CHANNEL_WIDTH-1:0] current_channel;
+	// 送過讀位址的最後一個 o_c、下一個 o_c:下一個 = 它 + 1(或新事件的 0),送讀位址時 它 ← 下一個
+	logic [OUT_CHANNEL_WIDTH-1:0] sent_channel;
 	logic [OUT_CHANNEL_WIDTH-1:0] read_out_channel;
 
-	logic last_channel;        // 這個 o_c 是 OC-1
 	logic next_from_fifo;      // 下一個 o_c 是 FIFO 最前面那筆事件的 o_c = 0
 	logic next_oc_available;   // 下一個 o_c 有東西可做
 
-	assign last_channel      = (current_channel == OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1));
-	// 沒有 o_c 在做,或這個 o_c 是最後一個:下一個是 FIFO 那筆事件的 o_c = 0;否則是同一筆事件的 o_c + 1
-	assign next_from_fifo    = !oc_in_progress || last_channel;
+	// 送過的最後一個是 OC-1:下一個是 FIFO 那筆事件的 o_c = 0;否則是同一筆事件的 o_c + 1
+	assign next_from_fifo    = (sent_channel == OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1));
 	// 下一個 oc 可不可用看: 是不是同一筆事件的 oc + 1 (!next_from_fifo) 如果不是就看 fifo 拿不拿的了 (fifo_read_valid)
 	assign next_oc_available = !next_from_fifo || fifo_read_valid;
 
@@ -190,17 +197,33 @@ module SaltConv #(
 	logic [X_WIDTH-1:0]          read_x;
 	logic [Y_WIDTH-1:0]          read_y;
 	logic [IN_CHANNEL_WIDTH-1:0] read_channel;
-	logic                        read_enable;   // 讀取開關:下一個 o_c 有東西可做就讀,不等 oc_done
+	logic [TIME_WIDTH-1:0]       read_time;
 
 	assign read_x           = next_from_fifo ? fifo_x : event_x;
 	assign read_y           = next_from_fifo ? fifo_y : event_y;
 	assign read_channel     = next_from_fifo ? fifo_channel : event_channel;
-	assign read_out_channel = next_from_fifo ? '0 : OUT_CHANNEL_WIDTH'(current_channel + 1'b1);
-	assign read_enable      = next_oc_available;
+	assign read_time        = next_from_fifo ? fifo_time : event_time;
+	assign read_out_channel = next_from_fifo ? '0 : OUT_CHANNEL_WIDTH'(sent_channel + 1'b1);
 
-	always_ff @(posedge clk) begin
-		if (begin_next_oc) begin
-			current_channel <= read_out_channel;
+	// 讀取開關:下一個 o_c 有東西可做就讀,不等 oc_done。
+	// FREEZE_READ:停住的拍子不讀,讀出暫存器(R >= 2 時連輸出暫存器)留著位置 1..L-1 那些 o_c 的資料
+	logic read_enable;
+	logic read_shift_enable;   // 讀出第二級起往後推的開關
+
+	if (FREEZE_READ) begin : freeze_read
+		assign read_enable       = next_oc_available && !stall;
+		assign read_shift_enable = !stall;
+	end else begin : free_read
+		assign read_enable       = next_oc_available;
+		assign read_shift_enable = 1'b1;
+	end
+
+	// reset 後當成剛送完一筆事件的 o_c = OC-1,第一個 o_c 從 FIFO 拿
+	always_ff @(posedge clk or negedge rst_n) begin
+		if (!rst_n) begin
+			sent_channel <= OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1);
+		end else if (begin_next_oc) begin
+			sent_channel <= read_out_channel;
 		end
 	end
 
@@ -240,35 +263,78 @@ module SaltConv #(
 	);
 
 	// ===============================================================
-	// 4 開始下一個 o_c 時存起來:讀出的資料 R 拍後才出來,候選存著等它,一直用到下一個 o_c 開始
+	// 4 管線位置 1..L:讀出的資料 R 拍後才出來,候選、t、o_c 跟著讀位址往後走,在位置 R、L 跟資料對齊
 	// ===============================================================
-	// 候選暫存器:算的那一拍跟讀出的資料對齊,之後清剩下的 fire 也用這一份
-	logic                        candidate_valid     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [BANK_ADDR_WIDTH-1:0]  candidate_bank_addr [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_Y_WIDTH-1:0]      candidate_out_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_X_WIDTH-1:0]      candidate_out_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]        candidate_tap_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]        candidate_tap_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [BANK_INDEX_WIDTH-1:0] candidate_top_row_bank;
-	logic [BANK_INDEX_WIDTH-1:0] candidate_left_col_bank;
+	// 沒停住的拍子整排往後推一格,位置 1 放這一拍送讀位址的 o_c(沒送就是空的);停住時全部不動。
+	// 位置 R 用 tap 選權重、t 算 Δt;位置 L 用其他的:寫回、門檻、挑 fire、送出,停住期間清剩下的 fire 也用這一份
+	logic                         pipe_valid               [1:PIPELINE_DEPTH];   // 這個位置有 o_c
+	logic [OUT_CHANNEL_WIDTH-1:0] pipe_channel             [1:PIPELINE_DEPTH];   // o_c
+	logic [TIME_WIDTH-1:0]        pipe_time                [1:PIPELINE_DEPTH];   // t
+	logic                         pipe_candidate_valid     [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [BANK_ADDR_WIDTH-1:0]   pipe_bank_addr           [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [OUT_Y_WIDTH-1:0]       pipe_out_y               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [OUT_X_WIDTH-1:0]       pipe_out_x               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         pipe_tap_y               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         pipe_tap_x               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [BANK_INDEX_WIDTH-1:0]  pipe_top_row_bank        [1:PIPELINE_DEPTH];
+	logic [BANK_INDEX_WIDTH-1:0]  pipe_left_col_bank       [1:PIPELINE_DEPTH];
+	logic                         pipe_held;   // 上一拍停住:每個位置上的 o_c 跟上一拍相同
 
 	always_ff @(posedge clk) begin
-		if (begin_next_oc) begin
-			candidate_valid         <= grid_valid;
-			candidate_bank_addr     <= grid_bank_addr;
-			candidate_out_y         <= grid_out_y;
-			candidate_out_x         <= grid_out_x;
-			candidate_tap_y         <= grid_tap_y;
-			candidate_tap_x         <= grid_tap_x;
-			candidate_top_row_bank  <= grid_top_row_bank;
-			candidate_left_col_bank <= grid_left_col_bank;
+		if (!stall) begin
+			pipe_channel[1]         <= read_out_channel;
+			pipe_time[1]            <= read_time;
+			pipe_candidate_valid[1] <= grid_valid;
+			pipe_bank_addr[1]       <= grid_bank_addr;
+			pipe_out_y[1]           <= grid_out_y;
+			pipe_out_x[1]           <= grid_out_x;
+			pipe_tap_y[1]           <= grid_tap_y;
+			pipe_tap_x[1]           <= grid_tap_x;
+			pipe_top_row_bank[1]    <= grid_top_row_bank;
+			pipe_left_col_bank[1]   <= grid_left_col_bank;
+			for (int position = 2; position <= PIPELINE_DEPTH; position++) begin
+				pipe_channel[position]         <= pipe_channel[position-1];
+				pipe_time[position]            <= pipe_time[position-1];
+				pipe_candidate_valid[position] <= pipe_candidate_valid[position-1];
+				pipe_bank_addr[position]       <= pipe_bank_addr[position-1];
+				pipe_out_y[position]           <= pipe_out_y[position-1];
+				pipe_out_x[position]           <= pipe_out_x[position-1];
+				pipe_tap_y[position]           <= pipe_tap_y[position-1];
+				pipe_tap_x[position]           <= pipe_tap_x[position-1];
+				pipe_top_row_bank[position]    <= pipe_top_row_bank[position-1];
+				pipe_left_col_bank[position]   <= pipe_left_col_bank[position-1];
+			end
 		end
 	end
+
+	always_ff @(posedge clk or negedge rst_n) begin
+		if (!rst_n) begin
+			for (int position = 1; position <= PIPELINE_DEPTH; position++) begin
+				pipe_valid[position] <= 1'b0;
+			end
+			pipe_held <= 1'b0;
+		end else begin
+			pipe_held <= stall;
+			if (!stall) begin
+				pipe_valid[1] <= begin_next_oc;
+				for (int position = 2; position <= PIPELINE_DEPTH; position++) begin
+					pipe_valid[position] <= pipe_valid[position-1];
+				end
+			end
+		end
+	end
+
+	// 剛到的那一拍:停住的拍子位置上還是同一個 o_c,不算剛到
+	logic compute_cycle;   // 位置 L 的 o_c 剛到:讀出的資料(C = 2 時是切點暫存器)是它的,算、寫回、挑 s
+	logic data_cycle;      // 位置 R 的 o_c 剛到:讀出的資料是它的(C = 1 時跟 compute_cycle 相同)
+
+	assign compute_cycle = pipe_valid[PIPELINE_DEPTH] && !pipe_held;
+	assign data_cycle    = pipe_valid[READ_LATENCY] && !pipe_held;
 
 	// ===============================================================
 	// 5 讀出、算、寫回
 	// ===============================================================
-	// 權重:讀下一個 o_c 的 (o_c, c),算的那一拍用候選暫存器的 tap 選
+	// 權重:讀下一個 o_c 的 (o_c, c),位置 R 用那個 o_c 的 tap 選(C = 2 時選好的權重碼存進切點暫存器)
 	logic        [KERNEL_WORD_WIDTH-1:0] kernel_word;
 	logic signed [WEIGHT_WIDTH-1:0]      weight_code [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 
@@ -282,7 +348,8 @@ module SaltConv #(
 		.WEIGHT_FILE     (WEIGHT_FILE)
 	) weight_memory (
 		.clk        (clk),
-		.read_enable(read_enable),
+		.read_enable (read_enable),
+		.shift_enable(read_shift_enable),
 		.out_channel(read_out_channel),
 		.in_channel (read_channel),
 		.kernel_word(kernel_word)
@@ -294,8 +361,8 @@ module SaltConv #(
 		.WEIGHT_WIDTH(WEIGHT_WIDTH)
 	) weight_tap_select (
 		.kernel_word(kernel_word),
-		.tap_y      (candidate_tap_y),
-		.tap_x      (candidate_tap_x),
+		.tap_y      (pipe_tap_y[READ_LATENCY]),
+		.tap_x      (pipe_tap_x[READ_LATENCY]),
 		.weight_code(weight_code)
 	);
 
@@ -307,7 +374,7 @@ module SaltConv #(
 	end
 
 	// 神經元記憶體與膜電位更新:每個 bank 一份 NeuronMemory + NeuronUpdate
-	// 讀:下一個 o_c(第 3 段的 grid_*);寫:這個 o_c(第 4 段的 candidate_*),只在算的那一拍
+	// 讀:下一個 o_c(第 3 段的 grid_*);寫:位置 L 的 o_c(第 4 段的 pipe_*),只在算的那一拍
 	logic spike [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 
 	for (genvar row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin : row_banks
@@ -327,14 +394,15 @@ module SaltConv #(
 				.clear_addr     (clear_addr),
 				// 沒有合法候選的 bank 不讀
 				.read_enable    (read_enable && grid_valid[row_bank][col_bank]),
+				.shift_enable   (read_shift_enable),
 				.read_addr      (grid_bank_addr[row_bank][col_bank]),
 				.read_membrane  (membrane),
 				.read_last_time (last_time),
 				// NeuronUpdate 對不合法的候選也照算,只寫回合法的;不是算的那一拍,讀出的資料跟候選對不上,不寫
-				.write_enable   (compute_cycle && candidate_valid[row_bank][col_bank]),
-				.write_addr     (candidate_bank_addr[row_bank][col_bank]),
+				.write_enable   (compute_cycle && pipe_candidate_valid[PIPELINE_DEPTH][row_bank][col_bank]),
+				.write_addr     (pipe_bank_addr[PIPELINE_DEPTH][row_bank][col_bank]),
 				.write_membrane (new_membrane),
-				.write_last_time(event_time)   // t_last,new = t
+				.write_last_time(pipe_time[PIPELINE_DEPTH])   // t_last,new = t
 			);
 
 			NeuronUpdate #(
@@ -346,13 +414,15 @@ module SaltConv #(
 				.DECAY_TABLE_DEPTH  (DECAY_TABLE_DEPTH),
 				.ROUND              (ROUND),
 				.SATURATE           (SATURATE),
-				.DECAY_FILE         (DECAY_FILE)
+				.DECAY_FILE         (DECAY_FILE),
+				.COMPUTE_LATENCY    (COMPUTE_LATENCY)
 			) neuron_update (
+				.clk         (clk),
 				.weight_code (weight_code[row_bank][col_bank]),
 				.membrane    (membrane),
 				.last_time   (last_time),
-				.event_time  (event_time),
-				.threshold   (thresholds[current_channel]),
+				.event_time  (pipe_time[READ_LATENCY]),                // 計算第 1 級用
+				.threshold   (thresholds[pipe_channel[PIPELINE_DEPTH]]),   // 計算第 2 級用
 				.spike       (spike[row_bank][col_bank]),
 				.new_membrane(new_membrane)
 			);
@@ -365,7 +435,7 @@ module SaltConv #(
 	// fire:這一拍要挑的、挑完剩下的、剩下的存起來下一拍再挑
 	logic pending      [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];   // 這一拍還沒送出的 fire
 	logic pending_left [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];   // 這一拍做完剩下的
-	logic bitmask      [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];   // 這個 o_c 之前的拍子沒送出的 fire
+	logic bitmask      [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];   // 位置 L 的 o_c 之前的拍子沒送出的 fire
 
 	// 算的那一拍挑 s && valid,之後挑 bitmask
 	always_comb begin
@@ -373,7 +443,7 @@ module SaltConv #(
 			for (int unsigned col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
 				// 不合法的候選也算出 spike,要先排除
 				pending[row_bank][col_bank] = compute_cycle
-				                            ? (spike[row_bank][col_bank] && candidate_valid[row_bank][col_bank])
+				                            ? (spike[row_bank][col_bank] && pipe_candidate_valid[PIPELINE_DEPTH][row_bank][col_bank])
 				                            : bitmask[row_bank][col_bank];
 			end
 		end
@@ -392,10 +462,10 @@ module SaltConv #(
 		.STRIDE     (STRIDE)
 	) spike_select (
 		.pending      (pending),
-		.out_y        (candidate_out_y),
-		.out_x        (candidate_out_x),
-		.top_row_bank (candidate_top_row_bank),
-		.left_col_bank(candidate_left_col_bank),
+		.out_y        (pipe_out_y[PIPELINE_DEPTH]),
+		.out_x        (pipe_out_x[PIPELINE_DEPTH]),
+		.top_row_bank (pipe_top_row_bank[PIPELINE_DEPTH]),
+		.left_col_bank(pipe_left_col_bank[PIPELINE_DEPTH]),
 		.found        (found),
 		.selected     (selected),
 		.selected_y   (selected_y),
@@ -405,69 +475,83 @@ module SaltConv #(
 	// 送出;out_valid 不看 out_ready
 	logic spike_sent;   // 這一拍有一個 fire 交出去
 
-	assign out_valid   = oc_in_progress && found;
+	assign out_valid   = pipe_valid[PIPELINE_DEPTH] && found;
 	assign out_x       = selected_x;
 	assign out_y       = selected_y;
-	assign out_channel = current_channel;
-	assign out_time    = event_time;
+	assign out_channel = pipe_channel[PIPELINE_DEPTH];
+	assign out_time    = pipe_time[PIPELINE_DEPTH];
 	assign spike_sent  = out_valid && out_ready;
 
-	// 讀出的資料出來沒:開始一個 o_c 那拍送讀位址,第 R 拍是算的那一拍,中間的 R-1 拍只能等
-	logic [READ_LATENCY-1:0] read_delay_flags;   // [i] = 1:這個 o_c 的讀位址是 i+1 拍前送的
-	logic                    waiting_read;       // 這一拍資料還沒出來
+	// 送完沒:挑出的那個沒送出去(out_ready=0)就不清,留著;算的那一拍 out_ready=0,整份 s && valid 留下
+	logic fires_left;   // 這一拍做完還有沒送出的 fire
 
-	assign compute_cycle = read_delay_flags[READ_LATENCY-1];
-
-	if (READ_LATENCY == 1) begin : no_read_wait
-		assign waiting_read = 1'b0;
-	end else begin : read_wait
-		assign waiting_read = |read_delay_flags[READ_LATENCY-2:0];
-	end
-
-	// 做完沒:挑出的那個沒送出去(out_ready=0)就不清,留著;算的那一拍 out_ready=0,整份 s && valid 留下
 	always_comb begin
-		// 等資料的拍子還沒算,不算送完
-		// OC = 1:算的那一拍一律不算送完,下一筆事件的 o_c = 0 等這一拍寫回之後才讀
-		oc_done = oc_in_progress && !waiting_read && !((OUT_CHANNELS == 1) && compute_cycle);
+		fires_left = 1'b0;
 		for (int unsigned row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
 			for (int unsigned col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
 				pending_left[row_bank][col_bank] = pending[row_bank][col_bank]
 				                                && !(spike_sent && selected[row_bank][col_bank]);
 				if (pending_left[row_bank][col_bank]) begin
-					oc_done = 1'b0;
+					fires_left = 1'b1;
 				end
 			end
 		end
 	end
 
-	// 沒有 o_c 在做時清成 0;reset 期間 oc_in_progress=0,釋放後第一拍就是 0
+	assign stall   = pipe_valid[PIPELINE_DEPTH] && fires_left;
+	assign oc_done = pipe_valid[PIPELINE_DEPTH] && !fires_left;
+
+	// 位置 L 沒有 o_c 時清成 0;reset 期間 pipe_valid=0,釋放後第一拍就是 0
 	always_ff @(posedge clk) begin
 		for (int unsigned row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
 			for (int unsigned col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
-				bitmask[row_bank][col_bank] <= oc_in_progress && pending_left[row_bank][col_bank];
+				bitmask[row_bank][col_bank] <= pipe_valid[PIPELINE_DEPTH] && pending_left[row_bank][col_bank];
 			end
 		end
 	end
 
-	// 換不換:這個 o_c 送完(或沒有 o_c 在做),而且下一個 o_c 有東西可做,就換過去
-	assign begin_next_oc  = (oc_done || !oc_in_progress) && next_oc_available;
+	// 不重疊:位置 1..L-1 還有 o_c 時不送(前一個 o_c 到位置 L 才送下一個)
+	logic earlier_positions_busy;
+
+	always_comb begin
+		earlier_positions_busy = 1'b0;
+		for (int position = 1; position < PIPELINE_DEPTH; position++) begin
+			if (pipe_valid[position]) begin
+				earlier_positions_busy = 1'b1;
+			end
+		end
+	end
+
+	// 讀寫衝突(OC <= L):新事件的 o_c 跟上一筆事件同一個 o_c 讀寫同一批神經元,兩個要隔 L + 1 步(往前一步的拍子)。
+	// 同一筆事件的 o_c 一步接一步送,所以只要比 o_c = 0:上一筆的 o_c = 0 還在管線裡(位置 1..L)就不送。
+	// OC = 1 時沒有後面的 o_c:位置 L 停住過的已經寫回了,可以送;L = 1 時就是「算的那一拍不送下一筆」(Conv.md 5.3「OC=1」)。
+	// OC >= 2 時位置 L 停住過也不送:上一筆的 o_c = 1 不一定停住,會在下一步寫回,新事件的 o_c = 1 不能在那一步讀。
+	logic read_conflict;
+
+	if (OUT_CHANNELS <= PIPELINE_DEPTH) begin : read_conflict_check
+		logic zero_channel_too_close;   // 上一筆事件的 o_c = 0 跟現在差不到 L + 1 步
+
+		always_comb begin
+			if (OUT_CHANNELS == 1) begin
+				zero_channel_too_close = compute_cycle;
+			end else begin
+				zero_channel_too_close = pipe_valid[PIPELINE_DEPTH] && (pipe_channel[PIPELINE_DEPTH] == '0);
+			end
+			for (int position = 1; position < PIPELINE_DEPTH; position++) begin
+				if (pipe_valid[position] && pipe_channel[position] == '0) begin
+					zero_channel_too_close = 1'b1;
+				end
+			end
+		end
+
+		assign read_conflict = next_from_fifo && zero_channel_too_close;
+	end else begin : no_read_conflict
+		assign read_conflict = 1'b0;
+	end
+
+	// 送不送下一個 o_c 的讀位址:沒停住、下一個 o_c 有東西可做、沒有讀寫衝突;不重疊時還要等前一個到位置 L
+	assign begin_next_oc  = !stall && next_oc_available && !read_conflict && !(!OVERLAP && earlier_positions_busy);
 	// 下一個 o_c 是新事件的 o_c = 0,就把那筆事件從 FIFO 拿走
 	assign take_new_event = begin_next_oc && next_from_fifo;
-
-	always_ff @(posedge clk or negedge rst_n) begin
-		if (!rst_n) begin
-			oc_in_progress   <= 1'b0;
-			read_delay_flags <= '0;
-		end else begin
-			// 往高位推一格,最低位放這一拍有沒有送新的 o_c 讀位址;截掉的是最高位
-			read_delay_flags <= READ_LATENCY'({read_delay_flags, begin_next_oc});
-			if (begin_next_oc) begin
-				oc_in_progress <= 1'b1;
-			end else if (oc_done) begin
-				// 送完了,下一個 o_c 沒東西可做(最後一個 o_c,FIFO 是空的)
-				oc_in_progress <= 1'b0;
-			end
-		end
-	end
 
 endmodule
