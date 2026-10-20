@@ -23,7 +23,7 @@
 //     5 讀出、算、寫回:權重、門檻、NeuronMemory + NeuronUpdate
 //     6 送出、做完沒、換不換
 //   排列規則:變數的宣告跟設定它的邏輯放在同一段;要用到的變數,設定它的那段排在前面。
-//   互相依賴的(例如 sent_channel 和 read_out_channel)放同一段,宣告在段首。
+//   互相依賴的(例如 last_read_out_channel 和 read_out_channel)放同一段,宣告在段首。
 //   例外只有第 0 段的控制訊號:要等第 6 段整串算完才知道,第 1 段起就要用。
 //////////////////////////////////////////////////////////////////////////////////
 
@@ -106,13 +106,12 @@ module SaltConv #(
 	localparam integer EVENT_WIDTH       = TIME_WIDTH + IN_CHANNEL_WIDTH + Y_WIDTH + X_WIDTH;   // FIFO 一格 {t, c, y, x}
 	localparam integer PIPELINE_DEPTH    = READ_LATENCY + COMPUTE_LATENCY - 1;                  // L,計算第 2 級的位置
 	// 重疊時停住的拍子,位置 1..L-1 的 o_c 還要用讀出的資料,讀出暫存器要留著;L = 1 時沒有這種位置
-	localparam bit     FREEZE_READ       = OVERLAP && (PIPELINE_DEPTH > 1);
+	localparam bit     HOLD_READ_ON_STALL = OVERLAP && (PIPELINE_DEPTH > 1);
 
 	// ===============================================================
 	// 0 共用控制:第 6 段算,第 1 段起就要用
 	// ===============================================================
 	logic stall;            // 位置 L 的 o_c 這一拍送不完:整條管線停住
-	logic oc_done;          // 位置 L 的 o_c 這一拍送完
 	logic begin_next_oc;    // 這一拍送下一個 o_c 的讀位址
 	logic take_new_event;   // 送的是新事件的 o_c = 0,從 FIFO 拿出最前面那筆
 
@@ -179,17 +178,17 @@ module SaltConv #(
 	end
 
 	// ===============================================================
-	// 2 下一個 o_c 是誰、讀位址(只看暫存器和 FIFO,不等 oc_done)
+	// 2 下一個 o_c 是誰、讀位址(下一個 o_c 是誰只看暫存器和 FIFO;讀取開關見下面)
 	// ===============================================================
-	// 送過讀位址的最後一個 o_c、下一個 o_c:下一個 = 它 + 1(或新事件的 0),送讀位址時 它 ← 下一個
-	logic [OUT_CHANNEL_WIDTH-1:0] sent_channel;
+	// 上一次送讀位址的 o_c、下一個 o_c:下一個 = 上一次 + 1(或新事件的 0),送讀位址時 上一次 ← 下一個
+	logic [OUT_CHANNEL_WIDTH-1:0] last_read_out_channel;
 	logic [OUT_CHANNEL_WIDTH-1:0] read_out_channel;
 
 	logic next_from_fifo;      // 下一個 o_c 是 FIFO 最前面那筆事件的 o_c = 0
 	logic next_oc_available;   // 下一個 o_c 有東西可做
 
-	// 送過的最後一個是 OC-1:下一個是 FIFO 那筆事件的 o_c = 0;否則是同一筆事件的 o_c + 1
-	assign next_from_fifo    = (sent_channel == OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1));
+	// 上一次是 OC-1:下一個是 FIFO 那筆事件的 o_c = 0;否則是同一筆事件的 o_c + 1
+	assign next_from_fifo    = (last_read_out_channel == OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1));
 	// 下一個 oc 可不可用看: 是不是同一筆事件的 oc + 1 (!next_from_fifo) 如果不是就看 fifo 拿不拿的了 (fifo_read_valid)
 	assign next_oc_available = !next_from_fifo || fifo_read_valid;
 
@@ -203,27 +202,28 @@ module SaltConv #(
 	assign read_y           = next_from_fifo ? fifo_y : event_y;
 	assign read_channel     = next_from_fifo ? fifo_channel : event_channel;
 	assign read_time        = next_from_fifo ? fifo_time : event_time;
-	assign read_out_channel = next_from_fifo ? '0 : OUT_CHANNEL_WIDTH'(sent_channel + 1'b1);
+	assign read_out_channel = next_from_fifo ? '0 : OUT_CHANNEL_WIDTH'(last_read_out_channel + 1'b1);
 
-	// 讀取開關:下一個 o_c 有東西可做就讀,不等 oc_done。
-	// FREEZE_READ:停住的拍子不讀,讀出暫存器(R >= 2 時連輸出暫存器)留著位置 1..L-1 那些 o_c 的資料
+	// 讀取開關:下一個 o_c 有東西可做就讀。
+	// HOLD_READ_ON_STALL:停住的拍子不讀,讀出暫存器(R >= 2 時連輸出暫存器)留著位置 1..L-1 那些 o_c 的資料。
+	// 其他設定停住期間讀出的資料沒人用,讀取開關不看 stall(stall 要等第 6 段整串算完)
 	logic read_enable;
 	logic read_shift_enable;   // 讀出第二級起往後推的開關
 
-	if (FREEZE_READ) begin : freeze_read
+	if (HOLD_READ_ON_STALL) begin : hold_read
 		assign read_enable       = next_oc_available && !stall;
 		assign read_shift_enable = !stall;
-	end else begin : free_read
+	end else begin : no_hold_read
 		assign read_enable       = next_oc_available;
 		assign read_shift_enable = 1'b1;
 	end
 
-	// reset 後當成剛送完一筆事件的 o_c = OC-1,第一個 o_c 從 FIFO 拿
+	// reset 後當成上一次送讀位址的是一筆事件的最後一個 o_c(OC-1),第一個 o_c 就從 FIFO 拿
 	always_ff @(posedge clk or negedge rst_n) begin
 		if (!rst_n) begin
-			sent_channel <= OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1);
+			last_read_out_channel <= OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1);
 		end else if (begin_next_oc) begin
-			sent_channel <= read_out_channel;
+			last_read_out_channel <= read_out_channel;
 		end
 	end
 
@@ -498,8 +498,7 @@ module SaltConv #(
 		end
 	end
 
-	assign stall   = pipe_valid[PIPELINE_DEPTH] && fires_left;
-	assign oc_done = pipe_valid[PIPELINE_DEPTH] && !fires_left;
+	assign stall = pipe_valid[PIPELINE_DEPTH] && fires_left;
 
 	// 位置 L 沒有 o_c 時清成 0;reset 期間 pipe_valid=0,釋放後第一拍就是 0
 	always_ff @(posedge clk) begin

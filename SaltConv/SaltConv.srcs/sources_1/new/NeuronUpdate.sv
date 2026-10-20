@@ -108,22 +108,18 @@ module NeuronUpdate #(
 	// D 一定落在 0 跟 V̂ 之間,取低 w 位不會丟資料;Δt=0 時直接用 V̂
 	assign decayed = is_same_time ? membrane : shifted_product[MEMBRANE_WIDTH-1:0];
 
-	// C = 2 的切點:存 D、q
-	logic signed [MEMBRANE_WIDTH-1:0] step3_decayed;
-	logic signed [WEIGHT_WIDTH-1:0]   step3_weight_code;
+	// ③ 用的 D、q:C = 2 時是切點暫存器,C = 1 時直連
+	logic signed [MEMBRANE_WIDTH-1:0] stage_decayed;
+	logic signed [WEIGHT_WIDTH-1:0]   stage_weight_code;
 
 	if (COMPUTE_LATENCY == 2) begin : cut_after_step2
-		logic signed [MEMBRANE_WIDTH-1:0] stage_decayed;
-		logic signed [WEIGHT_WIDTH-1:0]   stage_weight_code;
 		always_ff @(posedge clk) begin
 			stage_decayed     <= decayed;
 			stage_weight_code <= weight_code;
 		end
-		assign step3_decayed     = stage_decayed;
-		assign step3_weight_code = stage_weight_code;
 	end else begin : no_cut
-		assign step3_decayed     = decayed;
-		assign step3_weight_code = weight_code;
+		assign stage_decayed     = decayed;
+		assign stage_weight_code = weight_code;
 	end
 
 	// ③ 加權重碼
@@ -132,8 +128,8 @@ module NeuronUpdate #(
 	logic signed [SUM_WIDTH-1:0] unfitted;   // U,溢位處理之前的真實值
 
 	// 有號數指定到較寬的變數會做符號延伸
-	assign decayed_extended = step3_decayed;
-	assign weight_extended  = step3_weight_code;
+	assign decayed_extended = stage_decayed;
+	assign weight_extended  = stage_weight_code;
 	assign unfitted         = decayed_extended + (weight_extended <<< MEMBRANE_FRAC_WIDTH);
 
 	// ④ 放回 w 位元,再判斷 fire

@@ -429,7 +429,8 @@
 			if (!pipe_occupied(1, PIPELINE_DEPTH) && dut.begin_next_oc && events_taken > 0) cover_count[COVER_RESUME_FROM_IDLE]++;
 
 			if (dut.compute_cycle && first_compute_cycle < 0) first_compute_cycle = cycle;
-			if (dut.oc_done) last_done_cycle = cycle;
+			// 位置 L 的 o_c 這一拍送完
+			if (dut.pipe_valid[PIPELINE_DEPTH] && !dut.stall) last_done_cycle = cycle;
 			if (dut.take_new_event) events_taken++;
 
 			sampled_in_handshake  = in_valid && in_ready;
