@@ -9,7 +9,7 @@
 //     第 2 級的結果上層只在算的那一拍用,之後停住的拍子用的是 bitmask(SaltConv 第 6 段)。
 //     event_time 在第 1 級用,threshold 在第 2 級用,上層各接那一級的 o_c 的值。
 //   上層一拍要算 M x M 顆候選,就例化 M x M 份;門檻、寫不寫回、送不送出 spike 都由上層決定。
-//     ① Δt = t - t_last:Δt=0 不衰減;1 <= Δt <= Δt_max 查衰減表 A[Δt];Δt > Δt_max 時 A=0。
+//     ① Δt = t - t_last:Δt=0 不衰減(A=1.0,照常乘);1 <= Δt <= Δt_max 查衰減表 A[Δt];Δt > Δt_max 時 A=0。
 //     ② D = r(A·V̂),r 是 round(先加半格)或 truncate,都是算術右移 f_a 位。
 //     ③ U = D + (q << f_V),位寬 max(w, b+f_V)+1,不會在這一步溢位。
 //     ④ V̂' = fit_w(U),繞回取低 w 位、飽和夾在 w 位元範圍;V̂' >= v̂_th 時 fire,V̂_new=0,否則 V̂_new=V̂'。
@@ -40,7 +40,8 @@ module NeuronUpdate #(
 
 	// 推導出來的位寬
 	localparam integer MEMBRANE_WIDTH = MEMBRANE_INT_WIDTH + MEMBRANE_FRAC_WIDTH,   // w
-	// A·V̂:f_a 位元無號乘 w 位元有號,f_a+w 位元有號放得下,round 加半格之後也放得下(Conv.md 第 3 節 ②)
+	// A·V̂:A 在 0~1.0(0~2^f_a),乘 w 位元有號,f_a+w 位元有號放得下,round 加半格之後也放得下(Conv.md 第 3 節 ②);
+	// 最負 -2^(f_a+w-1) 剛好是下限,最正 (2^(w-1)-1)·2^f_a + 2^(f_a-1) 比上限小
 	localparam integer PRODUCT_WIDTH  = DECAY_FRAC_WIDTH + MEMBRANE_WIDTH,
 	// U = D + (q << f_V):D 是 w 位元、q << f_V 是 b+f_V 位元,都有號,相加多 1 位(Conv.md 第 3 節 ③)
 	localparam integer SUM_WIDTH      = ((MEMBRANE_WIDTH > WEIGHT_WIDTH + MEMBRANE_FRAC_WIDTH)
@@ -75,17 +76,19 @@ module NeuronUpdate #(
 	*/
 	logic [TIME_WIDTH-1:0]       delta_time;
 	logic                        is_same_time;   // Δt=0,不衰減
-	logic [DECAY_FRAC_WIDTH-1:0] decay_code;     // A[Δt]
+	logic [DECAY_FRAC_WIDTH:0]   decay_code;     // A[Δt],多 1 位放得下 Δt=0 的 1.0
 
 	assign delta_time   = event_time - last_time;
 	assign is_same_time = (delta_time == '0);
 
 	always_comb begin
-		// Δt=0 不查表(用不到),Δt > Δt_max 時 A=0
-		if (is_same_time || delta_time > DECAY_TABLE_DEPTH) begin
+		// Δt=0 時 A=1.0(2^f_a),② 乘完捨回剛好是 V̂,乘法後面不用再選;Δt > Δt_max 時 A=0
+		if (is_same_time) begin
+			decay_code = {1'b1, {DECAY_FRAC_WIDTH{1'b0}}};
+		end else if (delta_time > DECAY_TABLE_DEPTH) begin
 			decay_code = '0;
 		end else begin
-			decay_code = decay_table[delta_time - 1'b1];
+			decay_code = {1'b0, decay_table[delta_time - 1'b1]};
 		end
 	end
 
@@ -105,8 +108,8 @@ module NeuronUpdate #(
 	end
 
 	assign shifted_product = rounded_product >>> DECAY_FRAC_WIDTH;
-	// D 一定落在 0 跟 V̂ 之間,取低 w 位不會丟資料;Δt=0 時直接用 V̂
-	assign decayed = is_same_time ? membrane : shifted_product[MEMBRANE_WIDTH-1:0];
+	// D 一定落在 0 跟 V̂ 之間(A=1.0 時就是 V̂),取低 w 位不會丟資料
+	assign decayed = shifted_product[MEMBRANE_WIDTH-1:0];
 
 	// ③ 用的 D、q:C = 2 時是切點暫存器,C = 1 時直連
 	logic signed [MEMBRANE_WIDTH-1:0] stage_decayed;

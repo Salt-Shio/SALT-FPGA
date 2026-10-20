@@ -482,23 +482,39 @@ module SaltConv #(
 	assign out_time    = pipe_time[PIPELINE_DEPTH];
 	assign spike_sent  = out_valid && out_ready;
 
-	// 送完沒:挑出的那個沒送出去(out_ready=0)就不清,留著;算的那一拍 out_ready=0,整份 s && valid 留下
-	logic fires_left;   // 這一拍做完還有沒送出的 fire
-
+	// 剩下哪些:挑出的那個沒送出去(out_ready=0)就不清,留著;算的那一拍 out_ready=0,整份 s && valid 留下
 	always_comb begin
-		fires_left = 1'b0;
 		for (int unsigned row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
 			for (int unsigned col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
 				pending_left[row_bank][col_bank] = pending[row_bank][col_bank]
 				                                && !(spike_sent && selected[row_bank][col_bank]);
-				if (pending_left[row_bank][col_bank]) begin
-					fires_left = 1'b1;
+			end
+		end
+	end
+
+	// 送完還有沒有剩:有 fire,而且下游不收或不只一個(一拍最多送一個)。
+	// 跟挑中哪一個無關,只看個數,不等 SpikeSelect,stall 不用跟著 pending_left 那條走
+	logic pending_any;        // 這一拍要送的 fire 至少一個
+	logic pending_multiple;   // 這一拍要送的 fire 至少兩個
+	logic fires_left;         // 這一拍做完還有沒送出的 fire
+
+	always_comb begin
+		pending_any      = 1'b0;
+		pending_multiple = 1'b0;
+		for (int unsigned row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
+			for (int unsigned col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
+				if (pending[row_bank][col_bank]) begin
+					if (pending_any) begin
+						pending_multiple = 1'b1;
+					end
+					pending_any = 1'b1;
 				end
 			end
 		end
 	end
 
-	assign stall = pipe_valid[PIPELINE_DEPTH] && fires_left;
+	assign fires_left = pending_any && (!out_ready || pending_multiple);
+	assign stall      = pipe_valid[PIPELINE_DEPTH] && fires_left;
 
 	// 位置 L 沒有 o_c 時清成 0;reset 期間 pipe_valid=0,釋放後第一拍就是 0
 	always_ff @(posedge clk) begin
