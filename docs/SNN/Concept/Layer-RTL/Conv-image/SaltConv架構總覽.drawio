@@ -25,6 +25,9 @@
         <mxCell id="nff" parent="colB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=13;" value="&lt;b&gt;next_from_fifo&lt;/b&gt;&lt;br&gt;最近一次讀的是&lt;br&gt;最後一個 \(o_c\)?" vertex="1">
           <mxGeometry height="90" width="200" x="40" y="530" as="geometry" />
         </mxCell>
+        <mxCell id="avail" parent="colA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=12;" value="&lt;b&gt;有東西可讀&lt;/b&gt;&lt;br&gt;同一筆還沒讀完&lt;br&gt;或 FIFO 有事件" vertex="1">
+          <mxGeometry height="70" width="115" x="165" y="680" as="geometry" />
+        </mxCell>
         <mxCell id="grid" parent="colB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=13;align=left;spacingLeft=10;" value="&lt;b&gt;CandidateGrid&lt;/b&gt;&lt;ul style=&quot;margin:4px 0 0 0;padding-left:18px;&quot;&gt;&lt;li&gt;碰到哪 M×M 顆神經元&lt;/li&gt;&lt;li&gt;各在哪個 bank&lt;/li&gt;&lt;li&gt;bank 裡的位址&lt;/li&gt;&lt;/ul&gt;" vertex="1">
           <mxGeometry height="130" width="210" x="320" y="230" as="geometry" />
         </mxCell>
@@ -37,8 +40,8 @@
         <mxCell id="take" parent="colB" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;size=16;fillColor=#fee2e2;strokeColor=#b91c1c;strokeWidth=2;fontSize=13;" value="&lt;b&gt;拿不拿新事件&lt;/b&gt;&lt;br&gt;take_new_event" vertex="1">
           <mxGeometry height="90" width="200" x="40" y="960" as="geometry" />
         </mxCell>
-        <mxCell id="conf" parent="colB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=13;align=left;spacingLeft=10;" value="&lt;b&gt;讀寫衝突&lt;/b&gt;&lt;ul style=&quot;margin:4px 0 0 0;padding-left:18px;&quot;&gt;&lt;li&gt;這次要讀新事件的 \(o_c=0\)&lt;/li&gt;&lt;li&gt;上一筆事件的 \(o_c=0\) 還在 pipe_*[1..3]&lt;/li&gt;&lt;/ul&gt;兩個都成立就衝突" vertex="1">
-          <mxGeometry height="130" width="270" x="30" y="1130" as="geometry" />
+        <mxCell id="conf" parent="colC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=13;align=left;spacingLeft=10;" value="&lt;b&gt;讀寫衝突&lt;/b&gt;&lt;ul style=&quot;margin:4px 0 0 0;padding-left:18px;&quot;&gt;&lt;li&gt;這次要讀新事件的 \(o_c=0\)&lt;/li&gt;&lt;li&gt;上一筆事件的 \(o_c=0\) 還在 pipe_*[1..3]&lt;/li&gt;&lt;/ul&gt;兩個都成立就衝突" vertex="1">
+          <mxGeometry height="105" width="290" x="45" y="330" as="geometry" />
         </mxCell>
         <mxCell id="e5" edge="1" parent="colB" source="nff" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="mux" value="選">
           <mxGeometry relative="1" as="geometry">
@@ -64,13 +67,6 @@
             <Array as="points">
               <mxPoint x="385.6" y="497.33" />
               <mxPoint x="385.6" y="497.33" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="c6" edge="1" parent="colB" source="nff" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="conf" value="">
-          <mxGeometry relative="1" x="0.1969" as="geometry">
-            <Array as="points">
-              <mxPoint x="283.2" y="575" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -113,7 +109,7 @@
         <mxCell id="wrd2" parent="colD" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fde68a;strokeColor=#b45309;strokeWidth=2;fontSize=13;" value="&lt;b&gt;BRAM 內部：輸出暫存器&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#b91c1c&quot;&gt;CE:沒停&lt;/font&gt;" vertex="1">
           <mxGeometry height="80" width="200" x="11" y="715" as="geometry" />
         </mxCell>
-        <mxCell id="nu1" parent="colD" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=13;align=left;spacingLeft=10;" value="&lt;b&gt;計算前一半&lt;/b&gt;&lt;ul style=&quot;margin:4px 0 0 0;padding-left:18px;&quot;&gt;&lt;li&gt;時間間隔&lt;/li&gt;&lt;li&gt;查衰減表&lt;/li&gt;&lt;li&gt;乘法、捨回&lt;/li&gt;&lt;/ul&gt;" vertex="1">
+        <mxCell id="nu1" parent="colD" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#ea580c;strokeWidth=3;fontSize=13;align=left;spacingLeft=10;" value="&lt;b&gt;計算前一半&lt;/b&gt;&lt;ul style=&quot;margin:4px 0 0 0;padding-left:18px;&quot;&gt;&lt;li&gt;時間間隔&lt;/li&gt;&lt;li&gt;查衰減表&lt;/li&gt;&lt;li&gt;乘法、捨回&lt;/li&gt;&lt;/ul&gt;" vertex="1">
           <mxGeometry height="120" width="200" x="290" y="530" as="geometry" />
         </mxCell>
         <mxCell id="tap" parent="colD" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=13;" value="&lt;b&gt;WeightTapSelect&lt;/b&gt;&lt;br&gt;依 tap 從整組權重&lt;br&gt;挑出每顆的權重碼" vertex="1">
@@ -122,7 +118,7 @@
         <mxCell id="e18" edge="1" parent="colD" source="wrd2" style="endArrow=block;endFill=1;strokeColor=#374151;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;verticalAlign=bottom;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;html=1;" target="tap" value="整組權重">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e19" edge="1" parent="colD" source="pipe2" style="endArrow=block;endFill=1;strokeColor=#374151;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="nu1" value="這次時間">
+        <mxCell id="e19" edge="1" parent="colD" source="pipe2" style="endArrow=block;endFill=1;strokeColor=#ea580c;strokeWidth=4;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="nu1" value="這次時間">
           <mxGeometry relative="1" x="-0.0336" as="geometry">
             <Array as="points">
               <mxPoint x="390" y="137.9" />
@@ -137,7 +133,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e17" edge="1" parent="colD" source="nrd2" style="endArrow=block;endFill=1;strokeColor=#374151;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;" target="nu1" value="">
+        <mxCell id="e17" edge="1" parent="colD" source="nrd2" style="endArrow=block;endFill=1;strokeColor=#ea580c;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=4;" target="nu1" value="">
           <mxGeometry relative="1" x="0.0115" as="geometry">
             <mxPoint as="offset" />
             <Array as="points">
@@ -187,8 +183,8 @@
         <mxCell id="held" parent="colE" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fee2e2;strokeColor=#b91c1c;strokeWidth=2;fontSize=13;" value="&lt;b&gt;pipe_held&lt;/b&gt;&lt;br&gt;上一拍停了沒" vertex="1">
           <mxGeometry height="70" width="200" x="300" y="1170" as="geometry" />
         </mxCell>
-        <mxCell id="stall" parent="colE" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;size=16;fillColor=#fee2e2;strokeColor=#b91c1c;strokeWidth=2;fontSize=13;" value="&lt;b&gt;管線停不停&lt;/b&gt;&lt;br&gt;stall" vertex="1">
-          <mxGeometry height="90" width="170" x="580" y="1160" as="geometry" />
+        <mxCell id="stall" parent="colE" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;size=16;fillColor=#fee2e2;strokeColor=#b91c1c;strokeWidth=2;fontSize=13;" value="&lt;b&gt;管線停不停&lt;/b&gt;&lt;br&gt;stall&lt;br&gt;pipe_*[3] 有 \(o_c\) 且還有剩" vertex="1">
+          <mxGeometry height="100" width="170" x="580" y="1160" as="geometry" />
         </mxCell>
         <mxCell id="just" parent="colE" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;size=24;fillColor=#fee2e2;strokeColor=#b91c1c;strokeWidth=2;fontSize=13;align=left;spacingLeft=34;" value="&lt;b&gt;最後一個位置上的 \(o_c\) 是不是剛到&lt;/b&gt;&lt;br&gt;compute_cycle&lt;ul style=&quot;margin:4px 0 0 0;padding-left:18px;&quot;&gt;&lt;li&gt;pipe_*[3] 有 \(o_c\)&lt;/li&gt;&lt;li&gt;上一拍沒停&lt;/li&gt;&lt;/ul&gt;" vertex="1">
           <mxGeometry height="150" width="270" x="10" y="1130" as="geometry" />
@@ -251,7 +247,7 @@
         <mxCell id="e33" edge="1" parent="colE" source="bm" style="endArrow=block;endFill=1;strokeColor=#374151;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;html=1;" target="pend" value="上一拍剩的">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="c1" edge="1" parent="colE" source="left" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;html=1;" target="stall" value="還有剩">
+        <mxCell id="c1" edge="1" parent="colE" source="left" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;html=1;" target="stall" value="送完還有沒有剩">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="c2" edge="1" parent="colE" source="stall" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;verticalAlign=bottom;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;html=1;" target="held" value="存一拍">
@@ -284,14 +280,14 @@
         <mxCell id="colF" parent="1" style="swimlane;startSize=30;html=1;fillColor=#f1f5f9;swimlaneFillColor=#f8fafc;strokeColor=#94a3b8;fontSize=14;fontStyle=1;dashed=1;" value="下游" vertex="1">
           <mxGeometry height="1320" width="260" x="2600" as="geometry" />
         </mxCell>
-        <mxCell id="legend" parent="colF" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;fontSize=12;align=left;verticalAlign=top;spacingLeft=10;spacingTop=6;" value="&lt;b&gt;圖例&lt;/b&gt;&lt;ul style=&quot;margin:4px 0 0 0;padding-left:18px;&quot;&gt;&lt;li&gt;&lt;span style=&quot;color: light-dark(rgb(0, 0, 0), rgb(129, 171, 255));&quot;&gt;藍框&lt;/span&gt;：裝資料的暫存器&lt;/li&gt;&lt;li&gt;&lt;span style=&quot;color: light-dark(rgb(0, 0, 0), rgb(223, 139, 76));&quot;&gt;深黃框&lt;/span&gt;:BRAM 內部的暫存器&lt;/li&gt;&lt;li&gt;&lt;span style=&quot;color: light-dark(rgb(0, 0, 0), rgb(255, 156, 156));&quot;&gt;紅框&lt;/span&gt;：控制用的暫存器&lt;/li&gt;&lt;li&gt;圓角框：組合邏輯&lt;/li&gt;&lt;li&gt;圓柱:BRAM 儲存陣列&lt;/li&gt;&lt;li&gt;六角形：決定&lt;/li&gt;&lt;li&gt;黑實線：資料&lt;/li&gt;&lt;li&gt;紅虛線：控制(開關、選擇線、握手)&lt;/li&gt;&lt;li&gt;綠線：寫回&lt;/li&gt;&lt;/ul&gt;" vertex="1">
-          <mxGeometry height="250" width="230" x="15" y="50" as="geometry" />
+        <mxCell id="legend" parent="colF" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;fontSize=12;align=left;verticalAlign=top;spacingLeft=10;spacingTop=6;" value="&lt;b&gt;圖例&lt;/b&gt;&lt;ul style=&quot;margin:4px 0 0 0;padding-left:18px;&quot;&gt;&lt;li&gt;&lt;span style=&quot;color: light-dark(rgb(0, 0, 0), rgb(129, 171, 255));&quot;&gt;藍框&lt;/span&gt;：裝資料的暫存器&lt;/li&gt;&lt;li&gt;&lt;span style=&quot;color: light-dark(rgb(0, 0, 0), rgb(223, 139, 76));&quot;&gt;深黃框&lt;/span&gt;:BRAM 內部的暫存器&lt;/li&gt;&lt;li&gt;&lt;span style=&quot;color: light-dark(rgb(0, 0, 0), rgb(255, 156, 156));&quot;&gt;紅框&lt;/span&gt;：控制用的暫存器&lt;/li&gt;&lt;li&gt;圓角框：組合邏輯&lt;/li&gt;&lt;li&gt;圓柱:BRAM 儲存陣列&lt;/li&gt;&lt;li&gt;六角形：決定&lt;/li&gt;&lt;li&gt;黑實線：資料&lt;/li&gt;&lt;li&gt;紅虛線：控制(開關、選擇線、握手)&lt;/li&gt;&lt;li&gt;綠線：寫回&lt;/li&gt;&lt;li&gt;粗橘線：最長路徑(這個設定合成時)&lt;/li&gt;&lt;/ul&gt;" vertex="1">
+          <mxGeometry height="280" width="230" x="15" y="50" as="geometry" />
         </mxCell>
         <mxCell id="out" parent="colF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=13;align=left;spacingLeft=10;" value="&lt;b&gt;輸出埠&lt;/b&gt;&lt;ul style=&quot;margin:4px 0 0 0;padding-left:18px;&quot;&gt;&lt;li&gt;out_valid&lt;/li&gt;&lt;li&gt;座標&lt;/li&gt;&lt;li&gt;\(o_c\)、時間&lt;/li&gt;&lt;/ul&gt;" vertex="1">
           <mxGeometry height="120" width="200" x="30" y="860" as="geometry" />
         </mxCell>
-        <mxCell id="note" parent="colF" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=13;fontColor=#b91c1c;" value="stall 也接到所有標「CE:沒停」的暫存器，和 BRAM 讀出暫存器的讀取開關：停住時它們都不動。" vertex="1">
-          <mxGeometry height="140" width="220" x="20" y="1120" as="geometry" />
+        <mxCell id="note" parent="colF" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=13;fontColor=#b91c1c;" value="stall 接到所有標「CE:沒停」的暫存器，和 BRAM 讀出暫存器的讀取開關。&lt;br&gt;&lt;br&gt;還有剩(fire ≥ 2,或 1 個但下游不收):整條停住。&lt;br&gt;沒剩(fire ≤ 1 且送出去了):同一拍整條往後推一格、讀下一個 \(o_c\),不空拍。" vertex="1">
+          <mxGeometry height="190" width="220" x="20" y="1120" as="geometry" />
         </mxCell>
         <mxCell id="e1" edge="1" parent="1" source="fifo" style="endArrow=block;endFill=1;strokeColor=#374151;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="mux" value="">
           <mxGeometry relative="1" x="0.2" as="geometry">
@@ -366,7 +362,7 @@
         <mxCell id="e16" edge="1" parent="1" source="pipe2" style="endArrow=block;endFill=1;strokeColor=#374151;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;edgeStyle=orthogonalEdgeStyle;rounded=0;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;html=1;" target="pipe3" value="">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e21" edge="1" parent="1" source="nu1" style="endArrow=block;endFill=1;strokeColor=#374151;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;edgeStyle=orthogonalEdgeStyle;rounded=0;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;html=1;" target="cut" value="">
+        <mxCell id="e21" edge="1" parent="1" source="nu1" style="endArrow=block;endFill=1;strokeColor=#ea580c;strokeWidth=4;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;edgeStyle=orthogonalEdgeStyle;rounded=0;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;html=1;" target="cut" value="">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="1810" y="590" />
@@ -403,10 +399,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="c8" edge="1" parent="1" source="conf" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;edgeStyle=orthogonalEdgeStyle;rounded=0;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;html=1;" target="issue" value="">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="c9" edge="1" parent="1" source="stall" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="issue" value="停住就不讀">
+        <mxCell id="c9" edge="1" parent="1" source="stall" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;defaultLabelBackgroundColor=gap;labelPlacement=auto;edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="issue" value="還有剩：停住不讀&lt;br&gt;沒剩：同一拍讀下一個 \(o_c\)">
           <mxGeometry relative="1" x="-0.0206" as="geometry">
             <Array as="points">
               <mxPoint x="2456.9" y="1114" />
@@ -443,6 +436,65 @@
             <Array as="points">
               <mxPoint x="289" y="1005" />
               <mxPoint x="289" y="438.3" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="n1" value="" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;edgeStyle=orthogonalEdgeStyle;rounded=0;jumpStyle=arc;jumpSize=8;html=1;exitX=0.1;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.286;entryDx=0;entryDy=0;" edge="1" parent="1" source="nff" target="avail">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="380" y="700" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="n2" value="有事件" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;edgeStyle=orthogonalEdgeStyle;rounded=0;jumpStyle=arc;jumpSize=8;html=1;exitX=0;exitY=0.714;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="fifo" target="avail">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="20" y="290" />
+              <mxPoint x="20" y="715" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="n3" value="" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;edgeStyle=orthogonalEdgeStyle;rounded=0;jumpStyle=arc;jumpSize=8;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.214;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="avail" target="issue">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="222.5" y="1295" />
+              <mxPoint x="1000" y="1295" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c6" value="" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;edgeStyle=orthogonalEdgeStyle;rounded=0;jumpStyle=arc;jumpSize=8;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.19;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="nff" target="conf">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="600" y="575" />
+              <mxPoint x="600" y="480" />
+              <mxPoint x="1000" y="480" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="n6" value="valid、\(o_c\)" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;edgeStyle=orthogonalEdgeStyle;rounded=0;jumpStyle=arc;jumpSize=8;html=1;exitX=0.864;exitY=1;exitDx=0;exitDy=0;entryX=0.707;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="pipe1" target="conf">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="n7" value="valid、\(o_c\)" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;edgeStyle=orthogonalEdgeStyle;rounded=0;jumpStyle=arc;jumpSize=8;html=1;exitX=0.091;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="pipe2" target="conf">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1330" y="382" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="n8" value="valid、\(o_c\)" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;edgeStyle=orthogonalEdgeStyle;rounded=0;jumpStyle=arc;jumpSize=8;html=1;exitX=0.045;exitY=1;exitDx=0;exitDy=0;entryX=0.948;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="pipe3" target="conf">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1860" y="215" />
+              <mxPoint x="1220" y="215" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c8" value="" style="endArrow=block;endFill=1;dashed=1;strokeColor=#b91c1c;fontColor=#b91c1c;fontSize=12;labelBackgroundColor=default;edgeStyle=orthogonalEdgeStyle;rounded=0;jumpStyle=arc;jumpSize=8;html=1;exitX=1;exitY=0.923;exitDx=0;exitDy=0;entryX=0.893;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="conf" target="issue">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1245" y="450" />
+              <mxPoint x="1245" y="1100" />
+              <mxPoint x="1190" y="1100" />
             </Array>
           </mxGeometry>
         </mxCell>
