@@ -9,7 +9,7 @@
 //       同一拍裡改 out_ready,out_valid 不能跟著變(out_valid 不能用到 out_ready)。
 //       清除期間 in_ready=0,FIFO 也沒有收進任何事件。
 //       reset 之後 out_valid、in_ready 不是 X。
-//       讀出的資料出來那一拍(位置 R 剛到,dut.data_cycle),讀出值要等於記憶體裡的內容:每個合法候選的 (V̂, t_last)
+//       讀出的資料出來那一拍(位置 R 剛到,read_data_arrived),讀出值要等於記憶體裡的內容:每個合法候選的 (V̂, t_last)
 //       等於 NeuronMemory 陣列裡候選位址那一格(這一拍寫入之前),權重寬字等於權重 ROM 裡 (o_c, c) 那一格;
 //       (o_c, c) 由 testbench 在送讀位址那一拍記下來,照順序對。
 //       只比最後結果時,讀錯資料但結果剛好對(例如讀到 X、飽和判斷剛好算出會 fire 的值)會漏掉,這一項在讀錯的那一拍就抓到。
@@ -285,6 +285,11 @@
 		return 1'b0;
 	endfunction
 
+	// 讀出的資料出來那一拍:位置 R 的 o_c 剛到(停住的拍子位置上還是同一個 o_c,不算剛到)
+	function automatic bit read_data_arrived();
+		return dut.pipe_valid[READ_LATENCY] && !dut.pipe_held;
+	endfunction
+
 	// SaltConv 整個空下來:管線裡沒有 o_c,FIFO 也沒有事件
 	function automatic bit dut_idle();
 		return !pipe_occupied(1, PIPELINE_DEPTH) && !dut.fifo_read_valid && !dut.clearing;
@@ -460,7 +465,7 @@
 				sent_out_channel.push_back(dut.read_out_channel);
 				sent_in_channel.push_back(dut.read_channel);
 			end
-			if (dut.data_cycle) check_read_data(where);
+			if (read_data_arrived()) check_read_data(where);
 
 			// ---------------- posedge ----------------
 			@(posedge clk);

@@ -224,10 +224,10 @@ module SaltConv #(
 	// ===============================================================
 	logic                        grid_valid     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 	logic [BANK_ADDR_WIDTH-1:0]  grid_bank_addr [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_Y_WIDTH-1:0]      grid_out_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_X_WIDTH-1:0]      grid_out_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]        grid_tap_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]        grid_tap_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [OUT_Y_WIDTH-1:0]      grid_out_y     [0:AXIS_BANK_COUNT-1];   // 照列,第 r_y 列一份
+	logic [OUT_X_WIDTH-1:0]      grid_out_x     [0:AXIS_BANK_COUNT-1];   // 照行,第 r_x 行一份
+	logic [TAP_WIDTH-1:0]        grid_tap_y     [0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]        grid_tap_x     [0:AXIS_BANK_COUNT-1];
 	logic [BANK_INDEX_WIDTH-1:0] grid_top_row_bank;
 	logic [BANK_INDEX_WIDTH-1:0] grid_left_col_bank;
 
@@ -264,10 +264,10 @@ module SaltConv #(
 	logic [TIME_WIDTH-1:0]        pipe_time                [1:PIPELINE_DEPTH];   // t
 	logic                         pipe_candidate_valid     [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 	logic [BANK_ADDR_WIDTH-1:0]   pipe_bank_addr           [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_Y_WIDTH-1:0]       pipe_out_y               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_X_WIDTH-1:0]       pipe_out_x               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]         pipe_tap_y               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]         pipe_tap_x               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [OUT_Y_WIDTH-1:0]       pipe_out_y               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1];
+	logic [OUT_X_WIDTH-1:0]       pipe_out_x               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         pipe_tap_y               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         pipe_tap_x               [1:PIPELINE_DEPTH][0:AXIS_BANK_COUNT-1];
 	logic [BANK_INDEX_WIDTH-1:0]  pipe_top_row_bank        [1:PIPELINE_DEPTH];
 	logic [BANK_INDEX_WIDTH-1:0]  pipe_left_col_bank       [1:PIPELINE_DEPTH];
 	logic                         pipe_held;   // 上一拍停住:每個位置上的 o_c 跟上一拍相同
@@ -318,10 +318,8 @@ module SaltConv #(
 
 	// 剛到的那一拍:停住的拍子位置上還是同一個 o_c,不算剛到
 	logic compute_cycle;   // 位置 L 的 o_c 剛到:讀出的資料(C = 2 時是切點暫存器)是它的,算、寫回、挑 s
-	logic data_cycle;      // 位置 R 的 o_c 剛到:讀出的資料是它的(C = 1 時跟 compute_cycle 相同)
 
 	assign compute_cycle = pipe_valid[PIPELINE_DEPTH] && !pipe_held;
-	assign data_cycle    = pipe_valid[READ_LATENCY] && !pipe_held;
 
 	// ===============================================================
 	// 5 讀出、算、寫回

@@ -6,7 +6,8 @@
 //   答案是 scripts/gen_weight_lookup_ref.py 用訓練端的候選規則算的:每組 (o_c, c)、每個事件座標 (y, x),
 //   每個 bank 的 valid、(k_y, k_x),以及 q[o_c,c,k_y,k_x]。答案不經過權重檔的打包。
 //   答案檔一行跑一拍,o_c、c、in_y、in_x 由外到內:
-//     negedge:送 (o_c, c),每個 bank 的 tap_y、tap_x 給答案檔的 (k_y, k_x)
+//     negedge:送 (o_c, c),tap_y[r_y]、tap_x[r_x] 給答案檔裡那一列、那一行合法 bank 的 k_y、k_x
+//             (tap 照軸各一份;同一列合法 bank 的 k_y 不同、同一行的 k_x 不同,就是答案檔有錯,停下來)
 //     posedge:WeightMemory 讀進 q[o_c,c]
 //     posedge 後 #1:比對 valid=1 的 bank
 //   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入,
@@ -45,8 +46,8 @@ module tb_weight_lookup;
 	logic        [OUT_CHANNEL_WIDTH-1:0] out_channel;
 	logic        [IN_CHANNEL_WIDTH-1:0]  in_channel;
 	logic        [KERNEL_WORD_WIDTH-1:0] kernel_word;
-	logic        [TAP_WIDTH-1:0]         tap_y       [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic        [TAP_WIDTH-1:0]         tap_x       [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic        [TAP_WIDTH-1:0]         tap_y       [0:AXIS_BANK_COUNT-1];
+	logic        [TAP_WIDTH-1:0]         tap_x       [0:AXIS_BANK_COUNT-1];
 	logic signed [WEIGHT_WIDTH-1:0]      weight_code [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 
 	WeightMemory #(
@@ -91,6 +92,8 @@ module tb_weight_lookup;
 		int expected_tap_y  [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 		int expected_tap_x  [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 		int expected_weight [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+		bit tap_y_set       [0:AXIS_BANK_COUNT-1];   // 這一列已經從合法 bank 拿到 k_y
+		bit tap_x_set       [0:AXIS_BANK_COUNT-1];   // 這一行已經從合法 bank 拿到 k_x
 		int scan_count;
 
 		check_count = 0;
@@ -132,10 +135,26 @@ module tb_weight_lookup;
 						@(negedge clk);
 						out_channel = OUT_CHANNEL_WIDTH'(channel_out);
 						in_channel  = IN_CHANNEL_WIDTH'(channel_in);
+						for (int bank = 0; bank < AXIS_BANK_COUNT; bank++) begin
+							tap_y[bank]     = '0;
+							tap_x[bank]     = '0;
+							tap_y_set[bank] = 1'b0;
+							tap_x_set[bank] = 1'b0;
+						end
 						for (int row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin
 							for (int col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin
-								tap_y[row_bank][col_bank] = TAP_WIDTH'(expected_tap_y[row_bank][col_bank]);
-								tap_x[row_bank][col_bank] = TAP_WIDTH'(expected_tap_x[row_bank][col_bank]);
+								if (!expected_valid[row_bank][col_bank])
+									continue;
+								if (tap_y_set[row_bank] && int'(tap_y[row_bank]) != expected_tap_y[row_bank][col_bank])
+									$fatal(1, "答案檔 out_channel=%0d in_channel=%0d in_y=%0d in_x=%0d:第 %0d 列合法 bank 的 tap_y 不同",
+									       channel_out, channel_in, coord_y, coord_x, row_bank);
+								if (tap_x_set[col_bank] && int'(tap_x[col_bank]) != expected_tap_x[row_bank][col_bank])
+									$fatal(1, "答案檔 out_channel=%0d in_channel=%0d in_y=%0d in_x=%0d:第 %0d 行合法 bank 的 tap_x 不同",
+									       channel_out, channel_in, coord_y, coord_x, col_bank);
+								tap_y[row_bank] = TAP_WIDTH'(expected_tap_y[row_bank][col_bank]);
+								tap_x[col_bank] = TAP_WIDTH'(expected_tap_x[row_bank][col_bank]);
+								tap_y_set[row_bank] = 1'b1;
+								tap_x_set[col_bank] = 1'b1;
 							end
 						end
 						@(posedge clk);

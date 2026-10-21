@@ -5,7 +5,7 @@
 //   CandidateGrid 窮舉比對:out_channel 跑 0~OUT_CHANNELS-1,in_y、in_x 各從 0 跑到 2^寬度-1,
 //   跟 scripts/gen_candidate_grid_ref.py 用訓練端 _axis_candidates 算出的答案逐個 bank 比對。
 //   每組輸入先比 top_row_bank、left_col_bank(窗左上角的 bank);
-//   valid 一律要相同;valid=1 的 bank 再比 out_y、out_x、tap_y、tap_x、bank_addr。
+//   valid 一律要相同;valid=1 的 bank (r_y, r_x) 再比 out_y[r_y]、out_x[r_x]、tap_y[r_y]、tap_x[r_x]、bank_addr。
 //   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入,
 //   檔名照參數組出來,規則跟 gen_candidate_grid_ref.py 的 ref_file_name 相同。
 //   純組合邏輯,只用一個 initial 流程:設定輸入、等 #1、比對。
@@ -42,10 +42,10 @@ module tb_candidate_grid;
 	logic [OUT_CHANNEL_WIDTH-1:0] out_channel;
 	logic                         valid     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 	logic [BANK_ADDR_WIDTH-1:0]   bank_addr [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_Y_WIDTH-1:0]       out_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_X_WIDTH-1:0]       out_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]         tap_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]         tap_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [OUT_Y_WIDTH-1:0]       out_y     [0:AXIS_BANK_COUNT-1];
+	logic [OUT_X_WIDTH-1:0]       out_x     [0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         tap_y     [0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         tap_x     [0:AXIS_BANK_COUNT-1];
 	logic [BANK_INDEX_WIDTH-1:0]  top_row_bank;
 	logic [BANK_INDEX_WIDTH-1:0]  left_col_bank;
 
@@ -150,13 +150,13 @@ module tb_candidate_grid;
 							            expected_valid, int'(valid[row_bank][col_bank]));
 							if (expected_valid) begin
 								check_field(channel, coord_y, coord_x, row_bank, col_bank, "out_y",
-								            expected_out_y, int'(out_y[row_bank][col_bank]));
+								            expected_out_y, int'(out_y[row_bank]));
 								check_field(channel, coord_y, coord_x, row_bank, col_bank, "out_x",
-								            expected_out_x, int'(out_x[row_bank][col_bank]));
+								            expected_out_x, int'(out_x[col_bank]));
 								check_field(channel, coord_y, coord_x, row_bank, col_bank, "tap_y",
-								            expected_tap_y, int'(tap_y[row_bank][col_bank]));
+								            expected_tap_y, int'(tap_y[row_bank]));
 								check_field(channel, coord_y, coord_x, row_bank, col_bank, "tap_x",
-								            expected_tap_x, int'(tap_x[row_bank][col_bank]));
+								            expected_tap_x, int'(tap_x[col_bank]));
 								check_field(channel, coord_y, coord_x, row_bank, col_bank, "bank_addr",
 								            expected_bank_addr, int'(bank_addr[row_bank][col_bank]));
 							end

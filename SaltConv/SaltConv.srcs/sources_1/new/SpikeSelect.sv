@@ -39,8 +39,8 @@ module SpikeSelect #(
 	localparam integer OUT_X_WIDTH      = (OUT_COLS > 1) ? $clog2(OUT_COLS) : 1
 )(
 	input  logic                        pending       [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // 這個 bank 還有 fire 沒送
-	input  logic [OUT_Y_WIDTH-1:0]      out_y         [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // o_y
-	input  logic [OUT_X_WIDTH-1:0]      out_x         [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // o_x
+	input  logic [OUT_Y_WIDTH-1:0]      out_y         [0:AXIS_BANK_COUNT-1],                        // o_y,第 r_y 列(同 CandidateGrid)
+	input  logic [OUT_X_WIDTH-1:0]      out_x         [0:AXIS_BANK_COUNT-1],                        // o_x,第 r_x 行
 	input  logic [BANK_INDEX_WIDTH-1:0] top_row_bank,                                               // 窗最上面那列的 o_y mod M
 	input  logic [BANK_INDEX_WIDTH-1:0] left_col_bank,                                              // 窗最左邊那行的 o_x mod M
 	output logic                        found,                                                      // 有沒有東西可以送
@@ -89,8 +89,8 @@ module SpikeSelect #(
 				                            && (chosen_col == BANK_INDEX_WIDTH'(col_bank));
 			end
 		end
-		selected_y = out_y[chosen_row][chosen_col];
-		selected_x = out_x[chosen_row][chosen_col];
+		selected_y = out_y[chosen_row];
+		selected_x = out_x[chosen_col];
 	end
 
 endmodule

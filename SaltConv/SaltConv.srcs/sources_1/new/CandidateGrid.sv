@@ -5,7 +5,9 @@
 //   一筆事件在一個 output channel 的全部候選神經元(Conv.md 第 2 節「神經元」),純組合邏輯。
 //   y、x 各例化一個 CandidateAxis,兩軸的 AXIS_BANK_COUNT 組兩兩配對成 AXIS_BANK_COUNT x AXIS_BANK_COUNT 組,
 //   第 [r_y][r_x] 組就是 bank (r_y, r_x) 的候選,再算出它在 bank 內的位址。
-//   valid[r_y][r_x]=0 時,同一組其他輸出的值不保證,上層不能使用。
+//   o_y、k_y 只跟 r_y 有關,o_x、k_x 只跟 r_x 有關,所以 out_y、tap_y 照 r_y 各一份,out_x、tap_x 照 r_x 各一份;
+//   bank (r_y, r_x) 的候選座標是 (out_y[r_y], out_x[r_x])、tap 是 (tap_y[r_y], tap_x[r_x])。
+//   valid[r_y][r_x]=0 時,這個 bank 的 bank_addr、座標、tap 不保證,上層不能使用。
 //   bank 內位址(Conv.md 第 2 節「bank 內部位址」):
 //     addr = (o_c * ROW_SLOTS + g_y) * COL_SLOTS + g_x,緊密排列,不補到 2 的次方。
 //   每個 bank 一律開 OUT_CHANNELS * ROW_SLOTS * COL_SLOTS 格,邊界不整除時有些 bank 會空幾格。
@@ -45,25 +47,21 @@ module CandidateGrid #(
 
 	output logic                         valid     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // 這個 bank 有沒有合法候選
 	output logic [BANK_ADDR_WIDTH-1:0]   bank_addr [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // 候選在 bank 內的位址
-	output logic [OUT_Y_WIDTH-1:0]       out_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // o_y
-	output logic [OUT_X_WIDTH-1:0]       out_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // o_x
-	output logic [TAP_WIDTH-1:0]         tap_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // k_y
-	output logic [TAP_WIDTH-1:0]         tap_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1],   // k_x
+	output logic [OUT_Y_WIDTH-1:0]       out_y     [0:AXIS_BANK_COUNT-1],                        // o_y,第 r_y 列
+	output logic [OUT_X_WIDTH-1:0]       out_x     [0:AXIS_BANK_COUNT-1],                        // o_x,第 r_x 行
+	output logic [TAP_WIDTH-1:0]         tap_y     [0:AXIS_BANK_COUNT-1],                        // k_y,第 r_y 列
+	output logic [TAP_WIDTH-1:0]         tap_x     [0:AXIS_BANK_COUNT-1],                        // k_x,第 r_x 行
 	output logic [BANK_INDEX_WIDTH-1:0]  top_row_bank,                                           // 窗最上面那列的 o_y mod M
 	output logic [BANK_INDEX_WIDTH-1:0]  left_col_bank                                           // 窗最左邊那行的 o_x mod M
 );
 
-	// y 軸的候選,第 r_y 組是 o_y mod M = r_y 的那個
+	// y 軸的候選,第 r_y 組是 o_y mod M = r_y 的那個;o_y、k_y 直接接到輸出
 	logic                        row_valid  [0:AXIS_BANK_COUNT-1];
-	logic [OUT_Y_WIDTH-1:0]      row_coord  [0:AXIS_BANK_COUNT-1];   // o_y
 	logic [ROW_OFFSET_WIDTH-1:0] row_offset [0:AXIS_BANK_COUNT-1];   // g_y = floor(o_y/M)
-	logic [TAP_WIDTH-1:0]        row_tap    [0:AXIS_BANK_COUNT-1];   // k_y
 
-	// x 軸的候選,第 r_x 組是 o_x mod M = r_x 的那個
+	// x 軸的候選,第 r_x 組是 o_x mod M = r_x 的那個;o_x、k_x 直接接到輸出
 	logic                        col_valid  [0:AXIS_BANK_COUNT-1];
-	logic [OUT_X_WIDTH-1:0]      col_coord  [0:AXIS_BANK_COUNT-1];   // o_x
 	logic [COL_OFFSET_WIDTH-1:0] col_offset [0:AXIS_BANK_COUNT-1];   // g_x = floor(o_x/M)
-	logic [TAP_WIDTH-1:0]        col_tap    [0:AXIS_BANK_COUNT-1];   // k_x
 
 	CandidateAxis #(
 		.KERNEL_SIZE   (KERNEL_SIZE),
@@ -74,9 +72,9 @@ module CandidateGrid #(
 	) row_axis (
 		.in_coord   (in_y),
 		.valid      (row_valid),
-		.out_coord  (row_coord),
+		.out_coord  (out_y),
 		.bank_offset(row_offset),
-		.tap        (row_tap),
+		.tap        (tap_y),
 		.min_bank   (top_row_bank)
 	);
 
@@ -89,9 +87,9 @@ module CandidateGrid #(
 	) col_axis (
 		.in_coord   (in_x),
 		.valid      (col_valid),
-		.out_coord  (col_coord),
+		.out_coord  (out_x),
 		.bank_offset(col_offset),
-		.tap        (col_tap),
+		.tap        (tap_x),
 		.min_bank   (left_col_bank)
 	);
 
@@ -103,11 +101,6 @@ module CandidateGrid #(
 				// 兩軸都合法時 g_y < ROW_SLOTS、g_x < COL_SLOTS,結果一定小於 BANK_DEPTH,截斷不會丟資料
 				bank_addr[row_bank][col_bank] = BANK_ADDR_WIDTH'((out_channel * ROW_SLOTS + row_offset[row_bank]) * COL_SLOTS
 				                                                 + col_offset[col_bank]);
-
-				out_y[row_bank][col_bank] = row_coord[row_bank];
-				out_x[row_bank][col_bank] = col_coord[col_bank];
-				tap_y[row_bank][col_bank] = row_tap[row_bank];
-				tap_x[row_bank][col_bank] = col_tap[col_bank];
 			end
 		end
 	end

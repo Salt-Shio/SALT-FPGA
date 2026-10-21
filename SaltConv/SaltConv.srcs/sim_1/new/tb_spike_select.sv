@@ -50,10 +50,10 @@ module tb_spike_select;
 	logic [OUT_CHANNEL_WIDTH-1:0] out_channel;
 	logic                         grid_valid     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 	logic [BANK_ADDR_WIDTH-1:0]   grid_bank_addr [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_Y_WIDTH-1:0]       grid_out_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [OUT_X_WIDTH-1:0]       grid_out_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]         grid_tap_y     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic [TAP_WIDTH-1:0]         grid_tap_x     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic [OUT_Y_WIDTH-1:0]       grid_out_y     [0:AXIS_BANK_COUNT-1];
+	logic [OUT_X_WIDTH-1:0]       grid_out_x     [0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         grid_tap_y     [0:AXIS_BANK_COUNT-1];
+	logic [TAP_WIDTH-1:0]         grid_tap_x     [0:AXIS_BANK_COUNT-1];
 	logic [BANK_INDEX_WIDTH-1:0]  top_row_bank;
 	logic [BANK_INDEX_WIDTH-1:0]  left_col_bank;
 
@@ -216,10 +216,10 @@ module tb_spike_select;
 					if (expected_valid[bank]) begin
 						check_field(coord_y, coord_x, -1,
 						            $sformatf("out_y[%0d][%0d]", bank / AXIS_BANK_COUNT, bank % AXIS_BANK_COUNT),
-						            expected_out_y[bank], int'(grid_out_y[bank / AXIS_BANK_COUNT][bank % AXIS_BANK_COUNT]));
+						            expected_out_y[bank], int'(grid_out_y[bank / AXIS_BANK_COUNT]));
 						check_field(coord_y, coord_x, -1,
 						            $sformatf("out_x[%0d][%0d]", bank / AXIS_BANK_COUNT, bank % AXIS_BANK_COUNT),
-						            expected_out_x[bank], int'(grid_out_x[bank / AXIS_BANK_COUNT][bank % AXIS_BANK_COUNT]));
+						            expected_out_x[bank], int'(grid_out_x[bank % AXIS_BANK_COUNT]));
 					end
 				end
 

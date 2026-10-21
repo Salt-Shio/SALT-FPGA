@@ -54,10 +54,10 @@ module tb_neuron_memory;
 	logic        [OUT_CHANNEL_WIDTH-1:0] out_channel;
 	logic                                grid_valid      [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 	logic        [BANK_ADDR_WIDTH-1:0]   grid_bank_addr  [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic        [OUT_Y_WIDTH-1:0]       grid_out_y      [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic        [OUT_X_WIDTH-1:0]       grid_out_x      [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic        [TAP_WIDTH-1:0]         grid_tap_y      [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
-	logic        [TAP_WIDTH-1:0]         grid_tap_x      [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	logic        [OUT_Y_WIDTH-1:0]       grid_out_y      [0:AXIS_BANK_COUNT-1];
+	logic        [OUT_X_WIDTH-1:0]       grid_out_x      [0:AXIS_BANK_COUNT-1];
+	logic        [TAP_WIDTH-1:0]         grid_tap_y      [0:AXIS_BANK_COUNT-1];
+	logic        [TAP_WIDTH-1:0]         grid_tap_x      [0:AXIS_BANK_COUNT-1];
 
 	// NeuronMemory
 	logic                                read_enable     [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
