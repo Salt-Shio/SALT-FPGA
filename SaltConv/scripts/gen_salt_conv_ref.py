@@ -23,9 +23,8 @@ out_ready 一直是 1 時的拍數。
         重疊(OVERLAP=1):每一步都可以送下一個 o_c。
         不重疊(OVERLAP=0):前一個 o_c 到計算第 2 級才送下一個,兩次送之間隔 L 步。
         讀寫衝突(OC <= L):新事件的 o_c 跟上一筆事件同一個 o_c 要隔 L + 1 步(第 L 步到計算第 2 級、那一拍寫回,
-        同一拍不能讀)。同一筆事件的 o_c 一步接一步送,所以只看 o_c = 0。
-        例外只有 OC = 1:上一筆的 k >= 2 時停住期間已經寫回,隔 L 步;OC >= 2 時後面的 o_c 不一定停住,一律 L + 1 步。
-    OC = 1、R = C = 1 時跟 Part 8.2 之前的 max(2, k) 只差最後一個 o_c:最後一個沒有下一個要讀,不用多等一拍。
+        同一拍不能讀)。同一筆事件的 o_c 一步接一步送,所以只看 o_c = 0。OC = 1 也一律 L + 1 步:上一筆的 k >= 2 時
+        停住期間其實已經寫回,為了跟 OC >= 2 用同一套規則照樣等。
     答案檔對 CYCLE_CONFIGS 裡每組 (R, C, OVERLAP) 各列一個拍數,testbench 照自己的參數挑。
 
 參數組分兩種:
@@ -85,21 +84,17 @@ def cycle_count(fire_counts: np.ndarray, read_latency: int, compute_latency: int
     skipped_steps = 0
     previous_step = None        # 上一個 o_c 送讀位址的那一步
     previous_zero_step = None   # 上一筆事件 o_c = 0 送讀位址的那一步
-    previous_zero_fires = 0
-    for event_index in range(event_count):
+    for _ in range(event_count):
         for oc_index in range(oc_count):
             if previous_step is None:
                 step = 0
             else:
                 step = previous_step + send_gap
                 if oc_index == 0 and oc_count <= pipeline_depth:
-                    written_while_stalled = oc_count == 1 and previous_zero_fires >= 2
-                    write_gap = pipeline_depth + (0 if written_while_stalled else 1)
-                    step = max(step, previous_zero_step + write_gap)
+                    step = max(step, previous_zero_step + pipeline_depth + 1)
                 skipped_steps += step - previous_step - 1
             if oc_index == 0:
                 previous_zero_step = step
-                previous_zero_fires = int(fire_counts[event_index, 0])
             previous_step = step
     return int(np.sum(np.maximum(1, fire_counts))) + skipped_steps
 
@@ -162,6 +157,9 @@ SYNTHETIC_SETS = [
     (ParamSet(5, 2, 2, 20, 14, 2, 3, 12, 6, 6, 2, 5, 20, 0, 0), 3, 150),   # M=3、S>1,f_V=2;truncate、繞回
     (ParamSet(4, 1, 0, 10, 8, 1, 4, 10, 4, 6, 0, 4, 8, 1, 1), 3, 150),     # M=4;round、飽和
     (ParamSet(3, 1, 1, 1, 1, 2, 1, 8, 4, 5, 0, 3, 3, 1, 1), 4, 60),        # 輸出 1x1、OC=1
+    # OC=1、k >= 2:上一筆停在計算第 2 級時,下一筆要多等 1 步(讀寫衝突),out_ready 一直是 1 也比得到拍數;round、繞回。
+    # 加在最後:亂數照清單順序取,前面幾組的答案不變
+    (ParamSet(3, 1, 1, 4, 4, 2, 1, 10, 4, 5, 0, 3, 4, 1, 0), 4, 80),
 ]
 
 

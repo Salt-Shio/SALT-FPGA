@@ -532,21 +532,16 @@ module SaltConv #(
 	end
 
 	// 讀寫衝突(OC <= L):新事件的 o_c 跟上一筆事件同一個 o_c 讀寫同一批神經元,兩個要隔 L + 1 步(往前一步的拍子)。
-	// 同一筆事件的 o_c 一步接一步送,所以只要比 o_c = 0:上一筆的 o_c = 0 還在管線裡(位置 1..L)就不送。
-	// OC = 1 時沒有後面的 o_c:位置 L 停住過的已經寫回了,可以送;L = 1 時就是「算的那一拍不送下一筆」(Conv.md 5.3「OC=1」)。
-	// OC >= 2 時位置 L 停住過也不送:上一筆的 o_c = 1 不一定停住,會在下一步寫回,新事件的 o_c = 1 不能在那一步讀。
+	// 同一筆事件的 o_c 一步接一步送,所以只要比 o_c = 0:上一筆的 o_c = 0 還在管線裡(位置 1..L)就不送,
+	// 位置 L 停住的拍子也算(OC = 1 時那幾拍其實已經寫回,為了只留一套規則照樣等,上一筆 k >= 2 時多 1 拍)。
 	logic read_conflict;
 
 	if (OUT_CHANNELS <= PIPELINE_DEPTH) begin : read_conflict_check
 		logic zero_channel_too_close;   // 上一筆事件的 o_c = 0 跟現在差不到 L + 1 步
 
 		always_comb begin
-			if (OUT_CHANNELS == 1) begin
-				zero_channel_too_close = compute_cycle;
-			end else begin
-				zero_channel_too_close = pipe_valid[PIPELINE_DEPTH] && (pipe_channel[PIPELINE_DEPTH] == '0);
-			end
-			for (int position = 1; position < PIPELINE_DEPTH; position++) begin
+			zero_channel_too_close = 1'b0;
+			for (int position = 1; position <= PIPELINE_DEPTH; position++) begin
 				if (pipe_valid[position] && pipe_channel[position] == '0) begin
 					zero_channel_too_close = 1'b1;
 				end

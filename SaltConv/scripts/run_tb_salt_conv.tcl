@@ -16,6 +16,10 @@
 #       cd D:\Project\SALT-FPGA\SaltConv\SaltConv.sim
 #       vivado -mode batch -source D:/Project/SALT-FPGA/SaltConv/scripts/run_tb_salt_conv.tcl
 #   Run only some testbenches: add -tclargs followed by their names, e.g. -tclargs tb_salt_conv_ready_high
+#   Run only some parameter sets: add NAME:value conditions to -tclargs (NAME is a testbench parameter as printed
+#   in the summary line); a set runs only if it meets every condition, e.g. -tclargs OUT_CHANNELS:1 READ_LATENCY:2
+#   Conditions and testbench names can be mixed. ':' instead of '=': the arguments pass through vivado.bat to the
+#   child Vivado, and .bat files split arguments at '='.
 #   Do not source this from the GUI Tcl console: there the repeated elaborate steps intermittently fail with
 #   'Spawn failed' (cause unknown, see the vivado-usage skill, section 8.7). Use the GUI only for a single
 #   Run Simulation with the testbench defaults.
@@ -29,8 +33,20 @@ source [file join $scripts_dir sim_common.tcl]
 
 set testbenches [list tb_salt_conv_ready_high tb_salt_conv_ready_random tb_salt_conv_ready_burst \
     tb_salt_conv_ready_alternate]
-if {[llength $argv] > 0} {
-    set testbenches $argv
+# -tclargs: testbench names (tb_*) and NAME:value parameter set conditions
+set requested_testbenches {}
+set set_conditions {}
+foreach arg $argv {
+    if {[string match tb_* $arg]} {
+        lappend requested_testbenches $arg
+    } elseif {[regexp {^[A-Z_]+:[^:=\s]+$} $arg]} {
+        lappend set_conditions $arg
+    } else {
+        error "unknown argument '$arg': expected a testbench name (tb_*) or a NAME:value condition"
+    }
+}
+if {[llength $requested_testbenches] > 0} {
+    set testbenches $requested_testbenches
 }
 
 # Several testbenches: one child Vivado per testbench, then report from their logs
@@ -42,7 +58,7 @@ if {[llength $testbenches] > 1} {
         set log_path [file join $sim_dir $tb_name.log]
         puts "##### $tb_name: running in a child Vivado, log $log_path"
         set child_failed [catch {exec -ignorestderr $vivado_bat -mode batch -nojournal -log $log_path \
-            -source [info script] -tclargs $tb_name} child_output]
+            -source [info script] -tclargs $tb_name {*}$set_conditions} child_output]
         if {$child_failed} {
             lappend failed_testbenches $tb_name
         }
@@ -80,6 +96,7 @@ set param_sets [list \
     [list 4 5 1 2 3 10 7 5 2 2 12 6 6 2 5 20 0 0 16 $ref_dir/salt_conv_K5_S2_P2_R10_C7_IC2_OC3_IV6_FV2_RD0_SAT0] \
     [list 3 4 1 1 4 7 5 4 1 0 10 4 6 0 4 8 1 1 2 $ref_dir/salt_conv_K4_S1_P0_R7_C5_IC1_OC4_IV6_FV0_RD1_SAT1] \
     [list 1 1 1 2 1 1 1 3 1 1 8 4 5 0 3 3 1 1 16 $ref_dir/salt_conv_K3_S1_P1_R1_C1_IC2_OC1_IV5_FV0_RD1_SAT1] \
+    [list 2 2 1 2 1 4 4 3 1 1 10 4 5 0 3 4 1 0 4 $ref_dir/salt_conv_K3_S1_P1_R4_C4_IC2_OC1_IV5_FV0_RD1_SAT0] \
 ]
 
 # Each set above runs once per {READ_LATENCY COMPUTE_LATENCY OVERLAP} below. They only change the cycle count;
@@ -120,6 +137,28 @@ proc salt_conv_generic {param_set} {
 # tb_salt_conv_* print the integer parameters as NAME=value, followed by a colon
 proc salt_conv_prefix {param_set} {
     return "[salt_conv_integer_params $param_set]:"
+}
+
+# Keep only the sets that meet every NAME:value condition from -tclargs
+if {[llength $set_conditions] > 0} {
+    set selected_sets {}
+    foreach param_set $param_sets {
+        set integer_params [salt_conv_integer_params $param_set]
+        set selected 1
+        foreach condition $set_conditions {
+            if {[lsearch -exact $integer_params [string map {: =} $condition]] < 0} {
+                set selected 0
+                break
+            }
+        }
+        if {$selected} {
+            lappend selected_sets $param_set
+        }
+    }
+    if {[llength $selected_sets] == 0} {
+        error "no parameter set meets the conditions: $set_conditions"
+    }
+    set param_sets $selected_sets
 }
 
 open_saltconv_project $scripts_dir
