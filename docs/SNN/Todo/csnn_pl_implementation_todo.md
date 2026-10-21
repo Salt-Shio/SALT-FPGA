@@ -29,6 +29,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 8.2 | 讀取延遲 $R$ 做成參數，$R=2$ 用 BRAM 輸出暫存器 | 5.5「實作」 | 完成 | `SaltConv.sv`、`NeuronMemory.sv`、`NeuronMemoryArray.sv`(新)、`WeightMemory.sv`、`tb_salt_conv_common.svh`、`gen_salt_conv_ref.py`、`run_tb_salt_conv.tcl` |
 | 8.3 | 拆計算($C=2$)草稿量測：切點、搭配 $R=2$ | 5.5 | 草稿量測完成(草稿不進 repo) | |
 | 8.x | $o_c$ 重疊(停住做法)、拆計算 $C=2$、時序改善、可讀性整理 | 5.5「實作」、5.8 | 完成 | `SaltConv.sv`、`NeuronUpdate.sv`、`CandidateGrid.sv`、`SpikeSelect.sv`、`WeightTapSelect.sv`、記憶體模組、testbench、`gen_salt_conv_ref.py`、`run_tb_salt_conv.tcl` |
+| 9 | 兩層串接 conv1 → conv2(`SaltConvNet`)：功能驗證、延遲拍數、合成 | — | 模擬全過、量測完成；乘法強制 DSP 後兩版 4.8 ns 都過 | `SaltConvNet.sv`、`NeuronUpdate.sv`、`tb_salt_conv_net_*`、`gen_salt_conv_ref.py`、`run_tb_salt_conv_net.tcl`、`sim_common.tcl` |
 
 ## 下一步
 
@@ -36,14 +37,90 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 - Part 8 一次只處理一個策略或一個機制，規劃時先列出這次要做哪一個、怎麼量、怎麼驗證，給使用者確認。
 - 讀現行 RTL：`SaltConv.sv` 照事件流程分 0~6 段(檔頭有目錄)。控制總覽在 `docs/SNN/Concept/Layer-RTL/SaltConvOverview.md`，逐拍例子、資料流程圖在 `Conv-image/SaltConvControl.md`、`SaltConvDataflow.md`，設計推導在 Conv.md 5.5「實作」、5.8。
 - **目標時脈 5 ns(200 MHz)**：R2C2 重疊在 4.8 ns(5 ns 手動留 0.2 ns)下 6 組設定全部達標，見 Part 8.x「4.8 ns 量測」。目標固定時只跑目標週期看過不過，不掃最高時脈。
+    - 兩層串接(Part 9)乘法一律用 DSP 之後，繞回、飽和兩版 4.8 ns 也都達標(+0.260、+0.028)。
 - 還沒做的(編號是 2026-10-21 的總清單)：
     - 3：下游會擋(`out_ready` 不是一直 1)時的實際速度。量的是拍數，跟時脈無關；多層串接會用到。
+        - Part 9 串接時量了(conv2 擋 conv1、testbench 擋 conv2)，結果見 Part 9「延遲」，待使用者確認算不算做完。
     - 4：時序 C，SpikeSelect 改成看「窗裡排在我前面的有沒有 pending」，不轉讀的順序。
     - 5：時序 D，讀位址路徑(FIFO 最前面那筆 → 選這次要讀哪一筆 → CandidateGrid → BRAM 讀位址)。
         - 4、5 擱著：5 ns 已經達標，整合後 5 ns 過不了才做。4.8 ns 量測裡 M=3 繞回的最長路徑就是 D 那條。
     - 17：`NeuronUpdate.sv:73` 的 reviewer 註解，先留著。
     - 18：多層 Conv 串接，conv1 → conv2，之後串更多層(`SaltConv` 是通用模組)。
+        - conv1 → conv2 完成(Part 9)：功能逐位元相同、延遲量完、合成 4.8 ns 兩版都過。訓練端網路 conv2 後面是 FC(`out`，10 個輸出)，再往下串要等 FC 的 RTL。
+        - 隨機權重的第三層 conv 不做：沒訓練過的權重事件量不合理，沒有參考價值。
 - 8.1、8.2 留下的待討論事項：Part 8.1「之後討論與評估」、Part 8.2「之後討論」。
+
+## Part 9 兩層串接 conv1 → conv2(2026-10-21)
+
+### 目標與範圍
+
+- 確認訓練端量化模型的 conv1、conv2 放到硬體上串起來跑，輸出、最終狀態都跟軟體逐位元相同。
+- 量輸入送完之後還要等幾拍才到最終狀態。
+- 合成確認兩層之間沒有組合邏輯穿過兩層，讓時序變長。
+- 管線只用目標設定 R2C2 重疊；其他 7 種管線由單層測試涵蓋，串接不會讓它們的行為不同。
+
+### 改的是什麼
+
+- `SaltConvNet.sv`(新)：固定兩層，conv1 的 `out_` 直接接 conv2 的 `in_`。
+    - 幾何只給網路輸入大小和每層的 K、S、P、OC；各層輸出大小、層與層之間的位寬都在模組裡推出來，上下層對不上的組合寫不出來。
+    - 每層各自一份的參數(幾何、$i_V$、衰減表深度、FIFO 深度、資料檔)加 `CONV1_`、`CONV2_` 前綴，全網路共用的(時間位寬、$b$、$f_V$、$f_a$、捨入、溢位、管線設定)不加。
+- `gen_salt_conv_ref.py`：同一次計算另外寫 `salt_conv_net_SAT<0|1>.txt`，內容是網路輸入、conv1 輸出、conv2 輸出、兩層最終 $(\hat V, t_{last})$。
+    - 寫之前確認 conv2 的輸入事件逐筆等於 conv1 的輸出(直接接線就是對的組合方式)。
+    - 單層答案檔重新產生後逐位元組跟 commit 的相同。
+- `tb_salt_conv_net_common.svh` + 三支驅動：`ready_high`(一直收，量延遲用)、`ready_random`(每拍隨機)、`ready_burst`(長時間擋、長時間收交替)。
+    - 比對：網路輸出逐筆、conv1 → conv2 交握成功的每一筆、兩層最終狀態。
+    - 協定：網路輸出和層與層之間兩個介面都查「送不出去時 valid 不掉、內容不變」；conv1 清除期間 `in_ready=0`、conv2 清除期間 conv1 的輸出不被收。
+    - 單層查過的(讀出值、單層拍數、停住位置涵蓋)不重複。
+    - 單層的 `ready_alternate` 沒做串接版：它是針對單層某些停住位置的，串接時 random、burst 已經讓層與層之間的 ready 一直變。
+- `run_tb_salt_conv_net.tcl`(新)；「多支 testbench 各開一個子 Vivado 依序跑」從 `run_tb_salt_conv.tcl` 搬到 `sim_common.tcl` 的 `run_testbenches_in_children`，兩支共用。
+
+### 驗證
+
+- 三支 × 繞回、飽和兩版，全部 ALL PASS；每組約 35 秒。
+    - 每版 10 筆 test 樣本：conv1 輸出 25461 / 25611 筆、網路輸出 11981 / 12023 筆、兩層狀態 23120 + 12960 顆，逐筆比對 0 錯。
+- `run_tb_salt_conv.tcl` 改用共用流程後，跑 `ready_high`、`ready_random` × OC=1 兩組(R2C2 重疊)確認還是 ALL PASS。
+- 第一次跑 `ready_high` 時 elaborate 報 `Spawn failed: %1 不是有效的 Win32 應用程式`，`elaborate.bat` 是 0 bytes，跟 vivado-usage skill 8.7 記的 2026-10-13 那次一樣；原封不動重跑就過。
+
+### 延遲(拍數，`ready_high`，輸入用最快速度餵)
+
+- 每筆樣本 2000 筆輸入事件。拍數定義見 `tb_salt_conv_net_common.svh` 檔頭。
+
+| 項目 | 繞回版 | 飽和版 |
+|---|---|---|
+| reset 之後清除神經元記憶體 | 648 拍 | 648 拍 |
+| 第一筆輸入到全部做完 | 40050 ~ 41256 拍 | 40429 ~ 41512 拍 |
+| 最後一筆輸入被收下 → 全部做完 | 559 ~ 768 拍 | 559 ~ 768 拍 |
+| conv1 有東西要送、conv2 不收的拍數 | 23656 ~ 24827 | 24024 ~ 25080 |
+| 對照：conv1 單獨跑(答案檔拍數) | 16124 ~ 16178 | 16130 ~ 16178 |
+| 對照：conv2 單獨跑(答案檔拍數) | 40041 ~ 41239 | 40421 ~ 41495 |
+
+- 串接的總拍數比 conv2 單獨跑只多 8~33 拍：瓶頸是 conv2(每筆樣本收到約 2500 筆事件，就是 conv1 的輸出，每筆 16 個 $o_c$)，conv2 幾乎沒有等過 conv1。
+    - 所以這種餵法下 FIFO 加深不會變快；conv1 被擋的 2.4 萬拍只是在等 conv2。
+- 換成時間：5 ns 時脈下一筆樣本約 0.21 ms；這 10 筆樣本最後一筆事件的時間戳記是 67~151 ms。
+- `ready_random`、`ready_burst` 下游會擋時：第一筆到全部做完 41731 ~ 43404 拍(random)、52113 ~ 58099 拍(burst)，最後一筆輸入之後 573 ~ 1083 拍。
+
+### 合成(4.8 ns，non-project、OOC，跟 Part 8.x「4.8 ns 量測」同一套做法，每版一次)
+
+| 版本 | WNS | 最長路徑 | conv1 → conv2 | conv2 → conv1 | LUT | FF | BRAM | DSP |
+|---|---|---|---|---|---|---|---|---|
+| 繞回 | +0.260 | conv1 內：FIFO 讀指標 → BRAM 讀位址 | +0.725(9 層) | +1.464(4 層) | 1266(1.08%) | 620(0.26%) | 8(5.56%) | 8(0.64%) |
+| 飽和 | −0.118 | conv1 內：計算第 1 級(LUT 乘法) | +0.211(9 層) | +1.551(3 層) | 1607(1.37%) | 645(0.28%) | 8(5.56%) | 4(0.32%) |
+| 飽和，乘法強制 DSP | +0.028 | conv1 內：計算第 1 級，進 DSP 後被搬出來的切點暫存器 | +0.539(9 層) | +1.490(4 層) | 1276(1.09%) | 631(0.27%) | 8(5.56%) | 8(0.64%) |
+
+- 層與層之間兩條都不是最長路徑：
+    - conv1 → conv2：起點 conv1 的 `cut_after_step2` 暫存器，終點 conv2 FIFO 的 `full`、`empty`、寫指標、distributed RAM 的 WE；資料路徑 4.46 ns(飽和)，conv1 內最長的是 4.91 ns。
+    - conv2 → conv1：起點 conv2 的 `full` 或 `clearing` 暫存器，終點 conv1 的 BRAM 讀取開關、管線暫存器的 CE。
+- 飽和版沒過的那條在 conv1 裡面，$w$=9 用 LUT 做乘法的計算第 1 級，跟單層 conv1 飽和最緊是同一類路徑(單層 4.8 ns 是 +0.080，最長路徑在讀取開關)；差 0.2 ns 在單次布局的變動範圍內。
+- 分層資源(飽和)：conv1 966 LUT、0 DSP；conv2 633 LUT、4 DSP。單層量測是 976、620，差不多。
+
+### 乘法一律用 DSP(2026-10-21，使用者決定)
+
+- `NeuronUpdate` 的 `decay_product`、`rounded_product` 加 `(* use_dsp = "yes" *)`，不做成參數，所有位寬都用 DSP。
+    - 理由：Vivado 自己選時 $w$=9 用 LUT，這一段時序一直最緊；DSP 用量很少(整顆 1248 個，兩層 8 個)，各層資源類型也一致。
+    - 只影響合成，模擬器忽略這個屬性，所以沒有重跑模擬；只重跑飽和版合成(繞回版兩層、飽和版 conv2 本來就是 DSP)。
+- 結果見上表最後一列：飽和版 −0.118 → +0.028，LUT 1607 → 1276(conv1 966 → 617)，DSP 4 → 8。
+    - 最長路徑在 conv1 bank (1,0) 的計算第 1 級：布局把那顆 DSP 裡的切點暫存器搬到外面(`Physopt 32-665 ... rounded_product. 9 registers were pushed out`)，路徑變成走完整顆 DSP 再到一般 FF。
+    - 跟 Part 8.x「4.8 ns 量測」M=3 飽和改前沒過是同一種情況，是布局的決定，原因沒查。
 
 ## Part 8.x $o_c$ 重疊(完成)
 
@@ -1112,6 +1189,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 ### 合成後要確認
 
 - **`NeuronUpdate` 的乘法器用 DSP 還是 LUT(Part 8 決定)**：
+    - 2026-10-21 已定：一律用 DSP(Part 9「乘法一律用 DSP」)。下面是決定之前的紀錄。
     - 問題：$A\cdot\hat V$ 沒有指定資源，Vivado 依位寬自己選，$w$=9 用 LUT、其他用 DSP，各層、各版本資源類型不同，用量跟功耗不好比。
     - 指定方法：在乘積訊號上加 `(* use_dsp = "yes" *)` 強制用 DSP、`"no"` 強制用 slice logic(UG901 2025.2「Multipliers Implementation」)。
     - 量測(2026-10-11，xck26，non-project，暫存目錄的 RTL 副本，正式 RTL 沒加屬性)：

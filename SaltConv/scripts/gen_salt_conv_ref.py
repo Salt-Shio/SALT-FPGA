@@ -1,4 +1,5 @@
-"""產生 tb_salt_conv_*.sv(四支,清單見 run_tb_salt_conv.tcl)共用的參考答案,人工參數組另外產生權重檔、門檻檔、衰減表檔。
+"""產生 tb_salt_conv_*.sv(四支,清單見 run_tb_salt_conv.tcl)共用的參考答案,人工參數組另外產生權重檔、門檻檔、衰減表檔;
+另外產生兩層串接 SaltConvNet(conv1 → conv2)的答案,給 tb_salt_conv_net_*.sv(清單見 run_tb_salt_conv_net.tcl)。
 
 整層 SaltConv 的答案:每筆樣本餵進一串輸入事件,比對輸出事件的順序、樣本結束時每顆神經元的 (V̂, t_last)、
 out_ready 一直是 1 時的拍數。
@@ -49,6 +50,17 @@ out_ready 一直是 1 時的拍數。
     state <row_bank> <col_bank> <bank_addr> <membrane> <last_time>   × state_count,每顆神經元一行
     end <sample_count>
 bank、bank 內位址照 Conv.md 第 2 節:bank (o_y mod M, o_x mod M),位址 (o_c·G_y + ⌊o_y/M⌋)·G_x + ⌊o_x/M⌋。
+
+兩層串接的答案(訓練端 conv1、conv2,繞回版、飽和版各一份,檔名 salt_conv_net_SAT<0|1>.txt):
+跟單層用同一份計算,conv2 的輸入就是 conv1 的輸出(這裡確認兩者逐筆相同,也就是 conv 接 conv 直接接線是對的)。
+不列拍數:串接的拍數由 testbench 量出來印在 log,不比對。
+    sample <in_count> <conv1_out_count> <conv2_out_count> <conv1_state_count> <conv2_state_count>
+    in <x> <y> <c> <t>                                                     × in_count,網路的輸入(conv1 的輸入)
+    conv1_out <o_c> <o_y> <o_x> <t>                                        × conv1_out_count,conv1 送出的順序
+    conv2_out <o_c> <o_y> <o_x> <t>                                        × conv2_out_count,網路的輸出
+    conv1_state <row_bank> <col_bank> <bank_addr> <membrane> <last_time>   × conv1_state_count
+    conv2_state <row_bank> <col_bank> <bank_addr> <membrane> <last_time>   × conv2_state_count
+    end <sample_count>
 
 用法(WSL,conda 環境 jax,在 scripts 目錄執行):
     python gen_salt_conv_ref.py \
@@ -321,22 +333,55 @@ def check_against_official(model: LayerModel, events: np.ndarray, loop_result: d
         raise RuntimeError(f"catch-up 之後的 V̂ 有 {bad.size} 顆跟官方不同,例如神經元 {bad[:5].tolist()}")
 
 
-def sample_lines(params: ParamSet, events: np.ndarray, loop_result: dict) -> list[str]:
+def state_lines(params: ParamSet, loop_result: dict, kind: str) -> list[str]:
+    """每顆神經元最後的 (V̂, t_last),一行一顆,第一個欄位是 kind。"""
     bank_count = params.bank_count
     row_slots = -(-params.out_rows // bank_count)
     col_slots = -(-params.out_cols // bank_count)
-    state_count = params.out_channels * params.out_rows * params.out_cols
-    cycle_text = " ".join(str(count) for count in loop_result["cycle_counts"])
-    lines = [f"sample {len(events)} {len(loop_result['outputs'])} {state_count} {cycle_text}"]
-    lines += [f"in {x} {y} {c} {t}" for x, y, c, t in events]
-    lines += [f"out {oc} {oy} {ox} {t}" for oc, oy, ox, t in loop_result["outputs"]]
     membrane, last_time = loop_result["membrane"], loop_result["last_time"]
+    lines = []
     for oc in range(params.out_channels):
         for oy in range(params.out_rows):
             for ox in range(params.out_cols):
                 bank_addr = (oc * row_slots + oy // bank_count) * col_slots + ox // bank_count
-                lines.append(f"state {oy % bank_count} {ox % bank_count} {bank_addr} "
+                lines.append(f"{kind} {oy % bank_count} {ox % bank_count} {bank_addr} "
                              f"{membrane[oc, oy, ox]} {last_time[oc, oy, ox]}")
+    return lines
+
+
+def output_lines(loop_result: dict, kind: str) -> list[str]:
+    """輸出事件,照送出順序,第一個欄位是 kind。"""
+    return [f"{kind} {oc} {oy} {ox} {t}" for oc, oy, ox, t in loop_result["outputs"]]
+
+
+def sample_lines(params: ParamSet, events: np.ndarray, loop_result: dict) -> list[str]:
+    state_count = params.out_channels * params.out_rows * params.out_cols
+    cycle_text = " ".join(str(count) for count in loop_result["cycle_counts"])
+    lines = [f"sample {len(events)} {len(loop_result['outputs'])} {state_count} {cycle_text}"]
+    lines += [f"in {x} {y} {c} {t}" for x, y, c, t in events]
+    lines += output_lines(loop_result, "out")
+    lines += state_lines(params, loop_result, "state")
+    return lines
+
+
+def net_sample_lines(layer_results: dict) -> list[str]:
+    """兩層串接一筆樣本的答案。layer_results[層名] = (params, 輸入事件, 逐筆迴圈結果)。"""
+    conv1_params, conv1_events, conv1_result = layer_results["conv1"]
+    conv2_params, conv2_events, conv2_result = layer_results["conv2"]
+    # conv 接 conv:conv1 的 (o_c, o_y, o_x, t) 就是 conv2 的 (c, y, x, t);events 的欄位順序是 (x, y, c, t)
+    conv1_as_input = np.array([(ox, oy, oc, t) for oc, oy, ox, t in conv1_result["outputs"]],
+                              dtype=np.int64).reshape(-1, 4)
+    if not np.array_equal(conv1_as_input, conv2_events):
+        raise RuntimeError("conv2 的輸入跟 conv1 的輸出不同")
+    conv1_state_count = conv1_params.out_channels * conv1_params.out_rows * conv1_params.out_cols
+    conv2_state_count = conv2_params.out_channels * conv2_params.out_rows * conv2_params.out_cols
+    lines = [f"sample {len(conv1_events)} {len(conv1_result['outputs'])} {len(conv2_result['outputs'])} "
+             f"{conv1_state_count} {conv2_state_count}"]
+    lines += [f"in {x} {y} {c} {t}" for x, y, c, t in conv1_events]
+    lines += output_lines(conv1_result, "conv1_out")
+    lines += output_lines(conv2_result, "conv2_out")
+    lines += state_lines(conv1_params, conv1_result, "conv1_state")
+    lines += state_lines(conv2_params, conv2_result, "conv2_state")
     return lines
 
 
@@ -423,11 +468,15 @@ def build_trained_references(training: dict, training_repo: Path, mem_dir: Path,
                            export.decay_lines(decay_table, params.decay_frac_width))
             layer_models[layer_name] = (layer_index, layer, LayerModel(training, params, q, thresholds, decay_table))
 
+        if [layer_name for layer_name, _ in version_sets] != ["conv1", "conv2"]:
+            raise RuntimeError(f"{version} 的層不是 conv1、conv2,兩層串接的答案要改")
         all_lines = {layer_name: [] for layer_name, _ in version_sets}
         all_fire_counts = {layer_name: [] for layer_name, _ in version_sets}
+        net_lines = []
         for sample_index in range(SAMPLE_COUNT):
             sample_raw = training["take_input_events"](raw, sample_index)
             stream = model_file.network.input_stream(sample_raw)
+            layer_results = {}
             for layer_name, params in version_sets:
                 layer_index, layer, model = layer_models[layer_name]
                 events = stream_events(stream, params.in_rows, params.in_cols)
@@ -442,12 +491,17 @@ def build_trained_references(training: dict, training_repo: Path, mem_dir: Path,
                                        f"{reference_spike_count[sample_index, layer_index]}")
                 all_lines[layer_name] += sample_lines(params, events, loop_result)
                 all_fire_counts[layer_name].append(loop_result["fire_counts"])
+                layer_results[layer_name] = (params, events, loop_result)
                 stream = output.stream
+            net_lines += net_sample_lines(layer_results)
 
         for layer_name, params in version_sets:
             lines = [coverage_line(params, all_fire_counts[layer_name])] + all_lines[layer_name] + \
                     [f"end {SAMPLE_COUNT}"]
             write_reference(out_dir / f"{params.stem}.txt", lines, all_fire_counts[layer_name])
+        net_path = out_dir / f"salt_conv_net_SAT{version_sets[0][1].saturate_enabled}.txt"
+        write_lines(net_path, net_lines + [f"end {SAMPLE_COUNT}"])
+        print(f"{net_path.name}: 樣本 {SAMPLE_COUNT} 筆")
 
 
 def synthetic_events(rng: np.random.Generator, params: ParamSet, event_count: int) -> np.ndarray:

@@ -93,8 +93,10 @@ module NeuronUpdate #(
 	end
 
 	// ② 衰減乘法,再捨回暫存器格式
-	logic signed [PRODUCT_WIDTH-1:0]  decay_product;    // A·V̂,小數 f_a + f_V 位
-	logic signed [PRODUCT_WIDTH-1:0]  rounded_product;
+	// 乘法、加半格一律放 DSP(UG901 use_dsp):不指定時 Vivado 依位寬自己選,w=9 選 LUT,
+	// 計算第 1 級反而比 DSP 長(C = 2 時切點暫存器併進 DSP 的 PREG),而且各層資源類型不一致
+	(* use_dsp = "yes" *) logic signed [PRODUCT_WIDTH-1:0] decay_product;     // A·V̂,小數 f_a + f_V 位
+	(* use_dsp = "yes" *) logic signed [PRODUCT_WIDTH-1:0] rounded_product;
 	logic signed [PRODUCT_WIDTH-1:0]  shifted_product;
 	logic signed [MEMBRANE_WIDTH-1:0] decayed;          // D
 

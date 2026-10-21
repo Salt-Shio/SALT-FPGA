@@ -51,30 +51,7 @@ if {[llength $requested_testbenches] > 0} {
 
 # Several testbenches: one child Vivado per testbench, then report from their logs
 if {[llength $testbenches] > 1} {
-    set sim_dir [file normalize [file join $scripts_dir .. SaltConv.sim]]
-    set vivado_bat [file join $::env(XILINX_VIVADO) bin vivado.bat]
-    set failed_testbenches {}
-    foreach tb_name $testbenches {
-        set log_path [file join $sim_dir $tb_name.log]
-        puts "##### $tb_name: running in a child Vivado, log $log_path"
-        set child_failed [catch {exec -ignorestderr $vivado_bat -mode batch -nojournal -log $log_path \
-            -source [info script] -tclargs $tb_name {*}$set_conditions} child_output]
-        if {$child_failed} {
-            lappend failed_testbenches $tb_name
-        }
-        # Print the child's result block: from the results header to the end of its log
-        set log_fd [open $log_path r]
-        set printing 0
-        foreach line [split [read $log_fd] "\n"] {
-            if {[string match "===== $tb_name results =====" $line]} { set printing 1 }
-            if {$printing && ![string match "#*" $line]} { puts $line }
-        }
-        close $log_fd
-    }
-    if {[llength $failed_testbenches] > 0} {
-        error "failed testbenches: $failed_testbenches"
-    }
-    puts "All testbenches ALL PASS: $testbenches"
+    run_testbenches_in_children [info script] $testbenches $set_conditions
     return
 }
 
