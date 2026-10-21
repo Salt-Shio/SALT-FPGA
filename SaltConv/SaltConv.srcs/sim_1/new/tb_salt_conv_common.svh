@@ -426,7 +426,7 @@
 			end
 			if (!out_valid && !out_ready && !dut.clearing) cover_count[COVER_READY_LOW_WITHOUT_VALID]++;
 			if (in_valid && !in_ready && !dut.clearing) cover_count[COVER_UPSTREAM_BLOCKED]++;
-			if (!pipe_occupied(1, PIPELINE_DEPTH) && dut.begin_next_oc && events_taken > 0) cover_count[COVER_RESUME_FROM_IDLE]++;
+			if (!pipe_occupied(1, PIPELINE_DEPTH) && dut.read_next_oc && events_taken > 0) cover_count[COVER_RESUME_FROM_IDLE]++;
 
 			if (dut.compute_cycle && first_compute_cycle < 0) first_compute_cycle = cycle;
 			// 位置 L 的 o_c 這一拍送完
@@ -456,7 +456,7 @@
 			end
 
 			// 放在取樣的最後:裡面多等的 #1 不影響上面的取樣時間點
-			if (dut.begin_next_oc) begin
+			if (dut.read_next_oc) begin
 				sent_out_channel.push_back(dut.read_out_channel);
 				sent_in_channel.push_back(dut.read_channel);
 			end

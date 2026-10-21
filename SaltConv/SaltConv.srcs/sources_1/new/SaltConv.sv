@@ -105,14 +105,12 @@ module SaltConv #(
 	localparam integer KERNEL_WORD_WIDTH = KERNEL_SIZE * KERNEL_SIZE * WEIGHT_WIDTH;
 	localparam integer EVENT_WIDTH       = TIME_WIDTH + IN_CHANNEL_WIDTH + Y_WIDTH + X_WIDTH;   // FIFO 一格 {t, c, y, x}
 	localparam integer PIPELINE_DEPTH    = READ_LATENCY + COMPUTE_LATENCY - 1;                  // L,計算第 2 級的位置
-	// 重疊時停住的拍子,位置 1..L-1 的 o_c 還要用讀出的資料,讀出暫存器要留著;L = 1 時沒有這種位置
-	localparam bit     HOLD_READ_ON_STALL = OVERLAP && (PIPELINE_DEPTH > 1);
 
 	// ===============================================================
 	// 0 共用控制:第 6 段算,第 1 段起就要用
 	// ===============================================================
 	logic stall;            // 位置 L 的 o_c 這一拍送不完:整條管線停住
-	logic begin_next_oc;    // 這一拍送下一個 o_c 的讀位址
+	logic read_next_oc;     // 這一拍送下一個 o_c 的讀位址
 	logic take_new_event;   // 送的是新事件的 o_c = 0,從 FIFO 拿出最前面那筆
 
 	// ===============================================================
@@ -204,25 +202,19 @@ module SaltConv #(
 	assign read_time        = next_from_fifo ? fifo_time : event_time;
 	assign read_out_channel = next_from_fifo ? '0 : OUT_CHANNEL_WIDTH'(last_read_out_channel + 1'b1);
 
-	// 讀取開關:下一個 o_c 有東西可做就讀。
-	// HOLD_READ_ON_STALL:停住的拍子不讀,讀出暫存器(R >= 2 時連輸出暫存器)留著位置 1..L-1 那些 o_c 的資料。
-	// 其他設定停住期間讀出的資料沒人用,讀取開關不看 stall(stall 要等第 6 段整串算完)
+	// 讀取開關:送下一個 o_c 的讀位址那拍才讀;管線往後推那拍,讀出第二級起才跟著推。
+	// 讀出暫存器跟管線位置同一組條件移動,第 k 級永遠是位置 k+1 那個 o_c 的資料
 	logic read_enable;
 	logic read_shift_enable;   // 讀出第二級起往後推的開關
 
-	if (HOLD_READ_ON_STALL) begin : hold_read
-		assign read_enable       = next_oc_available && !stall;
-		assign read_shift_enable = !stall;
-	end else begin : no_hold_read
-		assign read_enable       = next_oc_available;
-		assign read_shift_enable = 1'b1;
-	end
+	assign read_enable       = read_next_oc;
+	assign read_shift_enable = !stall;
 
 	// reset 後當成上一次送讀位址的是一筆事件的最後一個 o_c(OC-1),第一個 o_c 就從 FIFO 拿
 	always_ff @(posedge clk or negedge rst_n) begin
 		if (!rst_n) begin
 			last_read_out_channel <= OUT_CHANNEL_WIDTH'(OUT_CHANNELS - 1);
-		end else if (begin_next_oc) begin
+		end else if (read_next_oc) begin
 			last_read_out_channel <= read_out_channel;
 		end
 	end
@@ -316,7 +308,7 @@ module SaltConv #(
 		end else begin
 			pipe_held <= stall;
 			if (!stall) begin
-				pipe_valid[1] <= begin_next_oc;
+				pipe_valid[1] <= read_next_oc;
 				for (int position = 2; position <= PIPELINE_DEPTH; position++) begin
 					pipe_valid[position] <= pipe_valid[position-1];
 				end
@@ -525,16 +517,20 @@ module SaltConv #(
 		end
 	end
 
-	// 不重疊:位置 1..L-1 還有 o_c 時不送(前一個 o_c 到位置 L 才送下一個)
-	logic earlier_positions_busy;
+	// 不重疊:前一個 o_c 還在位置 1..L-1 就要等它到位置 L
+	logic wait_previous_oc;
 
-	always_comb begin
-		earlier_positions_busy = 1'b0;
-		for (int position = 1; position < PIPELINE_DEPTH; position++) begin
-			if (pipe_valid[position]) begin
-				earlier_positions_busy = 1'b1;
+	if (!OVERLAP) begin : wait_previous_check
+		always_comb begin
+			wait_previous_oc = 1'b0;
+			for (int position = 1; position < PIPELINE_DEPTH; position++) begin
+				if (pipe_valid[position]) begin
+					wait_previous_oc = 1'b1;
+				end
 			end
 		end
+	end else begin : no_wait_previous
+		assign wait_previous_oc = 1'b0;
 	end
 
 	// 讀寫衝突(OC <= L):新事件的 o_c 跟上一筆事件同一個 o_c 讀寫同一批神經元,兩個要隔 L + 1 步(往前一步的拍子)。
@@ -564,9 +560,14 @@ module SaltConv #(
 		assign read_conflict = 1'b0;
 	end
 
-	// 送不送下一個 o_c 的讀位址:沒停住、下一個 o_c 有東西可做、沒有讀寫衝突;不重疊時還要等前一個到位置 L
-	assign begin_next_oc  = !stall && next_oc_available && !read_conflict && !(!OVERLAP && earlier_positions_busy);
+	// 管線裡前面的 o_c 擋住下一個
+	logic next_oc_blocked;
+
+	assign next_oc_blocked = wait_previous_oc || read_conflict;
+
+	// 送不送下一個 o_c 的讀位址:管線沒停住、下一個 o_c 有東西可做、沒被擋住
+	assign read_next_oc   = !stall && next_oc_available && !next_oc_blocked;
 	// 下一個 o_c 是新事件的 o_c = 0,就把那筆事件從 FIFO 拿走
-	assign take_new_event = begin_next_oc && next_from_fifo;
+	assign take_new_event = read_next_oc && next_from_fifo;
 
 endmodule
