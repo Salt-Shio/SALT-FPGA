@@ -950,15 +950,23 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 - **單獨合成子模組**用 out-of-context(`synth_design -mode out_of_context`)，不然 port 會被當成晶片接腳算進 IOB。
 - **合成量測**(Part 7 起量速度、資源都用這套；腳本沒有進 repo，每次在 session 暫存目錄重寫)：
     - non-project 模式，不動 `.xpr`。每組參數一個包裝 module：port 位寬寫死、例化 `SaltConv` 帶入整組參數，資料檔用絕對路徑。
-    - 4 組設定：訓練端 conv1、conv2 × 繞回、飽和，參數照 `run_tb_salt_conv.tcl` 的前 4 組，資料檔在 `SaltConv.srcs/sources_1/mem/<量化資料夾>/`。
+    - 6 組設定：訓練端 conv1、conv2 × 繞回、飽和(參數照 `run_tb_salt_conv.tcl` 的前 4 組)，加上 conv2 改成 K3 S1 P1(M=3)的繞回、飽和(見 Part 8.3);資料檔在 `SaltConv.srcs/sources_1/mem/<量化資料夾>/`。Part 8.3 之前只有前 4 組。
+    - 管線設定:(R, C, OVERLAP) 跟 `run_tb_salt_conv.tcl` 的 7 種相同(R1C1、R2C1 不重疊/重疊、R1C2 不重疊/重疊、R2C2 不重疊/重疊)。
     - Tcl 步驟：
         - `read_verilog -sv` 讀 `sources_1/new/` 的全部 `.sv` 跟包裝 module。
         - `synth_design -top <包裝> -part xck26-sfvc784-2LV-c -lint`，接著 `catch {close_design}`(`-lint` 跑完沒有開著的設計)。
         - `synth_design -top <包裝> -part xck26-sfvc784-2LV-c -mode out_of_context`。
-        - `create_clock -period 10.000 -name clk [get_ports clk]`；除了 `clk` 的輸入、全部輸出 `set_input_delay 0`、`set_output_delay 0`。
+        - `create_clock -period $period -name clk [get_ports clk]`(目標週期是腳本變數，見下面「最高時脈」)；除了 `clk` 的輸入、全部輸出 `set_input_delay 0`、`set_output_delay 0`。
         - `opt_design`、`place_design`、`route_design`。
         - `report_timing_summary`、`report_timing -max_paths 1`(最長路徑)、`report_timing -from [get_ports out_ready]`、`report_utilization`(加 `-hierarchical` 看各模組)。
-    - 最高時脈用 10 ns 的 slack 換算：$1000/(10-\text{WNS})$ MHz；10 ns 只是量測用，不是目標。
+        - C=2 時另外看計算第 1 級(`report_timing -to` 切點暫存器)、第 2 級(`-from` 切點暫存器);到 BRAM 讀位址(`-to` RAMB 的 `ADDR*` 腳)；前 10 條最長路徑(`-max_paths 10 -nworst 1`)。
+    - 乘法用 DSP 時查每顆 DSP 的 `PREG`:切點暫存器 `stage_decayed` 併進 DSP 時是 1。切點暫存器被併進 DSP 後，上面「`-to` 切點暫存器」只剩 `stage_weight_code`,第 1 級要看最長路徑或 `-to` DSP。
+    - 最高時脈(2026-10-21 起，照 UG949「Assessing the Maximum Frequency of the Design」)：
+        - 目標週期壓在預期時脈附近，每組跑幾個不同的目標(例如預期 ±0.4 ns 取 5 個)，每次重跑合成 + 布局繞線。
+        - $\text{FMAX} = \max_i 1000/(T_i-\text{WNS}_i)$ MHz,$T_i$ 是第 $i$ 次的目標週期；必要時另列平均。不要壓到違規很大，實作工具會自動降低努力程度。
+        - 比較兩個版本時，兩邊用同一組目標週期。
+        - 單一 10 ns 目標的結果只能看最長路徑在哪、資源多少，不能拿來比快慢：餘裕 3~4 ns 時布局沒有壓力，同一份電路兩次可以差 0.8 ns,新舊的大小關係會被翻掉(2026-10-21 c1 飽和 R2C2 的實例見 vivado-usage skill 第 12 節)。
+    - **Part 7 到 Part 8.x(2026-10-21 之前)的時脈數字都是舊做法**：固定 10 ns 目標、單次，用 $1000/(10-\text{WNS})$ 換算。這些數字偏低、單組有 ±10~20 MHz 的變動，只能看 6 組平均的大方向。
     - $R=2$ 要確認輸出暫存器：合成完(布局前)跟繞線後各查一次每顆 BRAM 的 `DOB_REG`；繞線後變 0 可能是布局搬出去的，看 log 有沒有 `Physopt 32-665`(見 Part 8.2)。
     - hold 有 -0.18 ns 的違規是輸入 port 進 FIFO，out-of-context 把輸入延遲設 0 造成的，不用管。
     - 一次平行開 8 個 batch Vivado 時，出現過一組 `opt_design` 報空白的 `Synth 20-411`，單獨重跑就好。
