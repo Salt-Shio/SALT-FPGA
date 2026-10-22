@@ -1285,6 +1285,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
     - 訓練端 `salt_core/tests/` 加手算小例子驗證打包。
 - 訓練端 `model.npz` 存的是 $q$(形狀 `(OC, C, K, K)`)、`decay_table_int`、`v_th_int`。$\hat v_{th}$ 逐神經元存，同一個 output channel 值相同。
 - 訓練端 TODO 的「量化模型的匯出格式」已改成指向 Conv.md，FC 層等 FC.md。
+- FC 權重(2026-10-22 定，格式見 FC.md 第 2 節「權重」)：寬字內容跟硬體參數 $n_{col}$(每列幾顆神經元)有關，由訓練端匯出時傳入 $n_{col}$ 打包，打包函式放 `salt_core`，跟 conv 同一套分工；換 $n_{col}$ 要重新匯出。
 
 ### 系統整合
 
@@ -1294,6 +1295,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
     - 怎麼處理還沒討論。
     - 跟神經元記憶體清除是兩件事。
 - **輸出層乘 $s_i$**：$\text{score}_i=\hat V[i]\cdot s_i$ 是整個推論唯一的浮點運算，放 FPGA 內還是外部還沒定。conv 層不需要 $s$。
+    - 2026-10-22 定：不放在 FC 層裡。FC 只提供膜電位輸出(每寫回一列送一筆，FC.md 第 6 節)，乘 $s_i$、argmax 由層外另外寫的模組處理，那個模組還沒設計。
 - **跟 `ps_host_if` 替換模組要不要融合**：等兩邊資源用量(BRAM、LUT、功耗)出來再決定。
 
 ### 驗證
@@ -1397,7 +1399,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 - 格式轉換由誰負責：
     - `EvtDecoder → conv1`：`EvtDecoder` 輸出打包的 `TDATA`，中間一個小型轉接模組做 unpack，由 top 例化，不算 `SaltConv` 或 `EvtDecoder` 內部。`EventProcessor.sv`(GENX320 範圍)不改。
     - `conv → conv`：欄位直接對應($o_c\to c$、$o_y\to y$、$o_x\to x$、$t\to t$)，直接接線。位寬一致是上下層參數配置的責任。
-    - `conv → FC`：要換成 $i=o_c\cdot H_{out}W_{out}+o_y\cdot W_{out}+o_x$，需要實際運算，等 FC.md 定案再處理。
+    - `conv → FC`：要換成 $i=o_c\cdot H_{out}W_{out}+o_y\cdot W_{out}+o_x$，中間一個轉接模組，放在 FC 輸入 FIFO 寫入端之前，先存一級暫存器再換算，由 top 例化，`SaltConv`、FC 層都不改(2026-10-22 定，FC.md 第 1 節)。
 
 ### 目前不做
 
@@ -1409,7 +1411,7 @@ Part 8 拆成小 Part，一次只處理一個策略或一個機制(2026-10-15 �
 ## 參考文件
 
 - [`Concept/Layer-RTL/Conv.md`](../Concept/Layer-RTL/Conv.md)：conv 分支事件驅動 RTL 的完整推導。
-- [`Concept/Layer-RTL/FC.md`](../Concept/Layer-RTL/FC.md)：FC 分支，還沒開始。
+- [`Concept/Layer-RTL/FC.md`](../Concept/Layer-RTL/FC.md)：FC 層設計，討論中(第 1 節輸入已定)。
 - [`Concept/model_operation_quant.md`](../Concept/model_operation_quant.md)：硬體看這份，整數版的參數、單筆事件更新、候選規則、多層串接、輸出層讀出。
 - [`Concept/model_operation_float.md`](../Concept/model_operation_float.md)：浮點推導。
 - 訓練端 `D:\Project\Spiking-Affine-Lazy-Training`：單狀態仿射 LIF 加 associative scan 平行掃描訓練，conv/FC 都支援，N-MNIST 約 92%。
