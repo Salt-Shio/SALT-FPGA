@@ -29,7 +29,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 | 8.2 | 讀取延遲 $R$ 做成參數，$R=2$ 用 BRAM 輸出暫存器 | 5.5「實作」 | 完成 | `SaltConv.sv`、`NeuronMemory.sv`、`NeuronMemoryArray.sv`(新)、`WeightMemory.sv`、`tb_salt_conv_common.svh`、`gen_salt_conv_ref.py`、`run_tb_salt_conv.tcl` |
 | 8.3 | 拆計算($C=2$)草稿量測：切點、搭配 $R=2$ | 5.5 | 草稿量測完成(草稿不進 repo) | |
 | 8.x | $o_c$ 重疊(停住做法)、拆計算 $C=2$、時序改善、可讀性整理 | 5.5「實作」、5.8 | 完成 | `SaltConv.sv`、`NeuronUpdate.sv`、`CandidateGrid.sv`、`SpikeSelect.sv`、`WeightTapSelect.sv`、記憶體模組、testbench、`gen_salt_conv_ref.py`、`run_tb_salt_conv.tcl` |
-| 9 | 兩層串接 conv1 → conv2(`SaltConvNet`)：功能驗證、延遲拍數、合成 | — | 模擬全過、量測完成；乘法強制 DSP 後兩版 4.8 ns 都過 | `SaltConvNet.sv`、`NeuronUpdate.sv`、`tb_salt_conv_net_*`、`gen_salt_conv_ref.py`、`run_tb_salt_conv_net.tcl`、`sim_common.tcl` |
+| 9 | 兩層串接 conv1 → conv2(`SaltConvNet`)：功能驗證、延遲拍數、合成 | — | 完成 | `SaltConvNet.sv`、`NeuronUpdate.sv`、`tb_salt_conv_net_*`、`gen_salt_conv_ref.py`、`run_tb_salt_conv_net.tcl`、`sim_common.tcl` |
 
 ## 下一步
 
@@ -37,10 +37,11 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
 - Part 8 一次只處理一個策略或一個機制，規劃時先列出這次要做哪一個、怎麼量、怎麼驗證，給使用者確認。
 - 讀現行 RTL：`SaltConv.sv` 照事件流程分 0~6 段(檔頭有目錄)。控制總覽在 `docs/SNN/Concept/Layer-RTL/SaltConvOverview.md`，逐拍例子、資料流程圖在 `Conv-image/SaltConvControl.md`、`SaltConvDataflow.md`，設計推導在 Conv.md 5.5「實作」、5.8。
 - **目標時脈 5 ns(200 MHz)**：R2C2 重疊在 4.8 ns(5 ns 手動留 0.2 ns)下 6 組設定全部達標，見 Part 8.x「4.8 ns 量測」。目標固定時只跑目標週期看過不過，不掃最高時脈。
-    - 兩層串接(Part 9)乘法一律用 DSP 之後，繞回、飽和兩版 4.8 ns 也都達標(+0.260、+0.028)。
+    - 兩層串接(Part 9)乘法一律用 DSP、擋住 DSP 暫存器搬動之後，繞回、飽和兩版 4.8 ns 都達標(+0.213、+0.131)。
+    - 合成、實作的流程和參數見 `docs/SNN/Concept/Layer-RTL/SaltConvSynthFlow.md`，跑 `SaltConv/scripts/synth_salt_conv_net.tcl`。
 - 還沒做的(編號是 2026-10-21 的總清單)：
     - 3：下游會擋(`out_ready` 不是一直 1)時的實際速度。量的是拍數，跟時脈無關；多層串接會用到。
-        - Part 9 串接時量了(conv2 擋 conv1、testbench 擋 conv2)，結果見 Part 9「延遲」，待使用者確認算不算做完。
+        - 完成(2026-10-22 使用者確認)：Part 9 串接時量了(conv2 擋 conv1、testbench 擋 conv2)，結果見 Part 9「延遲」。
     - 4：時序 C，SpikeSelect 改成看「窗裡排在我前面的有沒有 pending」，不轉讀的順序。
     - 5：時序 D，讀位址路徑(FIFO 最前面那筆 → 選這次要讀哪一筆 → CandidateGrid → BRAM 讀位址)。
         - 4、5 擱著：5 ns 已經達標，整合後 5 ns 過不了才做。4.8 ns 量測裡 M=3 繞回的最長路徑就是 D 那條。
@@ -50,7 +51,7 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
         - 隨機權重的第三層 conv 不做：沒訓練過的權重事件量不合理，沒有參考價值。
 - 8.1、8.2 留下的待討論事項：Part 8.1「之後討論與評估」、Part 8.2「之後討論」。
 
-## Part 9 兩層串接 conv1 → conv2(2026-10-21)
+## Part 9 兩層串接 conv1 → conv2(完成，2026-10-21~22)
 
 ### 目標與範圍
 
@@ -119,8 +120,42 @@ RTL 在 `SaltConv/SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，�
     - 理由：Vivado 自己選時 $w$=9 用 LUT，這一段時序一直最緊；DSP 用量很少(整顆 1248 個，兩層 8 個)，各層資源類型也一致。
     - 只影響合成，模擬器忽略這個屬性，所以沒有重跑模擬；只重跑飽和版合成(繞回版兩層、飽和版 conv2 本來就是 DSP)。
 - 結果見上表最後一列：飽和版 −0.118 → +0.028，LUT 1607 → 1276(conv1 966 → 617)，DSP 4 → 8。
-    - 最長路徑在 conv1 bank (1,0) 的計算第 1 級：布局把那顆 DSP 裡的切點暫存器搬到外面(`Physopt 32-665 ... rounded_product. 9 registers were pushed out`)，路徑變成走完整顆 DSP 再到一般 FF。
-    - 跟 Part 8.x「4.8 ns 量測」M=3 飽和改前沒過是同一種情況，是布局的決定，原因沒查。
+    - 最長路徑在 conv1 bank (1,0) 的計算第 1 級：布局把那顆 DSP 裡的切點暫存器搬到外面(`Physopt 32-665 ... rounded_product. 9 registers were pushed out`)，路徑變成走完整顆 DSP 再到一般 FF。原因見下一段。
+
+### DSP 切點暫存器被搬出來(2026-10-21~22 查)
+
+- 誰搬的：`place_design` 的 Physical Synthesis In Placer(PSIP)裡的 DSP Register optimization，預設開著。
+    - 官方說明(`phys_opt_design -help`)：在 DSP 和 slice 之間搬暫存器，縮短關鍵路徑。
+    - 在 Global Place Phase 2(布局初期、延遲用估的)決定；6 顆 DSP 都檢查，只搬了 conv1 bank (1,0)。當下估的數字 log 沒印，查不到。
+- 對照實驗(飽和版、4.8 ns、同一份 RTL 和流程；同樣輸入重跑結果完全相同，所以兩次可以直接比)：
+
+| | 預設(搬了) | 8 顆乘法 DSP 設 `DONT_TOUCH`(不准搬) |
+|---|---|---|
+| 布局後 WNS | +0.216 | +0.317 |
+| 繞線後 WNS | +0.028 | +0.136 |
+| bank (1,0) 進切點(計算第 1 級) | +0.028 | +0.144 |
+| bank (1,0) 出切點(計算第 2 級 → `stall` → BRAM 讀取開關) | +0.344 | +0.255 |
+
+- 搬了之後進切點那段慢 0.116 ns、出切點那段快 0.089 ns；不准搬時布局後那顆本來就是進切點比較緊(+0.355 對 +0.517)，搬了等於把延遲加到比較緊的一邊。
+- PSIP 摘要表兩次只差 DSP Register 一列，和 1 顆 BRAM 的暫存器搬動(時序不同造成的連帶差異)。
+- `place_design -psip_options`(只關單一項)xck26 不支援(`Vivado_Tcl 4-2585`)，所以用 `DONT_TOUCH`。
+- Part 8.x「4.8 ns 量測」M=3 飽和改前沒過，log 也是同一則 32-665，應該是同一個機制，那次沒做對照。
+- 單次布局的結果，±0.2 ns 的變動還在；只能說這一次搬了比沒搬差，不保證每次都差。
+
+### 擋住 DSP 暫存器搬動、量測流程進 repo(2026-10-22，使用者決定)
+
+- `SaltConv.srcs/constrs_1/new/salt_conv_impl.xdc`(新)：乘法 DSP(`*neuron_update/rounded_product`)設 `DONT_TOUCH`，只在實作用(合成之後才讀；正式專案要設 `USED_IN_SYNTHESIS false`)。
+    - 第一次寫成 `*/neuron_update/...` 一顆都對不到(generate 區塊名稱用 `.` 連接)，Vivado 只給 critical warning 照樣跑完；腳本改成約束沒套上 8 顆就報錯停止。
+- `SaltConv/scripts/synth_salt_conv_net.tcl`(新)：原本放在暫存目錄的量測流程。差別是 top 直接用 `SaltConvNet`、參數用 `-generic` 帶，不再包一層 `synth_top`。
+- 流程和每個參數的說明：`docs/SNN/Concept/Layer-RTL/SaltConvSynthFlow.md`(新)。
+- 用這支腳本跑 4.8 ns(8 顆 DSP 都套上 `DONT_TOUCH`，PSIP 摘要表 DSP Register 列 Dont Touch 8)：
+
+| 版本 | WNS | 最長路徑 | conv1 → conv2 | conv2 → conv1 | LUT | FF | BRAM | DSP |
+|---|---|---|---|---|---|---|---|---|
+| 繞回 | +0.213 | conv2 內：計算第 1 級(到 DSP 的切點) | +0.553 | +1.149 | 1260(1.08%) | 668(0.29%) | 8(5.56%) | 8(0.64%) |
+| 飽和 | +0.131 | conv2 內：FIFO 讀指標 → BRAM 讀位址(清單上的 D) | +0.358 | +1.452 | 1282(1.09%) | 655(0.28%) | 8(5.56%) | 8(0.64%) |
+
+- 約束還沒套上的那一次(top 改成 `SaltConvNet` 之後第一次跑)布局剛好也沒搬 DSP，兩版數字跟上表完全相同。
 
 ## Part 8.x $o_c$ 重疊(完成)
 
