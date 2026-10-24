@@ -26,15 +26,14 @@
 - 分支：Part 8.2、8.x 都已經 fast-forward 併進 `test`，`test` 已推到遠端。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
 - FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完，第 6 節 ⑤ 留到寫 RTL 時定；RTL 還沒開始。
 
-## 交接(2026-10-24)
+## 交接(2026-10-25)
 
-- SaltFC Part 0 使用者確認，標完成。
-- SaltFC Part 1(訓練端匯出 FC)做完，驗證結果(細節見下面「Part 1 訓練端匯出」)：
-    - 訓練端 `salt_core/tests` 307 個全過，其中 `test_fpga_export.py` 49 個(FC 新增 23 個手算例子)。
-    - 兩個量化資料夾用 `--fc-cols 4` 實際匯出：conv 的 12 個 `.mem` 跟這個 repo 已 commit 的版本逐 byte 相同；`out_weight.mem` 3888 行、每行 7 個字元，拆回來跟 `model.npz` 的 $q$ 逐值相同，補的位置都是 0。
+- SaltFC Part 0、1 完成(Part 1 的驗證結果見下面「Part 1 訓練端匯出」)。
+- SaltFC Part 2(介面)寫完 `fc/SaltFC.sv`，只有 parameter、port，本體是空的。驗證(細節見「Part 2 介面」)：
+    - non-project `synth_design -rtl` 跑 4 組參數，每個 port 的位元數都跟預期相同；唯一的 warning 是 `Synth 8-3330`(本體是空的)。
 - 下一步：
-    - Part 1 使用者確認，標完成。
-    - SaltFC Part 2(介面規格：parameter、port)，先規劃給使用者確認。
+    - Part 2 使用者確認，標完成。
+    - SaltFC Part 3(輸入 FIFO)，先規劃給使用者確認。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
     - 從 Git Bash 呼叫 `wsl` 時，`/mnt/c/...` 會被 MSYS 轉成 Windows 路徑，要加 `MSYS_NO_PATHCONV=1`。
@@ -56,7 +55,7 @@
 |---|---|---|---|
 | 0 | 專案結構(改名 `SaltNET`、資料夾重分) | — | 完成 |
 | 1 | 訓練端匯出 FC 的權重、門檻、衰減表 | 第 2 節、第 3 節 ① | 完成 |
-| 2 | 介面規格(parameter、port) | 第 1、6 節 | 未開始 |
+| 2 | 介面規格(parameter、port) | 第 1、6 節 | 完成 |
 | 3 | 輸入 FIFO | 第 1 節 | 未開始 |
 | 4 | 權重 BRAM | 第 2 節「權重」 | 未開始 |
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 未開始 |
@@ -117,6 +116,26 @@
         - 整層寫檔改成內容全部算完、檢查過才建目錄寫檔(conv 也跟著改)，出錯時不留任何檔。
     - `salt_core/tests/test_fpga_export.py`：手算例子(行的順序、位址 $y\cdot n_{in}+\text{src}$、最後一列補 0、寬字位元數不是 4 的倍數、$n_{col}=1$、$n_{col}>n_{out}$、門檻打包、拆回來等於 $q$、各種 raise 不寫檔)。
     - 訓練端 `docs/架構.md`、`README.md` 的說明改成 conv、FC 都匯出。
+
+### Part 2 介面
+
+- 規格本體是 `SaltNET.srcs/sources_1/new/fc/SaltFC.sv`，這裡只記定案的理由。
+- 已定(2026-10-25)：
+    - 跟 SaltConv 同義的 parameter 同名沿用；FC 新增 `IN_NEURONS`($n_{in}$)、`OUT_NEURONS`($n_{out}$)、`NEURONS_PER_ROW`($n_{col}$)、`SPIKE_OUTPUT`、`MEMBRANE_OUTPUT`。
+    - 輸入 port 叫 `in_neuron`(行尾註解標 $\text{src}$)，不叫 `in_src`：FC 接 FC 時上一層的 `out_neuron` 直接接同名的 `in_neuron`，跟 conv 接 conv 的同名規則一樣。
+    - $\text{src}$ 位寬是 `localparam`，由 $n_{in}$ 推出，不另開 parameter(FC.md 第 1 節跟著改)：$\text{src}$ 一定落在 $0\sim n_{in}-1$；conv 的 `X_WIDTH` 開成 parameter 是因為輸入座標位寬由上游決定，FC 沒有這個情況。
+    - 開關關掉時 port 還在(SystemVerilog 不能照 parameter 拿掉 port)，`valid` 固定 0，合成時修剪。
+    - 膜電位輸出埠：`membrane_valid`、`membrane_ready`、`membrane_row_start`($y\cdot n_{col}$)、`membrane_values`($n_{col}\cdot w$)、`membrane_time`(FC.md 第 6 節 ③)。
+- 驗證(2026-10-25)：本體是空的，只確認能 elaborate、port 位寬對。non-project `synth_design -rtl`(不碰 `.xpr`)，逐 port 數位元數：
+
+| 參數 | `in_neuron` | `out_neuron`、`membrane_row_start` | `membrane_values` |
+|---|---|---|---|
+| 預設($n_{in}=1296$、$n_{out}=10$、$n_{col}=4$、$w=14$) | 11 | 4 | 56 |
+| $n_{col}=1$ | 11 | 4 | 14 |
+| $n_{in}=n_{out}=n_{col}=1$ | 1 | 1 | 14 |
+| $w=11$、$n_{col}=10$、spike 關、膜電位開 | 11 | 4 | 110 |
+
+- 時間 port 都是 16 位元，`valid`/`ready`、`clk`、`rst_n` 都是 1 位元。
 
 ### Part 11 串接比對
 
