@@ -28,18 +28,19 @@
 
 ## 交接(2026-10-24)
 
-- SaltFC Part 0(專案改名 `SaltNET`、資料夾重分)已經搬完、改完，驗證結果：
-    - 答案腳本：WSL 重產全部答案檔到暫存目錄，110 個跟 git HEAD 的版本逐 byte 相同。
-    - 兩層串接合成 4.8 ns：繞回 +0.213、飽和 +0.131，跨層路徑、LUT、FF 跟改名前完全相同，8 顆 DSP 都套上 `DONT_TOUCH`。
-    - 模擬：9 支 `run_tb_*.tcl` 全部 ALL PASS(event_fifo 1 組、candidate_axis 8、candidate_grid 7、weight_lookup 9、neuron_memory 9、neuron_update 32、spike_select 8、salt_conv 四支各 70、salt_conv_net 三支各 2)；新專案從空的開始，模擬集都由腳本建立。
-    - 舊的 `SaltConv/` 整個刪掉(使用者決定)：`SaltConv.xpr` 用 `git rm`，其他是跑出來的產物；舊專案要看就從 git 歷史拿。
+- SaltFC Part 0 使用者確認，標完成。
+- SaltFC Part 1(訓練端匯出 FC)做完，驗證結果(細節見下面「Part 1 訓練端匯出」)：
+    - 訓練端 `salt_core/tests` 307 個全過，其中 `test_fpga_export.py` 49 個(FC 新增 23 個手算例子)。
+    - 兩個量化資料夾用 `--fc-cols 4` 實際匯出：conv 的 12 個 `.mem` 跟這個 repo 已 commit 的版本逐 byte 相同；`out_weight.mem` 3888 行、每行 7 個字元，拆回來跟 `model.npz` 的 $q$ 逐值相同，補的位置都是 0。
 - 下一步：
-    - 使用者確認 Part 0 之後標完成。
-    - SaltFC Part 1(訓練端匯出 FC 的權重、門檻、衰減表，照 $n_{col}$ 打包)，先規劃給使用者確認。
+    - Part 1 使用者確認，標完成。
+    - SaltFC Part 2(介面規格：parameter、port)，先規劃給使用者確認。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
     - 從 Git Bash 呼叫 `wsl` 時，`/mnt/c/...` 會被 MSYS 轉成 Windows 路徑，要加 `MSYS_NO_PATHCONV=1`。
     - agent 的 Bash 工具用 heredoc 餵 Python 時，`\\` 會被吃掉一個；含反斜線的替換腳本改用檔案寫。
+    - `wsl bash -lc "..."` 裡的 `\$變數` 到 WSL 那邊是空的；有迴圈、變數的指令寫成 `.sh` 檔再 `wsl bash <檔案>`。
+    - 訓練端在 WSL 跑匯出、測試時 GPU 可能被別的程式佔滿(JAX 會印一串 `CUDA_ERROR_OUT_OF_MEMORY`)；這些都不用 GPU，加 `JAX_PLATFORMS=cpu`。直接跑 `.py` 要加 `PYTHONPATH=.`,`python -m` 不用。
     - `run_tb_neuron_memory.tcl` 9 組 ALL PASS 之後，印結果的 `puts` 報 `can not find channel named "stdout"`，exit 1；同一個 `puts` 在其他腳本都正常，原因查不到。`run_tb_salt_conv.tcl` 的 `ready_alternate` 第 3 組也碰到類似的事：模擬跑完，讀 `simulate.log` 的 `open` 失敗、錯誤訊息是空的。兩支單獨重跑都 ALL PASS，當偶發處理。
 
 ## SaltFC
@@ -53,8 +54,8 @@
 
 | Part | 內容 | FC.md | 狀態 |
 |---|---|---|---|
-| 0 | 專案結構(改名 `SaltNET`、資料夾重分) | — | 驗證完，待使用者確認 |
-| 1 | 訓練端匯出 FC 的權重、門檻、衰減表 | 第 2 節、第 3 節 ① | 未開始 |
+| 0 | 專案結構(改名 `SaltNET`、資料夾重分) | — | 完成 |
+| 1 | 訓練端匯出 FC 的權重、門檻、衰減表 | 第 2 節、第 3 節 ① | 完成 |
 | 2 | 介面規格(parameter、port) | 第 1、6 節 | 未開始 |
 | 3 | 輸入 FIFO | 第 1 節 | 未開始 |
 | 4 | 權重 BRAM | 第 2 節「權重」 | 未開始 |
@@ -105,7 +106,17 @@
 
 - 已定(2026-10-22)：FC 權重寬字的內容跟硬體參數 $n_{col}$(每列幾顆神經元)有關，匯出時傳入 $n_{col}$ 打包；換 $n_{col}$ 要重新匯出。
 - 跟 conv 同一套分工(見「已定案設計 → 權重匯出格式」)：打包函式加在訓練端 `salt_core/fpga_export.py`，`tools/export_fpga.py` 只負責讀 `model.npz`；格式規格只寫在 FC.md，docstring 指過去。
-- 現在 `fpga_export.py` 只匯出 conv 層。
+- 已定(2026-10-24)：
+    - `tools/export_fpga.py` 用 `--fc-cols N` 給 $n_{col}$，所有 FC 層共用；網路有 FC 層卻沒給就報錯。之後有多層 FC 要各自設定，再改成逐層寫法。
+    - FC 的 `.mem` 先不 commit 進這個 repo：$n_{col}$ 要等 Part 4、8 量出各種做法的速度跟成本、使用者選定才確定。在那之前答案腳本用打包函式自己產生要測的版本。
+- 做法(2026-10-24，訓練端)：
+    - `salt_core/fpga_export.py`：
+        - 「好幾個欄位接成一個寬字、第 0 個在最低位」收成 `_packed_word_lines`，conv 權重、FC 權重、FC 門檻共用；conv 現有函式的名字、參數不變(這個 repo 的答案腳本有 import)。
+        - 新增 `fc_weight_lines(q, weight_width, n_col)`、`fc_threshold_lines(v_th_int, n_out, membrane_width, n_col)`、`write_fc_layer_mem(out_dir, layer, params, weight_width, n_col)`。
+        - 不 fire 的 FC 層(`v_th_int=None`)不寫門檻檔；實際的 `out` 層就是這樣，只有 `out_weight.mem`、`out_decay.mem`。
+        - 整層寫檔改成內容全部算完、檢查過才建目錄寫檔(conv 也跟著改)，出錯時不留任何檔。
+    - `salt_core/tests/test_fpga_export.py`：手算例子(行的順序、位址 $y\cdot n_{in}+\text{src}$、最後一列補 0、寬字位元數不是 4 的倍數、$n_{col}=1$、$n_{col}>n_{out}$、門檻打包、拆回來等於 $q$、各種 raise 不寫檔)。
+    - 訓練端 `docs/架構.md`、`README.md` 的說明改成 conv、FC 都匯出。
 
 ### Part 11 串接比對
 
@@ -281,14 +292,14 @@
 
 ### 權重匯出格式
 
-- 每層三個 `$readmemh` 用的 hex 檔：權重寬字、門檻、衰減表 $A[\Delta t]$。
+- 每層三個 `$readmemh` 用的 hex 檔：權重寬字、門檻、衰減表 $A[\Delta t]$；不 fire 的 FC 層沒有門檻檔。
     - Vivado 合成只收 `$readmemh`、`$readmemb` 兩種(UG901 Table 24)，選 hex。
     - 格式規格只寫在 Conv.md(第 2 節「權重」「門檻」、第 3 節 ①「檔案格式」)、FC.md(第 2 節「權重」「門檻」、第 3 節 ①)，這裡不重複。
     - 二補數，一行一個位址，固定 $\lceil\text{位元數}/4\rceil$ 個 hex 字元，最左邊補 0。
 - 匯出程式由訓練端寫，docstring 指到 Conv.md、FC.md，不在訓練端文件另寫一份規格。
     - 打包函式放 `salt_core/fpga_export.py`(輸入陣列、輸出 `.mem`)，`tools/export_fpga.py` 只負責讀 `model.npz`。
     - SALT-FPGA 測非 2 的次方參數時，答案檔腳本 import 同一個打包函式產生隨機權重的 `.mem`。
-    - 輸入一個量化資料夾，`--out-dir` 指定輸出；每層 `<層>_weight.mem`、`<層>_threshold.mem`、`<層>_decay.mem`。
+    - 輸入一個量化資料夾，`--out-dir` 指定輸出，有 FC 層時 `--fc-cols` 給 $n_{col}$；每層 `<層>_weight.mem`、`<層>_threshold.mem`、`<層>_decay.mem`。
     - 匯出時檢查：$q$ 超出 $b$ 位元、門檻超出 $w$ 位元(conv 另外檢查同一個 $o_c$ 的門檻不全相同)、衰減表超出 $f_a$ 位元，都 raise。
     - 訓練端 `salt_core/tests/` 加手算小例子驗證打包。
 - `.mem` commit 進 SALT-FPGA(`SaltNET.srcs/sources_1/mem/<量化資料夾>/`)，繞回版、飽和版各一份。
