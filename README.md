@@ -32,7 +32,7 @@
 文件入口：
 
 - [ps_host_if 替換待辦](docs/GENX320/Todo/ps_host_if_replacement_todo.md)
-- [Conv 層 RTL 實作待辦](docs/SNN/Todo/csnn_pl_implementation_todo.md)
+- [CSNN 層 RTL 實作待辦](docs/SNN/Todo/csnn_pl_implementation_todo.md)
 
 ## 開發環境
 
