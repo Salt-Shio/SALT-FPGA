@@ -33,7 +33,8 @@
     - non-project `synth_design -rtl` 跑 4 組參數，每個 port 的位元數都跟預期相同；唯一的 warning 是 `Synth 8-3330`(本體是空的)。
 - 下一步：
     - Part 2 使用者確認，標完成。
-    - SaltFC Part 3(輸入 FIFO)，先規劃給使用者確認。
+    - Part 3 跟使用者確認直接用 `lib/EventFIFO`(寬 `TIME_WIDTH + IN_NEURON_WIDTH`，寫入 `{in_time, in_neuron}`；清除期間擋寫入由 SaltFC 做，跟 SaltConv 一樣)，標完成。
+    - SaltFC Part 4(權重 BRAM)，先規劃給使用者確認。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
     - 從 Git Bash 呼叫 `wsl` 時，`/mnt/c/...` 會被 MSYS 轉成 Windows 路徑，要加 `MSYS_NO_PATHCONV=1`。
@@ -56,7 +57,7 @@
 | 0 | 專案結構(改名 `SaltNET`、資料夾重分) | — | 完成 |
 | 1 | 訓練端匯出 FC 的權重、門檻、衰減表 | 第 2 節、第 3 節 ① | 完成 |
 | 2 | 介面規格(parameter、port) | 第 1、6 節 | 完成 |
-| 3 | 輸入 FIFO | 第 1 節 | 未開始 |
+| 3 | 輸入 FIFO:直接用 `lib/EventFIFO`，不寫新模組，例化在 Part 8 | 第 1 節 | 完成 |
 | 4 | 權重 BRAM | 第 2 節「權重」 | 未開始 |
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 未開始 |
 | 6 | 膜電位更新 | 第 3 節 | 未開始 |
