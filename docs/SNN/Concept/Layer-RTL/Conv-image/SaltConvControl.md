@@ -1,6 +1,6 @@
 # SaltConv 控制：逐拍怎麼走
 
-對照 `SaltConv/SaltConv.srcs/sources_1/new/SaltConv.sv`。
+對照 `SaltNET/SaltNET.srcs/sources_1/new/conv/SaltConv.sv`。
 「第 N 段」是那個檔案檔頭目錄的段落：0 共用控制、1 事件進來、2 下一個 o_c 是誰與讀位址、3 CandidateGrid、4 管線位置、5 讀出算寫回、6 送出與換不換。
 每個控制決定為什麼存在，見 [SaltConvOverview.md](../SaltConvOverview.md);設計推導見 Conv.md 5.8。
 

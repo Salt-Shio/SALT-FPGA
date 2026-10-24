@@ -15,13 +15,32 @@
     - 目標時脈 5 ns(200 MHz)：4.8 ns 下繞回、飽和兩版都過(+0.213、+0.131 ns)。
     - 量測結果、合成流程見 [`SaltConvSynthFlow.md`](../Concept/Layer-RTL/SaltConvSynthFlow.md)。
     - 各 Part 的完整過程(定案討論、反向測試)在 commit `dc9b22a` 版本的這份 TODO。
-- Vivado 專案 `SaltConv/`：RTL 在 `SaltConv.srcs/sources_1/new/`，testbench 在 `sim_1/new/`，模擬、合成腳本在 `SaltConv/scripts/`。
+- Vivado 專案 `SaltNET/`(2026-10-24 從 `SaltConv/` 改名，見 Part 0)：
+    - RTL 在 `SaltNET.srcs/sources_1/new/{lib,conv,fc,net}/`，`.mem` 在 `sources_1/mem/`。
+    - testbench 在 `sim_1/new/{lib,conv,fc,net}/`，答案檔在各自的 `ref/`。
+    - 模擬、合成腳本在 `SaltNET/scripts/{lib,conv,net}/`，共用流程 `scripts/sim_common.tcl`。
 - 讀現行 RTL：`SaltConv.sv` 照事件流程分 0~6 段(檔頭有目錄)。
     - 控制總覽：[`SaltConvOverview.md`](../Concept/Layer-RTL/SaltConvOverview.md)。
     - 逐拍例子、資料流程圖：[`Conv-image/SaltConvControl.md`](../Concept/Layer-RTL/Conv-image/SaltConvControl.md)、[`SaltConvDataflow.md`](../Concept/Layer-RTL/Conv-image/SaltConvDataflow.md)。
     - 設計推導：[`Conv.md`](../Concept/Layer-RTL/Conv.md) 5.5「實作」、5.8。
 - 分支：Part 8.2、8.x 都已經 fast-forward 併進 `test`，`test` 已推到遠端。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
 - FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完，第 6 節 ⑤ 留到寫 RTL 時定；RTL 還沒開始。
+
+## 交接(2026-10-24)
+
+- SaltFC Part 0(專案改名 `SaltNET`、資料夾重分)已經搬完、改完，驗證結果：
+    - 答案腳本：WSL 重產全部答案檔到暫存目錄，110 個跟 git HEAD 的版本逐 byte 相同。
+    - 兩層串接合成 4.8 ns：繞回 +0.213、飽和 +0.131，跨層路徑、LUT、FF 跟改名前完全相同，8 顆 DSP 都套上 `DONT_TOUCH`。
+    - 模擬：9 支 `run_tb_*.tcl` 全部 ALL PASS(event_fifo 1 組、candidate_axis 8、candidate_grid 7、weight_lookup 9、neuron_memory 9、neuron_update 32、spike_select 8、salt_conv 四支各 70、salt_conv_net 三支各 2)；新專案從空的開始，模擬集都由腳本建立。
+    - 舊的 `SaltConv/` 整個刪掉(使用者決定)：`SaltConv.xpr` 用 `git rm`，其他是跑出來的產物；舊專案要看就從 git 歷史拿。
+- 下一步：
+    - 使用者確認 Part 0 之後標完成。
+    - SaltFC Part 1(訓練端匯出 FC 的權重、門檻、衰減表，照 $n_{col}$ 打包)，先規劃給使用者確認。
+- 這次碰到的工具問題：
+    - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
+    - 從 Git Bash 呼叫 `wsl` 時，`/mnt/c/...` 會被 MSYS 轉成 Windows 路徑，要加 `MSYS_NO_PATHCONV=1`。
+    - agent 的 Bash 工具用 heredoc 餵 Python 時，`\\` 會被吃掉一個；含反斜線的替換腳本改用檔案寫。
+    - `run_tb_neuron_memory.tcl` 9 組 ALL PASS 之後，印結果的 `puts` 報 `can not find channel named "stdout"`，exit 1；同一個 `puts` 在其他腳本都正常，原因查不到。`run_tb_salt_conv.tcl` 的 `ready_alternate` 第 3 組也碰到類似的事：模擬跑完，讀 `simulate.log` 的 `open` 失敗、錯誤訊息是空的。兩支單獨重跑都 ALL PASS，當偶發處理。
 
 ## SaltFC
 
@@ -34,7 +53,7 @@
 
 | Part | 內容 | FC.md | 狀態 |
 |---|---|---|---|
-| 0 | 專案結構 | — | 討論中 |
+| 0 | 專案結構(改名 `SaltNET`、資料夾重分) | — | 驗證完，待使用者確認 |
 | 1 | 訓練端匯出 FC 的權重、門檻、衰減表 | 第 2 節、第 3 節 ① | 未開始 |
 | 2 | 介面規格(parameter、port) | 第 1、6 節 | 未開始 |
 | 3 | 輸入 FIFO | 第 1 節 | 未開始 |
@@ -52,12 +71,35 @@
 
 ### Part 0 專案結構
 
-- 要討論的：Vivado 專案 `SaltConv` 要不要改名，底下分 SaltConv、SaltFC 兩部分。
-    - 起因：`EventFIFO` 這類通用模組現在放在 `SaltConv` 裡，SaltFC 也要用。
-- 一起要定的：
-    - 哪些模組兩層共用、放在哪。
-    - RTL、testbench、答案檔、`.mem`、腳本(`sim_common.tcl` 這類共用流程)的資料夾怎麼分。
-    - 改名會動到的地方：`SaltConv.xpr` 的檔案清單、模擬集、`scripts/` 裡的路徑、`SaltConvSynthFlow.md`、`CLAUDE.md`、`README.md`。
+- 起因：`EventFIFO` 這類通用模組現在放在 `SaltConv` 裡，SaltFC 也要用。
+- 已定(2026-10-24)：
+    - 一個 Vivado 專案，從 `SaltConv` 改名 `SaltNET`，底下分 SaltConv、SaltFC 兩部分。
+        - 不選兩個專案：Part 11 三層串接要在同一個地方模擬、合成，不用跨專案拉檔案。代價是同一個專案一次只跑一支模擬，這個限制現在本來就有。
+    - RTL 放 `SaltNET.srcs/sources_1/new/` 底下四個資料夾：
+        - `lib/`：跟層無關的通用模組，先放 `EventFIFO`、`NeuronMemoryArray`、`NeuronMemoryClear`(參數只有寬度、深度、`READ_LATENCY`)。
+        - `conv/`：SaltConv 專用。
+        - `fc/`：SaltFC 專用。
+        - `net/`：多層串接的頂層，`SaltConvNet`、之後的三層串接。
+    - `.mem` 照現在放 `sources_1/mem/<量化資料夾>/`。
+    - 三層串接的頂層模組到 Part 11 再取名，不叫 `SaltNET`，免得跟專案同名分不清。
+    - testbench、答案檔、腳本照 RTL 同一套資料夾分：
+        - `sim_1/new/lib/`、`conv/`、`net/`、`fc/`，答案檔放在各自 testbench 旁邊的 `ref/`(例：`sim_1/new/conv/ref/`)。
+        - `scripts/lib/`、`scripts/conv/`、`scripts/net/`；所有 `run_tb_*.tcl` 共用的 `sim_common.tcl` 留在 `scripts/` 最上層。
+        - `tb_neuron_memory` 放 `conv/`：測的是 `CandidateGrid` 加 `NeuronMemory`，`NeuronMemory` 有 conv 專用的 $\{t_{last},\hat V\}$ 打包。
+        - conv 的 Python 答案腳本彼此 import，全部放 `scripts/conv/` 同一層。
+        - 例外：`gen_salt_conv_ref.py` 在 `scripts/conv/`，同一次計算順便寫兩層串接的答案檔，用 `--net-out-dir` 輸出到 `sim_1/new/net/ref/`。
+- 做法(2026-10-24)：
+    - 使用者用 GUI 建空專案 `SaltNET/SaltNET.xpr`(board `kv260_som`，part `xck26-sfvc784-2LV-c`，跟舊專案相同)，不加原始碼。
+        - 不用 `save_project_as`：`help save_project_as` 沒寫 `.srcs` 裡的原始碼會不會跟著複製；反正檔案清單要照新資料夾重建。
+    - 檔案用 `git mv` 搬，歷史接得上；舊的 `SaltConv/SaltConv.xpr` 留到驗證完再刪。
+    - `sim_common.tcl`：
+        - 開專案時把 `sources_1/new/{lib,conv,fc,net}/` 的 `.sv` 全部加進 `sources_1`。原本每支腳本只加自己要的 RTL，靠跑的順序湊齊，新專案先跑哪支都會缺檔。
+        - 建模擬集收成 `create_simset_if_missing`(原本 7 支腳本各複製一份，`run_tb_candidate_axis.tcl` 沒有)。
+        - `run_param_sets` 多一個答案檔目錄參數，每支腳本傳自己的 `ref/`。
+    - `tb_event_fifo`：參數改成 `parameter`，總結行改成共用格式，新增 `scripts/lib/run_tb_event_fifo.tcl`。
+    - testbench 參數預設值(GUI 單組模擬用的相對路徑)、答案腳本、合成腳本裡的 `SaltConv.srcs` 改成 `SaltNET.srcs`。
+- 還要定的：
+    - `NeuronUpdate`(每顆自己算 $\Delta t$，FC 整層共用一個)、`WeightMemory`(位址是 conv 的 $(o_c,c)$)要不要改成兩層共用：到 SaltFC Part 4、6 設計時再看。
 
 ### Part 1 訓練端匯出
 
@@ -123,9 +165,9 @@
 
 ### 驗證
 
-- 答案檔：Python 腳本用訓練端的函式產生，放 `sim_1/new/ref/`。
+- 答案檔：Python 腳本用訓練端的函式產生，放 testbench 旁邊的 `ref/`(例：`sim_1/new/conv/ref/`)。
     - 環境是 WSL 的 conda 環境 `jax`(`~/miniconda3/envs/jax/bin/python`)。
-    - 整層的答案用兩份互相比對，一致才寫答案檔：訓練端官方的整層 forward，跟照硬體做法逐筆算的迴圈(例：`scripts/gen_salt_conv_ref.py`)。
+    - 整層的答案用兩份互相比對，一致才寫答案檔：訓練端官方的整層 forward，跟照硬體做法逐筆算的迴圈(例：`scripts/conv/gen_salt_conv_ref.py`)。
     - 參數組：訓練端的實際參數 × 繞回、飽和兩版，加上人工參數(不是 2 的次方、位寬下限、邊界情況)；人工參數的權重用訓練端同一個打包函式產生 `.mem`。
 - testbench：讀答案檔逐筆比對，不一致印出輸入、欄位、預期值、實際值，最後印一行總結(`ALL PASS` / `FAIL`)。
     - 參數用 generic 帶入，答案檔目錄用 `-testplusarg REF_DIR=` 帶入。
@@ -133,7 +175,8 @@
     - 機制維持一個 `initial` 流程(negedge 給值、posedge 前檢查)，不用多個並行 process、SVA。
     - 涵蓋統計跟核心流程分開，要加之前先問。
     - 反向測試：改壞 RTL 或答案檔，確認會 FAIL；跑完還原，確認跟 commit 相同。
-- 跑模擬：一個 testbench 一個模擬集，`scripts/run_tb_*.tcl` 跑所有參數組，共用流程在 `scripts/sim_common.tcl`。
+- 跑模擬：一個 testbench 一個模擬集，`scripts/<資料夾>/run_tb_*.tcl` 跑所有參數組，共用流程在 `scripts/sim_common.tcl`。
+    - 第一次跑時腳本自己建模擬集，RTL 由 `sim_common.tcl` 一次加進 `sources_1`；新的 testbench 照 `scripts/lib/run_tb_event_fifo.tcl` 寫。
     - 多組參數一律用 batch 模式跑；從 GUI 的 Tcl Console 跑，連續 elaborate 會不定時出現 `Spawn failed`。
     - 一個 Vivado session 只跑一個模擬集：第二個會沿用第一個的檔案清單(vivado-usage skill 8.8)。多支 testbench 由 `run_testbenches_in_children` 每支開一個子 Vivado。
     - 同一個專案一次只跑一支：多個 Vivado 同時開 `.xpr` 跑模擬會互相改寫專案檔。non-project 的合成不碰 `.xpr`，可以跟模擬同時跑。
@@ -144,7 +187,7 @@
 
 ### 合成量測
 
-- 流程、參數、量測結果都在 [`SaltConvSynthFlow.md`](../Concept/Layer-RTL/SaltConvSynthFlow.md)：兩層串接用 `SaltConv/scripts/synth_salt_conv_net.tcl`，比較做法時的單層量測見「比較做法時的量測(單層)」。
+- 流程、參數、量測結果都在 [`SaltConvSynthFlow.md`](../Concept/Layer-RTL/SaltConvSynthFlow.md)：兩層串接用 `SaltNET/scripts/net/synth_salt_conv_net.tcl`，比較做法時的單層量測見「比較做法時的量測(單層)」。
 - 目標固定 5 ns，跑 4.8 ns 看過不過，不掃最高時脈。
 
 ## 已定案設計
@@ -248,7 +291,7 @@
     - 輸入一個量化資料夾，`--out-dir` 指定輸出；每層 `<層>_weight.mem`、`<層>_threshold.mem`、`<層>_decay.mem`。
     - 匯出時檢查：$q$ 超出 $b$ 位元、門檻超出 $w$ 位元(conv 另外檢查同一個 $o_c$ 的門檻不全相同)、衰減表超出 $f_a$ 位元，都 raise。
     - 訓練端 `salt_core/tests/` 加手算小例子驗證打包。
-- `.mem` commit 進 SALT-FPGA(`SaltConv.srcs/sources_1/mem/<量化資料夾>/`)，繞回版、飽和版各一份。
+- `.mem` commit 進 SALT-FPGA(`SaltNET.srcs/sources_1/mem/<量化資料夾>/`)，繞回版、飽和版各一份。
 - 訓練端 `model.npz` 存的是 $q$(conv 形狀 `(OC, C, K, K)`)、`decay_table_int`、`v_th_int`。$\hat v_{th}$ 逐神經元存，conv 同一個 output channel 值相同。
 
 ## 參考文件

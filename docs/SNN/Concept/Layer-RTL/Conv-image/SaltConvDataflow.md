@@ -1,6 +1,6 @@
 # SaltConv 資料流程圖
 
-對照 `SaltConv/SaltConv.srcs/sources_1/new/SaltConv.sv`。
+對照 `SaltNET/SaltNET.srcs/sources_1/new/conv/SaltConv.sv`。
 框裡的「第 N 段」是那個檔案檔頭目錄的段落：
 
 | 段 | 內容 |

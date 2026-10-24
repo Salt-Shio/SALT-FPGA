@@ -1,0 +1,147 @@
+# Run the four tb_salt_conv_* testbenches once per parameter set, each in its own simulation set
+# (sim_salt_conv_ready_high, ..._random, ..._burst, ..._alternate) of the SaltNET project.
+# Each testbench covers one downstream/upstream driving pattern; the shared checks are in tb_salt_conv_common.svh.
+# Generate the reference files first (WSL): gen_salt_conv_ref.py.
+# The parameter list below must match TRAINED_SETS and SYNTHETIC_SETS in that script.
+# The first run creates the simulation sets (sim_common.tcl registers all RTL in sources_1); later runs skip that.
+# Per testbench, compile runs once; each parameter set changes the simset generic, then elaborates and simulates.
+# One Vivado session runs one simulation set only: in the launch_simulation -step flow, a later simset in the same
+# session can reuse the design file list of the previous one (seen in 2025.2: the compile of the second simset
+# analyzed the first simset's testbench; see the vivado-usage skill). So:
+#   one testbench name in -tclargs : run that testbench in this session
+#   no -tclargs, or several names  : start one child Vivado (batch) per testbench, one after another;
+#                                    each child writes SaltNET.sim/<testbench>.log
+# Usage:
+#   PowerShell (batch mode, close the GUI first):
+#       cd D:\Project\SALT-FPGA\SaltNET\SaltNET.sim
+#       vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/conv/run_tb_salt_conv.tcl
+#   Run only some testbenches: add -tclargs followed by their names, e.g. -tclargs tb_salt_conv_ready_high
+#   Run only some parameter sets: add NAME:value conditions to -tclargs (NAME is a testbench parameter as printed
+#   in the summary line); a set runs only if it meets every condition, e.g. -tclargs OUT_CHANNELS:1 READ_LATENCY:2
+#   Conditions and testbench names can be mixed. ':' instead of '=': the arguments pass through vivado.bat to the
+#   child Vivado, and .bat files split arguments at '='.
+#   Do not source this from the GUI Tcl console: there the repeated elaborate steps intermittently fail with
+#   'Spawn failed' (cause unknown, see the vivado-usage skill, section 8.7). Use the GUI only for a single
+#   Run Simulation with the testbench defaults.
+#   (Vivado writes vivado.log/.jou and crash dumps to the launch directory; start it inside SaltNET.sim.)
+# Outputs go to SaltNET.sim/<simset>/behav/xsim; each set is judged from simulate.log right after it runs.
+# All testbenches run even if one fails; the script raises an error at the end if any failed.
+# This file is ASCII only: Vivado reads Tcl sources in the system code page, not UTF-8.
+
+set scripts_dir [file dirname [file normalize [info script]]]
+source [file join $scripts_dir .. sim_common.tcl]
+
+set testbenches [list tb_salt_conv_ready_high tb_salt_conv_ready_random tb_salt_conv_ready_burst \
+    tb_salt_conv_ready_alternate]
+# -tclargs: testbench names (tb_*) and NAME:value parameter set conditions
+set requested_testbenches {}
+set set_conditions {}
+foreach arg $argv {
+    if {[string match tb_* $arg]} {
+        lappend requested_testbenches $arg
+    } elseif {[regexp {^[A-Z_]+:[^:=\s]+$} $arg]} {
+        lappend set_conditions $arg
+    } else {
+        error "unknown argument '$arg': expected a testbench name (tb_*) or a NAME:value condition"
+    }
+}
+if {[llength $requested_testbenches] > 0} {
+    set testbenches $requested_testbenches
+}
+
+# Several testbenches: one child Vivado per testbench, then report from their logs
+if {[llength $testbenches] > 1} {
+    run_testbenches_in_children [info script] $testbenches $set_conditions
+    return
+}
+
+set wrap_dir sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1
+set saturate_dir sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11
+set ref_dir sim_1/new/conv/ref
+
+# X_WIDTH Y_WIDTH IN_CHANNEL_WIDTH IN_CHANNELS OUT_CHANNELS OUT_ROWS OUT_COLS KERNEL_SIZE STRIDE PADDING
+# TIME_WIDTH WEIGHT_WIDTH MEMBRANE_INT_WIDTH MEMBRANE_FRAC_WIDTH DECAY_FRAC_WIDTH DECAY_TABLE_DEPTH ROUND SATURATE
+# FIFO_DEPTH, then the data file prefix (relative to SaltNET.srcs; _weight.mem, _threshold.mem, _decay.mem follow).
+# READ_LATENCY, COMPUTE_LATENCY, OVERLAP are added below.
+set param_sets [list \
+    [list 6 6 1 2 8 17 17 3 2 1 16 7 12 0 6 75 1 0 16 $wrap_dir/conv1] \
+    [list 6 6 1 2 8 17 17 3 2 1 16 7 9 0 6 75 1 1 16 $saturate_dir/conv1] \
+    [list 5 5 3 8 16 9 9 3 2 1 16 7 14 0 6 75 1 0 16 $wrap_dir/conv2] \
+    [list 5 5 3 8 16 9 9 3 2 1 16 7 11 0 6 75 1 1 16 $saturate_dir/conv2] \
+    [list 3 3 1 2 3 4 3 1 2 0 9 4 5 0 3 4 0 1 16 $ref_dir/salt_conv_K1_S2_P0_R4_C3_IC2_OC3_IV5_FV0_RD0_SAT1] \
+    [list 4 4 2 3 5 13 11 3 1 1 11 5 7 0 4 10 1 0 4 $ref_dir/salt_conv_K3_S1_P1_R13_C11_IC3_OC5_IV7_FV0_RD1_SAT0] \
+    [list 4 5 1 2 3 10 7 5 2 2 12 6 6 2 5 20 0 0 16 $ref_dir/salt_conv_K5_S2_P2_R10_C7_IC2_OC3_IV6_FV2_RD0_SAT0] \
+    [list 3 4 1 1 4 7 5 4 1 0 10 4 6 0 4 8 1 1 2 $ref_dir/salt_conv_K4_S1_P0_R7_C5_IC1_OC4_IV6_FV0_RD1_SAT1] \
+    [list 1 1 1 2 1 1 1 3 1 1 8 4 5 0 3 3 1 1 16 $ref_dir/salt_conv_K3_S1_P1_R1_C1_IC2_OC1_IV5_FV0_RD1_SAT1] \
+    [list 2 2 1 2 1 4 4 3 1 1 10 4 5 0 3 4 1 0 4 $ref_dir/salt_conv_K3_S1_P1_R4_C4_IC2_OC1_IV5_FV0_RD1_SAT0] \
+]
+
+# Each set above runs once per {READ_LATENCY COMPUTE_LATENCY OVERLAP} below. They only change the cycle count;
+# the reference files list the cycle count for every entry of CYCLE_CONFIGS in gen_salt_conv_ref.py (R, C in 1..2).
+# OVERLAP only matters when R + C > 2, so {1 1 1} is not listed.
+# The three values are inserted after FIFO_DEPTH, before the data file prefix.
+set pipeline_configs {{1 1 0} {2 1 0} {2 1 1} {1 2 0} {1 2 1} {2 2 0} {2 2 1}}
+set base_param_sets $param_sets
+set param_sets {}
+foreach base_set $base_param_sets {
+    foreach pipeline_config $pipeline_configs {
+        lappend param_sets [concat [lrange $base_set 0 end-1] $pipeline_config [list [lindex $base_set end]]]
+    }
+}
+
+# NAME=value list of the integer parameters, shared by the generic and the summary line prefix
+proc salt_conv_integer_params {param_set} {
+    lassign $param_set x_width y_width in_channel_width in_channels out_channels out_rows out_cols \
+        kernel_size stride padding time_width weight_width membrane_int_width membrane_frac_width \
+        decay_frac_width decay_table_depth round saturate fifo_depth read_latency compute_latency overlap
+    return "X_WIDTH=$x_width Y_WIDTH=$y_width IN_CHANNEL_WIDTH=$in_channel_width IN_CHANNELS=$in_channels OUT_CHANNELS=$out_channels OUT_ROWS=$out_rows OUT_COLS=$out_cols KERNEL_SIZE=$kernel_size STRIDE=$stride PADDING=$padding TIME_WIDTH=$time_width WEIGHT_WIDTH=$weight_width MEMBRANE_INT_WIDTH=$membrane_int_width MEMBRANE_FRAC_WIDTH=$membrane_frac_width DECAY_FRAC_WIDTH=$decay_frac_width DECAY_TABLE_DEPTH=$decay_table_depth ROUND=$round SATURATE=$saturate FIFO_DEPTH=$fifo_depth READ_LATENCY=$read_latency COMPUTE_LATENCY=$compute_latency OVERLAP=$overlap"
+}
+
+proc salt_conv_generic {param_set} {
+    set file_prefix [lindex $param_set end]
+    set srcs_dir [project_srcs_dir]
+    set generic [salt_conv_integer_params $param_set]
+    foreach {name suffix} {WEIGHT_FILE _weight.mem THRESHOLD_FILE _threshold.mem DECAY_FILE _decay.mem} {
+        set path [file join $srcs_dir $file_prefix$suffix]
+        if {![file exists $path]} {
+            error "data file not found: $path"
+        }
+        append generic " $name=\"$path\""
+    }
+    return $generic
+}
+
+# tb_salt_conv_* print the integer parameters as NAME=value, followed by a colon
+proc salt_conv_prefix {param_set} {
+    return "[salt_conv_integer_params $param_set]:"
+}
+
+# Keep only the sets that meet every NAME:value condition from -tclargs
+if {[llength $set_conditions] > 0} {
+    set selected_sets {}
+    foreach param_set $param_sets {
+        set integer_params [salt_conv_integer_params $param_set]
+        set selected 1
+        foreach condition $set_conditions {
+            if {[lsearch -exact $integer_params [string map {: =} $condition]] < 0} {
+                set selected 0
+                break
+            }
+        }
+        if {$selected} {
+            lappend selected_sets $param_set
+        }
+    }
+    if {[llength $selected_sets] == 0} {
+        error "no parameter set meets the conditions: $set_conditions"
+    }
+    set param_sets $selected_sets
+}
+
+open_saltnet_project
+
+# One testbench in this session
+set tb_name [lindex $testbenches 0]
+set simset_name [string map {tb_ sim_} $tb_name]
+create_simset_if_missing $simset_name $tb_name [list conv/$tb_name.sv conv/tb_salt_conv_common.svh]
+run_param_sets $simset_name $tb_name $ref_dir $param_sets salt_conv_generic salt_conv_prefix

@@ -8,28 +8,28 @@
 - 這是量測用的流程，不是正式整合：
     - 不接腳位、不出 bitstream(out-of-context)。
     - 時脈、輸入輸出延遲是量測用的假設，見「約束」。
-- Vivado 專案 `SaltConv.xpr` 裡的 `synth_1`、`impl_1` 沒有在用(`synth_1` 的 top 還是 `CandidateGrid`)，量測一律用下面的腳本。
+- Vivado 專案 `SaltNET.xpr` 裡的 `synth_1`、`impl_1` 沒有在用，量測一律用下面的腳本。
 
 ## 檔案
 
 | 檔案 | 內容 |
 |---|---|
-| `SaltConv/scripts/synth_salt_conv_net.tcl` | 整個流程：讀 RTL、合成、約束、opt / place / route、出報告 |
-| `SaltConv/SaltConv.srcs/constrs_1/new/salt_conv_impl.xdc` | 只給實作用的約束(目前只有乘法 DSP 的 `DONT_TOUCH`) |
-| `SaltConv/SaltConv.srcs/sources_1/new/*.sv` | RTL，全部讀進來 |
-| `SaltConv/SaltConv.srcs/sources_1/mem/<量化版本>/conv{1,2}_*.mem` | 權重、門檻、衰減表 |
+| `SaltNET/scripts/net/synth_salt_conv_net.tcl` | 整個流程：讀 RTL、合成、約束、opt / place / route、出報告 |
+| `SaltNET/SaltNET.srcs/constrs_1/new/salt_conv_impl.xdc` | 只給實作用的約束(目前只有乘法 DSP 的 `DONT_TOUCH`) |
+| `SaltNET/SaltNET.srcs/sources_1/new/{lib,conv,net}/*.sv` | RTL，這三個資料夾全部讀進來 |
+| `SaltNET/SaltNET.srcs/sources_1/mem/<量化版本>/conv{1,2}_*.mem` | 權重、門檻、衰減表 |
 
 ## 怎麼跑
 
 ```powershell
-cd D:\Project\SALT-FPGA\SaltConv\SaltConv.runs
-vivado -mode batch -source D:/Project/SALT-FPGA/SaltConv/scripts/synth_salt_conv_net.tcl -tclargs saturate 4.8
+cd D:\Project\SALT-FPGA\SaltNET\SaltNET.runs
+vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_conv_net.tcl -tclargs saturate 4.8
 ```
 
 - 第一個參數：`wrap` 或 `saturate`。
 - 第二個參數：時脈週期(ns)，不給就是 4.8。
-- 輸出在 `SaltConv.runs/net_<版本>_<週期>/`，`SaltConv.runs` 不進版控。
-- 不碰 `SaltConv.xpr`，可以跟模擬同時跑；兩個合成同時跑碰過 `Designutils 20-411`(vivado-usage skill 第 11 節)，一次跑一個。
+- 輸出在 `SaltNET.runs/net_<版本>_<週期>/`，`SaltNET.runs` 不進版控。
+- 不碰 `SaltNET.xpr`，可以跟模擬同時跑；兩個合成同時跑碰過 `Designutils 20-411`(vivado-usage skill 第 11 節)，一次跑一個。
 - agent 從自己的 shell 跑要先拿掉 `NoDefaultCurrentDirectoryInExePath`(vivado-usage skill 8.6)。
 
 ## 工具
@@ -41,7 +41,7 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltConv/scripts/synth_salt_conv
 
 | 步驟 | 指令 | 指定的參數 | 其他 |
 |---|---|---|---|
-| 讀 RTL | `read_verilog -sv` | `sources_1/new/*.sv` 全部 | |
+| 讀 RTL | `read_verilog -sv` | `sources_1/new/` 底下 `lib/`、`conv/`、`net/` 的 `.sv` 全部 | |
 | 合成 | `synth_design` | `-top SaltConvNet`、`-part`、`-mode out_of_context`、每個設計參數一個 `-generic` | 其餘用預設，見下表 |
 | 約束 | `create_clock`、`set_input_delay`、`set_output_delay`、`read_xdc` | 見「約束」 | 合成之後才讀，合成不受影響 |
 | 邏輯最佳化 | `opt_design` | 無 | 預設：retarget、propconst、sweep、bram_power_opt |
@@ -133,7 +133,7 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltConv/scripts/synth_salt_conv
     - 加 M=3 的理由：計算第 2 級有 `SpikeSelect`、「還有沒有剩」，會隨 $M^2$ 變長。
 - 管線設定：(R, C, OVERLAP) 跟 `run_tb_salt_conv.tcl` 的 7 種相同(R1C1、R2C1 不重疊/重疊、R1C2 不重疊/重疊、R2C2 不重疊/重疊)。
 - Tcl 步驟：
-    - `read_verilog -sv` 讀 `sources_1/new/` 的全部 `.sv` 跟包裝 module。
+    - `read_verilog -sv` 讀 `sources_1/new/` 底下 `lib/`、`conv/` 的全部 `.sv` 跟包裝 module。
     - `synth_design -top <包裝> -part xck26-sfvc784-2LV-c -lint`，接著 `catch {close_design}`(`-lint` 跑完沒有開著的設計)。
     - `synth_design -top <包裝> -part xck26-sfvc784-2LV-c -mode out_of_context`。
     - `create_clock -period $period -name clk [get_ports clk]`；除了 `clk` 的輸入、全部輸出 `set_input_delay 0`、`set_output_delay 0`。

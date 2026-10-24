@@ -8,23 +8,22 @@
 ## 目標
 
 - 取代官方 `ps_host_if` + AXI DMA + PS 軟體解碼的路徑，降低延遲與資源使用。
-- 用事件驅動的方式實作 Conv 層 RTL，驗證這個運作方式可行、邏輯對得上訓練端。
+- 用事件驅動的方式實作 Conv、FC 層 RTL，驗證這個運作方式可行、邏輯對得上訓練端。
 - 設計通用、可參數化，不綁定單一模型或應用場景。
 
 ## 目前進度
 
 - **PS 端**：自製 kernel driver（v4l2）與使用者端工具已完成，核心功能已上板驗證。
-- **Conv 層 RTL**：Vivado 專案 `SaltConv`，採拆成小 part 逐一實作與驗證。
-  - 輸入 EventFIFO 已通過 testbench。
-  - 其餘 part 實作中。
-- **FC 層**：設計尚未開始。
+- **CSNN 層 RTL**：Vivado 專案 `SaltNET`，採拆成小 part 逐一實作與驗證。
+  - Conv 層(`SaltConv`)完成：conv1 → conv2 串接跟訓練端逐位元相同，5 ns(200 MHz)時序達標。
+  - FC 層(`SaltFC`)設計文件已完成，接著做 RTL。
 
 ## 目錄結構
 
 | 目錄 | 內容 |
 |---|---|
 | `GENX320/` | 事件解碼 PL（`EvtDecoder`）、`ip_repo`、kernel driver、使用者端工具、device tree overlay |
-| `SaltConv/` | Conv 層事件驅動 RTL 的 Vivado 專案與 testbench |
+| `SaltNET/` | CSNN 各層事件驅動 RTL 的 Vivado 專案與 testbench(`lib/` 通用模組、`conv/`、`fc/`、`net/` 多層串接) |
 | `docs/GENX320/` | `ps_host_if` 替換與 PL→PS 傳輸的待辦與查證筆記 |
 | `docs/SNN/` | CSNN 在 PL 端運算的設計推導與待辦 |
 | `scripts/` | KV260 連線、事件資料視覺化與統計腳本 |

@@ -1,6 +1,6 @@
 # SaltConv 總覽：控制邏輯在決定什麼
 
-對照 `SaltConv/SaltConv.srcs/sources_1/new/SaltConv.sv`(分支 `test`,$o_c$ 重疊的「停住」做法)。
+對照 `SaltNET/SaltNET.srcs/sources_1/new/conv/SaltConv.sv`(分支 `test`,$o_c$ 重疊的「停住」做法)。
 
 這份只講控制：每一拍電路要做哪幾個決定、每個決定為什麼存在、由什麼決定、會影響什麼。膜電位怎麼算、候選怎麼找見 `Conv.md`;重疊的設計推導見 `Conv.md` 5.8,逐拍例子見 `Conv-image/SaltConvControl.md`,一拍裡的資料流見 `Conv-image/SaltConvDataflow.md`。
 
