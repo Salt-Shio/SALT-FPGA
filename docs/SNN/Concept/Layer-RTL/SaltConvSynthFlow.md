@@ -67,7 +67,7 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_c
 | 模組 | 屬性 | 作用 |
 |---|---|---|
 | `NeuronUpdate` | 乘積、捨入加 `use_dsp = "yes"` | 乘法一律用 DSP(2026-10-21 決定，見「量測結果 → 乘法一律用 DSP」) |
-| `NeuronUpdate` | 衰減表 `rom_style = "distributed"` | 用 LUT 查表，$M\times M$ 份同一拍各查各的 |
+| `DecayLookup` | 衰減表 `rom_style = "distributed"` | 用 LUT 查表，$M\times M$ 份同一拍各查各的(2026-10-27 從 `NeuronUpdate` 拆出) |
 | `EventFIFO` | `ram_style = "distributed"` | 用 LUT 當記憶體 |
 | `NeuronMemoryArray` | `ram_style = "block"`、模組 `keep_hierarchy = "soft"` | 神經元記憶體用 BRAM；保留模組邊界，$R=2$ 的第二級才併得進 BRAM 輸出暫存器(vivado-usage skill 第 10 節) |
 | `ReadOnlyMemory`(`WeightMemory` 例化) | `rom_style = "block"`、模組 `keep_hierarchy = "soft"` | 權重用 BRAM，原因同上；位址計算留在 `WeightMemory`，不框進去 |
@@ -116,7 +116,8 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_c
 - `info.txt`：
     - `route wns`：繞線後最差的餘裕，正的就是這個週期過了。
     - `dsp dont_touch`：被約束擋住的 DSP 數，確認約束有套上。
-    - `conv1_to_conv2`、`conv2_to_conv1`：跨層兩條路徑最差的一條；`conv1_inside`、`conv2_inside`：層內最差的一條。
+    - `conv1_output_to_conv2`、`conv2_ready_to_conv1`：跨層兩條路徑最差的一條。前者是 conv1 送 spike 事件給 conv2(`out_valid`、資料 → conv2 的 FIFO)；後者是 conv2 的反壓(conv2 `in_ready` → conv1 `out_ready` → conv1 停不停、寫不寫回)，沒有資料從 conv2 送回 conv1。
+    - `conv1_inside`、`conv2_inside`：層內最差的一條。
 - `worst.rpt`：最差 10 條路徑的逐級延遲。
 - `util.rpt`、`util_hier.rpt`：資源，後者分到每一層。
 
@@ -159,27 +160,40 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_c
 
 ### 現行 RTL：兩層串接(這支腳本，4.8 ns，2026-10-27)
 
-| 版本 | WNS | 最長路徑 | conv1 → conv2 | conv2 → conv1 | LUT | FF | BRAM | DSP |
+| 版本 | WNS | 最長路徑 | conv1 輸出 → conv2 | conv2 反壓 → conv1 | LUT | FF | BRAM | DSP |
 |---|---|---|---|---|---|---|---|---|
-| 繞回 | +0.283 | conv1 內：神經元 BRAM 讀出 → 計算第 1 級(乘法 DSP) | +1.160 | +1.557 | 1207(1.03%) | 597(0.25%) | 8(5.56%) | 8(0.64%) |
-| 飽和 | +0.254 | conv1 內：`pipe_time` 暫存器 → 計算第 1 級(乘法 DSP) | +0.825 | +1.449 | 1197(1.02%) | 525(0.22%) | 8(5.56%) | 8(0.64%) |
+| 繞回 | +0.281 | conv2 內：神經元 BRAM 讀出 → 計算第 1 級(乘法 DSP) | +0.892 | +1.494 | 1196(1.02%) | 421(0.18%) | 8(5.56%) | 8(0.64%) |
+| 飽和 | +0.205 | conv1 內：神經元 BRAM 讀出 → 計算第 1 級(乘法 DSP) | +0.708 | +1.712 | 1199(1.02%) | 421(0.18%) | 8(5.56%) | 8(0.64%) |
 
-- 8 顆乘法 DSP 都套上 `DONT_TOUCH`(PSIP 摘要表 DSP Register 列 Dont Touch 8)。百分比的分母是 xck26 整顆。
-- 這次是 SaltFC Part 5 之後：選 tap 從 `WeightTapSelect` 展開到 SaltConv 每個 bank 的 generate 區塊、`NeuronMemory` 搬到 lib 改成寬字進出。
-    - 合成後(布局前)跟改動前比：FF 421、BRAM 8、DSP 8、每顆 BRAM 的 `DOA_REG`/`DOB_REG` 相同；LUT 繞回 1275 → 1233、飽和 1273 → 1231，都少 42，全部來自選 tap 展開那一步(`NeuronMemory` 搬移前後合成結果逐行相同)。選法照搬，LUT 為什麼變少沒查出原因。
-    - FF 比合成後多的，是布局時 BRAM register optimization 搬出的神經元 BRAM 輸出暫存器：繞回版 6 顆 176 個、飽和版 4 顆 104 個。
-    - 改動前(2026-10-25，Part 4a 之後)：繞回 +0.319、LUT 1243、FF 421；飽和 +0.128、LUT 1290、FF 679。兩次都在單次 ±0.2 ns 的變動附近，不拿來說時序變好。
-- 層與層之間兩條都不是最長路徑(這次兩版最差的一條)：
-    - conv1 → conv2：起點 conv1 的乘法 DSP 輸出(`rounded_product`)，終點 conv2 FIFO 的 `empty`(繞回)、`full`(飽和)暫存器的 CE。
-    - conv2 → conv1：起點 conv2 的 `clearing` 暫存器，終點 conv1 神經元 BRAM 的寫入開關 `ENBWREN`。
-    - 2026-10-25 那次：conv1 → conv2 起點是 `cut_after_step2`，終點還有寫指標、distributed RAM 的 WE；conv2 → conv1 起點還有 `full`，終點是 BRAM 讀取開關、管線暫存器的 CE。
+- 8 顆乘法 DSP 都套上 `DONT_TOUCH`。百分比的分母是 xck26 整顆。
+- 這次是 SaltFC Part 6 之後：`NeuronUpdate` 的 ① 拆成 `lib/DecayLookup`，SaltConv 每個 bank 例化 `DecayLookup` + `NeuronUpdate`。
+    - 合成後(布局前)跟改動前比：`report_utilization` 逐行相同(LUT 繞回 1233、飽和 1231，FF 421，BRAM 8，DSP 8)，每顆 BRAM 的 `DOA_REG`/`DOB_REG` 相同。
+    - 這次布局沒有搬 BRAM 輸出暫存器(`Physopt 32-670 No setup violation found. BRAM Register Optimization was not performed.`)，所以 FF 就是合成後的 421。
+    - 改動前(Part 5 之後，同一天)：繞回 +0.283、LUT 1207、FF 597；飽和 +0.254、LUT 1197、FF 525。FF 多的是布局時搬出的神經元 BRAM 輸出暫存器(繞回 6 顆 176 個、飽和 4 顆 104 個)。WNS 差在單次 ±0.2 ns 的變動內，不拿來說時序變好或變差。
+    - 再之前(2026-10-25，Part 4a 之後)：繞回 +0.319、LUT 1243、FF 421；飽和 +0.128、LUT 1290、FF 679。
+    - 4.8 ns 這次 WNS 比改動前小，所以改動前(git HEAD 取出)、改動後各再跑一次 4.6 ns(比 4.8 緊，逼布局找好的)。FMAX = 1000/(目標 − WNS)，報兩個目標裡最好的(UG949)：
+
+| 版本 | RTL | 4.8 ns WNS | 4.6 ns WNS | 4.6 ns 布局後 LUT / FF | FMAX(兩次取最好) |
+|---|---|---|---|---|---|
+| 繞回 | 改動前 | +0.283 | +0.065 | 1250 / 684 | 221.4 MHz |
+| 繞回 | 改動後 | +0.281 | +0.300 | 1205 / 625 | 232.6 MHz |
+| 飽和 | 改動前 | +0.254 | +0.022 | 1246 / 622 | 220.0 MHz |
+| 飽和 | 改動後 | +0.205 | +0.344 | 1240 / 665 | 235.0 MHz |
+
+    - 4.8 ns 改動後略差，4.6 ns 改動後比較好，兩邊差距都在 0.3 ns 以內，是同一份電路布局的變動，不是改動造成的；不拿來說時序變好。
+    - 4.6 ns 四次布局都有把神經元 BRAM 的輸出暫存器搬到外面的 FF，所以 FF 比合成後的 421 多。
+- 最長路徑兩版都是「神經元 BRAM 讀出 → 計算第 1 級的乘法 DSP」，跟改動前同一類。
+- 層與層之間兩條都不是最長路徑：
+    - conv1 輸出 → conv2：起點 conv1 的乘法 DSP 輸出(`rounded_product`)，終點 conv2 FIFO 的 `full` 暫存器的 CE(兩版；Part 5 那次繞回版是 `empty`)。
+    - conv2 反壓 → conv1：起點 conv2 的 `clearing` 暫存器，終點 conv1 神經元 BRAM 的寫入開關 `ENBWREN`。
+    - 2026-10-25 那次：conv1 輸出 → conv2 起點是 `cut_after_step2`，終點還有寫指標、distributed RAM 的 WE；conv2 反壓 → conv1 起點還有 `full`，終點是 BRAM 讀取開關、管線暫存器的 CE。
 
 ### 乘法一律用 DSP(2026-10-21)
 
 - Vivado 自己選時 $w$=9 用 LUT 做乘法，這一段時序一直最緊；DSP 用量很少(整顆 1248 個，兩層 8 個)，各層資源類型也一致。
 - 兩層串接，4.8 ns，還沒擋 DSP 暫存器搬動：
 
-| 版本 | WNS | 最長路徑 | conv1 → conv2 | conv2 → conv1 | LUT | FF | BRAM | DSP |
+| 版本 | WNS | 最長路徑 | conv1 輸出 → conv2 | conv2 反壓 → conv1 | LUT | FF | BRAM | DSP |
 |---|---|---|---|---|---|---|---|---|
 | 繞回 | +0.260 | conv1 內：FIFO 讀指標 → BRAM 讀位址 | +0.725 | +1.464 | 1266 | 620 | 8 | 8 |
 | 飽和，Vivado 自己選 | −0.118 | conv1 內：計算第 1 級(LUT 乘法) | +0.211 | +1.551 | 1607 | 645 | 8 | 4 |

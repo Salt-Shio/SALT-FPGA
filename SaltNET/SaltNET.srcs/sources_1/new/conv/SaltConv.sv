@@ -20,7 +20,7 @@
 //     2 下一個 o_c 是誰、讀位址
 //     3 下一個 o_c 碰到哪些神經元(CandidateGrid)
 //     4 管線位置 1..L:每個位置一份那個 o_c 的候選、t、o_c
-//     5 讀出、算、寫回:權重、門檻、NeuronMemory + NeuronUpdate
+//     5 讀出、算、寫回:權重、門檻、NeuronMemory + DecayLookup + NeuronUpdate
 //     6 送出、做完沒、換不換
 //   排列規則:變數的宣告跟設定它的邏輯放在同一段;要用到的變數,設定它的那段排在前面。
 //   互相依賴的(例如 last_read_out_channel 和 read_out_channel)放同一段,宣告在段首。
@@ -352,7 +352,7 @@ module SaltConv #(
 		$readmemh(THRESHOLD_FILE, thresholds);
 	end
 
-	// 每個 bank 一份:權重選 tap、NeuronMemory(打包 {t_last, V̂})+ NeuronUpdate
+	// 每個 bank 一份:權重選 tap、NeuronMemory(打包 {t_last, V̂})+ DecayLookup + NeuronUpdate
 	// 讀:下一個 o_c(第 3 段的 grid_*);寫:位置 L 的 o_c(第 4 段的 pipe_*),只在算的那一拍
 	logic spike [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 
@@ -401,23 +401,34 @@ module SaltConv #(
 			assign membrane  = read_word[MEMBRANE_WIDTH-1:0];
 			assign last_time = read_word[NEURON_WORD_WIDTH-1:MEMBRANE_WIDTH];
 
+			// 衰減碼:每顆神經元有自己的 t_last,每個 bank 一份
+			logic [DECAY_FRAC_WIDTH:0] decay_code;   // A
+
+			DecayLookup #(
+				.TIME_WIDTH       (TIME_WIDTH),
+				.DECAY_FRAC_WIDTH (DECAY_FRAC_WIDTH),
+				.DECAY_TABLE_DEPTH(DECAY_TABLE_DEPTH),
+				.DECAY_FILE       (DECAY_FILE)
+			) decay_lookup (
+				.last_time (last_time),
+				.event_time(pipe_time[READ_LATENCY]),   // 計算第 1 級用
+				.decay_code(decay_code)
+			);
+
 			NeuronUpdate #(
-				.TIME_WIDTH         (TIME_WIDTH),
 				.WEIGHT_WIDTH       (WEIGHT_WIDTH),
 				.MEMBRANE_INT_WIDTH (MEMBRANE_INT_WIDTH),
 				.MEMBRANE_FRAC_WIDTH(MEMBRANE_FRAC_WIDTH),
 				.DECAY_FRAC_WIDTH   (DECAY_FRAC_WIDTH),
-				.DECAY_TABLE_DEPTH  (DECAY_TABLE_DEPTH),
 				.ROUND              (ROUND),
 				.SATURATE           (SATURATE),
-				.DECAY_FILE         (DECAY_FILE),
+				.SPIKE_OUTPUT       (1'b1),   // conv 一律 fire
 				.COMPUTE_LATENCY    (COMPUTE_LATENCY)
 			) neuron_update (
 				.clk         (clk),
+				.decay_code  (decay_code),
 				.weight_code (weight_code),
 				.membrane    (membrane),
-				.last_time   (last_time),
-				.event_time  (pipe_time[READ_LATENCY]),                // 計算第 1 級用
 				.threshold   (thresholds[pipe_channel[PIPELINE_DEPTH]]),   // 計算第 2 級用
 				.spike       (spike[row_bank][col_bank]),
 				.new_membrane(new_membrane)

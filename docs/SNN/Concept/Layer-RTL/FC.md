@@ -161,6 +161,7 @@ $$
 - **記憶體型態**：LUT 做的 ROM，唯讀，合成時用 `$readmemh` 從檔案載入，組合邏輯讀取
     - 大小只由 $\tau$、$f_a$ 決定，跟 $n_{out}$ 無關
 - **份數**：1 份，整層共用同一個 $\Delta t$
+- **RTL**：跟 conv 共用 `lib/DecayLookup`(① 整段：$\Delta t$、三種情況、衰減表)，SaltFC 例化 1 份，輸出的 `decay_code` 接到 $n_{col}$ 份 `lib/NeuronUpdate`
 - **檔案格式**：一行一格，第 $\Delta t-1$ 行(從 0 數)是 $A[\Delta t]$，共 $\Delta t_{\max}$ 行，每行 $\lceil f_a/4\rceil$ 個 hex 字元，最左邊補 0
 
 ### ② 衰減乘法再捨回暫存器格式
@@ -179,6 +180,7 @@ $$
 
 - **份數**：每拍 $n_{col}$ 份，一份一個乘法器，一律用 DSP
     - $n_{col}$ 份共用同一個 $A$
+    - ②③④ 跟 conv 共用 `lib/NeuronUpdate`，SaltFC 每行的 generate 區塊例化 1 份
 
 - **位元數**：乘積要 $(f_a+1)+w$ 位元有號才不會先溢位；捨回後的 $D_x$ 落在 $0$ 跟 $\hat V_x$ 之間，放得進 $w$ 位元
 
@@ -215,6 +217,7 @@ $$
 | 門檻 BRAM | 有，$\hat v_{th,x}$ 是門檻寬字的第 $x$ 段 | 沒有 |
 
 - 例子：$\hat v_{th,x}=500$、$\hat V'_x=520$，spike 開時 fire、寫回 $0$；spike 關時寫回 $520$
+- spike 開關就是 `NeuronUpdate` 的參數 `SPIKE_OUTPUT`(跟 SaltFC 同名，直接傳下去)；關掉時 `threshold` 接 0
 - 判斷用的是溢位處理`之後`的 $\hat V'_x$，所以 `繞回` 翻號時可能誤觸發 fire，或讓該 fire 的沒 fire
 - **最後一列空的位置**：門檻補 $0$、$\hat V$ 沒有意義，算出來可能 $\ge0$，所以 $s_x$ 要跟「$y\cdot n_{col}+x<n_{out}$」做 AND，擋掉假的 fire
 - $t_{last}$ 不在這裡更新：整層一份，換事件時更新兩個時間暫存器

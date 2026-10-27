@@ -6,7 +6,9 @@
 #   vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_conv_net.tcl -tclargs saturate 4.8
 #   arguments: version (wrap | saturate), clock period in ns (default 4.8: the 5 ns target with 0.2 ns kept back)
 # Outputs go to SaltNET.runs/net_<version>_<period>/: info.txt (WNS, layer-crossing and in-layer worst paths),
-# timing_summary.rpt, worst.rpt, conv1_to_conv2.rpt, conv2_to_conv1.rpt, util.rpt, util_hier.rpt, post_route.dcp.
+# timing_summary.rpt, worst.rpt, conv1_output_to_conv2.rpt, conv2_ready_to_conv1.rpt, util.rpt, util_hier.rpt, post_route.dcp.
+# Cross-layer paths: conv1_output_to_conv2 = conv1 sending a spike event (out_valid, data) into the conv2 FIFO;
+# conv2_ready_to_conv1 = conv2 back-pressure (in_ready -> conv1 out_ready -> conv1 stall, write-back), no data goes back.
 # This file is ASCII only: Vivado reads Tcl sources in the system code page, not UTF-8.
 
 set version [lindex $argv 0]
@@ -90,7 +92,7 @@ set fp [open info.txt w]
 puts $fp "version $version period $period"
 puts $fp "route wns [get_property SLACK [get_timing_paths -max_paths 1 -setup]]"
 puts $fp "dsp dont_touch [llength [get_cells -hier -filter {REF_NAME == DSP48E2 && DONT_TOUCH}]] of [llength [get_cells -hier -filter {REF_NAME == DSP48E2}]]"
-foreach {name from to} [list conv1_to_conv2 $conv1_cells $conv2_cells conv2_to_conv1 $conv2_cells $conv1_cells \
+foreach {name from to} [list conv1_output_to_conv2 $conv1_cells $conv2_cells conv2_ready_to_conv1 $conv2_cells $conv1_cells \
                              conv1_inside $conv1_cells $conv1_cells conv2_inside $conv2_cells $conv2_cells] {
     set path [get_timing_paths -from $from -to $to -max_paths 1 -setup]
     if {[llength $path] == 0} {
@@ -104,8 +106,8 @@ foreach {name from to} [list conv1_to_conv2 $conv1_cells $conv2_cells conv2_to_c
 close $fp
 report_timing_summary -file timing_summary.rpt
 report_timing -max_paths 10 -nworst 1 -file worst.rpt
-report_timing -from $conv1_cells -to $conv2_cells -max_paths 3 -file conv1_to_conv2.rpt
-report_timing -from $conv2_cells -to $conv1_cells -max_paths 3 -file conv2_to_conv1.rpt
+report_timing -from $conv1_cells -to $conv2_cells -max_paths 3 -file conv1_output_to_conv2.rpt
+report_timing -from $conv2_cells -to $conv1_cells -max_paths 3 -file conv2_ready_to_conv1.rpt
 report_utilization -file util.rpt
 report_utilization -hierarchical -hierarchical_depth 2 -file util_hier.rpt
 write_checkpoint -force post_route.dcp

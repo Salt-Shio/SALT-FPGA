@@ -12,7 +12,7 @@
 
 - Conv 層 `SaltConv` 完成(Part 0~9，2026-10-05 ~ 10-22)。
     - conv1 → conv2 串接(`SaltConvNet`)的輸出、兩層最終狀態跟訓練端逐位元相同。
-    - 目標時脈 5 ns(200 MHz)：4.8 ns 下繞回、飽和兩版都過(+0.319、+0.128 ns，2026-10-25 SaltFC Part 4a 之後)。
+    - 目標時脈 5 ns(200 MHz)：4.8 ns 下繞回、飽和兩版都過(+0.281、+0.205 ns，2026-10-27 SaltFC Part 6 之後)。
     - 量測結果、合成流程見 [`SaltConvSynthFlow.md`](../Concept/Layer-RTL/SaltConvSynthFlow.md)。
     - 各 Part 的完整過程(定案討論、反向測試)在 commit `dc9b22a` 版本的這份 TODO。
 - Vivado 專案 `SaltNET/`(2026-10-24 從 `SaltConv/` 改名，見 Part 0)：
@@ -31,7 +31,8 @@
 - SaltFC Part 0~3 完成。
 - SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
 - SaltFC Part 5 完成(細節見下面「Part 5」)：conv 展開 `WeightTapSelect`、`NeuronMemory` 搬到 lib、FC $\hat V$ 跟門檻的 testbench。
-- 下一步：Part 6(膜電位更新)，第一個決定還在等使用者回覆(見下面「Part 6」的提案)。
+- SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
+- 下一步：Part 7(spike 選擇與輸出)。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
     - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
@@ -63,7 +64,7 @@
 | 3 | 輸入 FIFO:直接用 `lib/EventFIFO`，不寫新模組，例化在 Part 8 | 第 1 節 | 完成 |
 | 4 | 權重 BRAM：4a conv 權重 ROM 改用 lib 通用 ROM；4b 權重位址兩層共用 `lib/WeightMemory`、FC 權重查表 | 第 2 節「權重」 | 完成 |
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 完成 |
-| 6 | 膜電位更新 | 第 3 節 | 規劃中 |
+| 6 | 膜電位更新：`NeuronUpdate` 拆成 lib `DecayLookup` + `NeuronUpdate`，加 spike 開關 | 第 3 節 | 完成 |
 | 7 | spike 選擇與輸出(優先權編碼器、bitmask) | 第 4 節 | 未開始 |
 | 8 | pipeline 整合 | 第 5 節 | 未開始 |
 | 9 | 膜電位輸出 | 第 6 節 | 未開始 |
@@ -104,7 +105,7 @@
     - `tb_event_fifo`：參數改成 `parameter`，總結行改成共用格式，新增 `scripts/lib/run_tb_event_fifo.tcl`。
     - testbench 參數預設值(GUI 單組模擬用的相對路徑)、答案腳本、合成腳本裡的 `SaltConv.srcs` 改成 `SaltNET.srcs`。
 - 還要定的：
-    - `NeuronUpdate`(每顆自己算 $\Delta t$，FC 整層共用一個)要不要改成兩層共用：到 SaltFC Part 6 設計時再看。`WeightMemory` 在 Part 4 定了(見「Part 4 權重 BRAM」)。
+    - `NeuronUpdate`(每顆自己算 $\Delta t$，FC 整層共用一個)要不要改成兩層共用：Part 6 定了，拆成 `lib/DecayLookup`、`lib/NeuronUpdate`(見「Part 6」)。`WeightMemory` 在 Part 4 定了(見「Part 4 權重 BRAM」)。
 
 ### Part 1 訓練端匯出
 
@@ -220,7 +221,7 @@ ceil$。
         - 代價：tap 選擇沒有單獨的 testbench，`tb_weight_lookup` 裡照 SaltConv 的寫法選；RTL 那份由 `tb_salt_conv` 驗(K=1、3、4、5，S=1、2，沒有 K=7、S=3)。
     - 新的 lib 模組沿用名字 `NeuronMemory`(從 `conv/` 搬到 `lib/`)，port `clearing`、`clear_addr`、`write_enable`、`write_addr`、`write_word`、`read_enable`、`shift_enable`、`read_addr`、`read_word`。
     - 門檻 BRAM 沒有位址計算，SaltFC 直接例化 `lib/ReadOnlyMemory`。
-    - $t_{last}$ 兩個暫存器不在 Part 5，跟膜電位更新放 Part 6。
+    - $t_{last}$ 兩個暫存器不在 Part 5；2026-10-27 定放 Part 8(見 Part 6)。
 - 步驟：
 
 | 步驟 | 內容 | 狀態 |
@@ -266,7 +267,10 @@ ceil$。
 
 ### Part 6 膜電位更新
 
-- 提案(2026-10-27，等使用者回覆)：`conv/NeuronUpdate` 拆成兩個 lib 模組，conv、FC 共用。
+- 已定(2026-10-27)：`conv/NeuronUpdate` 拆成兩個獨立的 lib 模組，conv、FC 共用，兩層 top 都例化「衰減查表 + 膜電位更新」，只有份數不同。
+    - 不選「膜電位更新加參數、選內部算 ① 或外部接 $A$」：FC 那一份 ① 一定在 $n_{col}$ 份外面，衰減查表還是要獨立成模組，參數只是把它藏進 conv；port 不能照參數拿掉，兩種模式的 port 永遠都在，兩種模式都要測。
+    - 不選「FC 的 ① 寫在 SaltFC top」：① 會有兩份。
+    - ① 小也包模組：有減法、比較、ROM，照 Part 5「有邏輯才包模組」；lib 已經有 `WeightMemory` 這種大小的模組。
     - 起因：conv 每顆神經元有自己的 $t_{last}$，① 在 `NeuronUpdate` 裡每份各算；FC 整層共用 $t_{last}$，一列只要 1 份 ①，$n_{col}$ 顆共用。直接用 `NeuronUpdate`，FC 會多 $n_{col}-1$ 份衰減表；另寫一份 ②③④ 又跟 conv 重複。
 
 | 模組 | 內容 | conv 份數 | FC 份數 |
@@ -275,10 +279,39 @@ ceil$。
 | 膜電位更新 | ②③④，輸入 $A$、$\hat V$、$q$、門檻；C=2 的切點留在 ② 之後；加 spike 開關參數(FC 可關) | M×M | $n_{col}$ |
 
 - 拆的時候要一起處理：
-    - `salt_conv_impl.xdc` 用 `*neuron_update/rounded_product` 找乘法 DSP 設 `DONT_TOUCH`，階層、實例名變了要跟著改，腳本會檢查 8 顆都套上。
-    - `NeuronUpdate.sv` 裡使用者留的 reviewer 註解：$\Delta t$ 位寬是否用 $\Delta t_{\max}$ 決定，拆到衰減查表時一起討論。
+    - `salt_conv_impl.xdc` 用 `*neuron_update/rounded_product` 找乘法 DSP 設 `DONT_TOUCH`：實例名沿用 `neuron_update`、`rounded_product` 留在裡面，pattern 不用改，拆完確認 8 顆都套上。
     - FC 最後一列空位置的 fire 遮罩($y\cdot n_{col}+x<n_{out}$)在 SaltFC top 做，不放進模組。
-- 模組名稱、port 還沒定；定了方向之後再提。
+- 已定(2026-10-27)名稱、port：
+    - 衰減查表：新檔 `lib/DecayLookup.sv`，實例名 `decay_lookup`；參數 `TIME_WIDTH`、`DECAY_FRAC_WIDTH`、`DECAY_TABLE_DEPTH`、`DECAY_FILE`；輸入 `event_time`、`last_time`，輸出 `decay_code`(`DECAY_FRAC_WIDTH+1` 位元)。不叫 `DecayTable`：還有 $\Delta t$ 減法跟兩種特例，不只 ROM。
+    - 膜電位更新：`conv/NeuronUpdate.sv` 用 `git mv` 搬到 `lib/`，沿用名字跟實例名 `neuron_update`(同 Part 5 `NeuronMemory`)，xdc 的 `*neuron_update/rounded_product`、testbench 的階層路徑不用改。
+        - 拿掉 `TIME_WIDTH`、`DECAY_TABLE_DEPTH`、`DECAY_FILE`；留 `DECAY_FRAC_WIDTH`(乘積位寬、右移、round 加半格要用)。
+        - `last_time`、`event_time` 換成 `decay_code`，跟 `DecayLookup` 的輸出同名直接接。
+- 已定(2026-10-27)spike 開關：`NeuronUpdate` 加參數 `SPIKE_OUTPUT`(跟 SaltFC 同義同名)，關掉時 `spike` 固定 0、`new_membrane` 直接給 $\hat V'$，`threshold` 例化時接 0，比較器跟寫 0 的選擇器合成時修剪。
+    - 不選「模組只輸出 $\hat V'$，比門檻、寫 0 交給各層 top」：同一段邏輯兩份。
+    - 不選「模組不動，給到不了的門檻」：飽和版 $\hat V'$ 最大 $2^{w-1}-1$，$w$ 位元門檻沒有比它大的值。
+    - conv 理論上也可以不 fire(只累積膜電位)，所以 `NeuronUpdate` 不假設 conv 一定 fire。SaltConv 這次例化時傳 `1'b1`；SaltConv 自己要不要開 `SPIKE_OUTPUT` 見 D11。
+- 已定(2026-10-27)FC 的兩個時間暫存器(事件暫存器的 $t$、上一筆 $t$)跟每個管線位置帶的 $t$、$t_{last}$ 放 Part 8，寫在 SaltFC top：更新時機是最後一列推進那拍，屬於 Part 8 的推進規則，Part 6 寫了也接不上、測不到；conv 的事件暫存器、`pipe_time` 也在 SaltConv top。
+- Part 6 做完的樣子：`lib/DecayLookup.sv`、`lib/NeuronUpdate.sv` 兩個模組，SaltConv 每個 bank 例化這兩個(行為、時序不變)；SaltFC 仍然只有 parameter、port。
+- 做法(2026-10-27)：
+    - 新增 `lib/DecayLookup.sv`：① 整段從 `NeuronUpdate` 搬過來，邏輯、衰減表屬性不變；使用者的 reviewer 註解跟著 $\Delta t$ 搬過來。
+    - `conv/NeuronUpdate.sv` 用 `git mv` 搬到 `lib/`：拿掉 ①、`TIME_WIDTH`、`DECAY_TABLE_DEPTH`、`DECAY_FILE`，`last_time`、`event_time` 換成 `decay_code`，加 `SPIKE_OUTPUT`(generate 區塊 `fire`/`no_fire`)。
+    - `SaltConv.sv`：每個 bank 的 generate 區塊例化 `decay_lookup`(接 BRAM 讀出的 $t_{last}$、`pipe_time[R]`)再接 `neuron_update`，`SPIKE_OUTPUT` 傳 `1'b1`。
+    - `tb_neuron_update` 只測 lib 模組，照 Part 0 的資料夾規則搬到 lib：`sim_1/new/lib/tb_neuron_update.sv`、`sim_1/new/lib/ref/`、`scripts/lib/{gen_neuron_update_ref.py,run_tb_neuron_update.tcl}`。
+        - testbench 串 `DecayLookup` → `NeuronUpdate`，加參數 `SPIKE_OUTPUT`。
+        - 答案檔每行多一欄 $\hat V'$(`process_event` 不給門檻算的，訓練端不 fire 的層也是這樣呼叫，`salt_core/quant/scan.py` `_run_layer_scan`)；`SPIKE_OUTPUT = 0` 時比 `spike = 0`、`new_membrane` = $\hat V'$。
+        - 參數組：原本 8 組 × ROUND × SATURATE 都是 `SPIKE_OUTPUT = 1`，另加 8 組 × SATURATE 的 `SPIKE_OUTPUT = 0`(ROUND = 1；不 fire 只差在 fit 之後，繞回、飽和兩種就夠)，共 48 組。
+    - 正式專案 `.xpr` 用 batch `remove_files` 拿掉 `sources_1/new/conv/NeuronUpdate.sv`，`sim_neuron_update` 的 testbench 換成新路徑(`.xpr` 照慣例不 commit)。
+    - 文件：FC.md 第 3 節 ①②④ 記上用哪個 lib 模組、spike 開關就是 `SPIKE_OUTPUT`；`SaltConvDataflow.md`、`SaltConvSynthFlow.md` 的名稱跟著改。
+- 驗證(2026-10-27)：
+    - 重新產生的答案檔前 7 欄跟改動前(git HEAD)逐行相同(36 個檔)，衰減表檔逐檔相同。
+    - `tb_neuron_update` 48 組 ALL PASS。
+    - 反向測試：`SPIKE_OUTPUT = 0` 的寫回改成「到門檻寫 0」，只跑 spike 關的 6 組(conv2 繞回、飽和的 $w$ 跟一組人工參數 × SATURATE)，6 組全部 FAIL；還原後跟測過的版本相同。
+    - 合成後(布局前，兩層串接)跟 HEAD 比：繞回、飽和兩版的 `report_utilization` 除了日期、指令兩行逐行相同(LUT 1233、1231，FF 421，BRAM 8)，10 顆 BRAM 的 `DOA_REG`/`DOB_REG` 相同；xdc 的 `DONT_TOUCH` 套上 8/8 顆乘法 DSP。
+    - `tb_salt_conv_ready_high` R2C2 重疊 10 組、`tb_salt_conv_net_ready_high` 2 組 ALL PASS。`run_tb_salt_conv.tcl` 10 組的總結行都是 ALL PASS 之後，印總表的 `puts` 又報一次 `can not find channel named "stdout"`(exit 1，同交接「工具問題」那條)。
+    - 布局繞線 4.8 ns(使用者要求簡單確認)：繞回 +0.283 → +0.281、飽和 +0.254 → +0.205，兩版都過，最長路徑同一類(神經元 BRAM 讀出 → 計算第 1 級乘法 DSP)，見 `SaltConvSynthFlow.md`「現行 RTL：兩層串接」。
+    - WNS 比改動前小，改動前、改動後再各跑一次 4.6 ns：改動後繞回 +0.300(改動前 +0.065)、飽和 +0.344(改動前 +0.022)。兩個目標取最好的 FMAX：繞回 221.4 → 232.6 MHz、飽和 220.0 → 235.0 MHz。差距在同一份電路布局的變動範圍內，沒有變差。
+    - 合成腳本的跨層路徑改名：`conv1_output_to_conv2`(conv1 送 spike 事件給 conv2)、`conv2_ready_to_conv1`(conv2 反壓 conv1，沒有資料送回)。
+    - 沒做：`tb_salt_conv` 完整回歸。
 
 ### Part 11 串接比對
 
@@ -291,7 +324,6 @@ ceil$。
 |---|---|---|
 | D1 | 時序 C：`SpikeSelect` 改成看「窗裡排在我前面的有沒有 pending」，不轉讀的順序 | 整合後 5 ns 過不了才做 |
 | D2 | 時序 D：讀位址路徑(FIFO 最前面那筆 → 選這次要讀哪一筆 → `CandidateGrid` → BRAM 讀位址)；4.8 ns 量測裡 M=3 繞回、兩層串接飽和版的最長路徑就是這條 | 整合後 5 ns 過不了才做 |
-| D3 | `NeuronUpdate.sv:73` 的 reviewer 註解(用 `DECAY_TABLE_DEPTH` 決定 $\Delta t$ 的位寬) | 先留著 |
 | D4 | 讀取開關每拍都開，還是推進那一拍才開 | 之後討論 |
 | D5 | testbench 重整：`tb_salt_conv_common.svh` 的 `run_sample` 一個 task 混了驅動、交握檢查、涵蓋統計、拍數、比對 | 碰到要改 testbench 時一起處理 |
 | D6 | 上層攤平時 BRAM 輸出暫存器為什麼併不進去 | 換 Vivado 版本時再確認一次 |
@@ -299,6 +331,7 @@ ceil$。
 | D8 | 衰減表 ROM 的 LUT 用量($M\times M$ 份組合邏輯查表) | 吃太多再回頭檢討 |
 | D9 | `CandidateAxis` 的除法、`CandidateGrid` 的乘常數用 LUT 還是 DSP | 合成後看 utilization，必要時加 `USE_DSP="no"` |
 | D10 | FC 權重放 URAM | 延後，這一版用 BRAM |
+| D11 | SaltConv 開 `SPIKE_OUTPUT` 參數(conv 當不 fire 的層) | 有網路要用到時 |
 
 - D4：
     - 每拍都開：讀取開關不用等推進的判斷，量起來稍快(時脈多 0.5~4 MHz，接近布局繞線的變動範圍)；卡住的拍子($k\ge2$、`out_ready=0`)、$R=2$ 等資料的拍子會白讀記憶體，多耗電。
@@ -308,6 +341,7 @@ ceil$。
 - D6：現在靠 `keep_hierarchy = "soft"` 加上每次合成檢查 `DOB_REG` 確認；Vivado 內部原因 log 跟官方文件都沒寫，查不到(vivado-usage skill 第 10 節)。
 - D7：要先解決 `MEMORY_INIT_FILE` 只能給檔名、不能帶路徑的問題(權重檔改成不重複的檔名、加進專案，訓練端匯出的命名可能也要改)；XPM 也要求記憶體至少 2 個字。
 - D10：URAM 不能帶初始值，權重要在執行時寫入。
+- D11：只開參數不夠，SaltConv 不 fire 就沒有任何輸出，要跟 FC 一樣加膜電位輸出埠才有用；`NeuronUpdate` 在 Part 6 已經支援。
 
 ## 待決事項
 
@@ -322,7 +356,7 @@ ceil$。
 - µs 換 ms：用 floor，$t=\lfloor t_{\mu s}/1000\rfloor$，跟訓練端相同。放在轉接模組裡還是另開一個模組還沒定。
 - 時間戳記繞回：連續事件流的時間戳記到 $2^{\texttt{TIME\_WIDTH}}$ ms 會繞回，之後 $\Delta t=t-t_{last}$ 會算錯。
     - 怎麼處理還沒討論；跟神經元記憶體清除是兩件事。
-    - `NeuronUpdate` 現在用 `TIME_WIDTH` 位元無號減法算 $\Delta t$，不替繞回做決定。
+    - `DecayLookup` 現在用 `TIME_WIDTH` 位元無號減法算 $\Delta t$，不替繞回做決定。
 - 輸出層乘 $s_i$：$\text{score}_i=\hat V[i]\cdot s_i$ 是整個推論唯一的浮點運算。
     - 2026-10-22 定：不放在 FC 層裡。FC 只提供膜電位輸出(FC.md 第 6 節)，乘 $s_i$、argmax 由層外另外寫的模組處理，那個模組還沒設計；放 FPGA 內還是外部還沒定。
 - 跟 `ps_host_if` 替換模組要不要融合：等兩邊資源用量(BRAM、LUT、功耗)出來再決定。
@@ -408,7 +442,7 @@ ceil$。
 - 門檻 $\hat v_{th}[o_c]$：逐 output channel 一份(per-channel 權重量化下每個 channel 不同)。載入後是編譯期常數，合成成 mux，不另外配置記憶體。
     - FC 每顆神經元一個門檻，用 BRAM(FC.md 第 2 節「門檻」)。
 - 衰減表 $A[\Delta t]$：兩版共用同一張，深度 $\Delta t_{\max}=75$，每格 $f_a=6$ bits 無號，值 $60,56,53,\dots,1$。
-    - conv 同一拍 $M\times M$ 個候選各自查，`NeuronUpdate` 每份各帶一張 LUT ROM。
+    - conv 同一拍 $M\times M$ 個候選各自查，`DecayLookup` 每份各帶一張 LUT ROM。
     - FC 整層共用一個 $\Delta t$，只要 1 份(FC.md 第 3 節 ①)。
 
 ### 輸入 FIFO(`EventFIFO`)

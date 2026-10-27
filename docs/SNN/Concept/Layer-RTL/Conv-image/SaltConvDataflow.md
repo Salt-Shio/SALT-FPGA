@@ -10,7 +10,7 @@
 | 2 | 下一個 o_c 是誰、讀位址、讀取開關、`last_read_out_channel` |
 | 3 | 下一個 o_c 碰到哪些神經元(CandidateGrid) |
 | 4 | 管線位置 1..L:每個位置一份那個 o_c 的候選、時間、o_c、valid |
-| 5 | 讀出、算、寫回：權重、門檻、NeuronMemory + NeuronUpdate |
+| 5 | 讀出、算、寫回：權重、門檻、NeuronMemory + DecayLookup + NeuronUpdate |
 | 6 | 送出、還有沒有剩、停不停、讀不讀 |
 
 R 是讀取延遲，C 是計算級數,L = R + C − 1 是管線位置的個數。o_c 的讀位址送出後第 p 拍在位置 p:位置 R 資料出來、算計算前一半，位置 L 算後一半、寫回、送出(C=1 時兩個是同一個位置)。
@@ -45,7 +45,7 @@ flowchart TD
 
     subgraph POSR["位置 R:資料出來"]
         TAP["每個 bank 選 tap(第 5 段)<br/>用 pipe_tap[R] 從整組權重挑"]
-        STEP1["計算前一半(NeuronUpdate ①②)<br/>時間間隔、查衰減表、乘法捨回<br/>時間用 pipe_time[R]"]
+        STEP1["計算前一半(DecayLookup ①、NeuronUpdate ②)<br/>時間間隔、查衰減表、乘法捨回<br/>時間用 pipe_time[R]"]
     end
 
     subgraph POSL["位置 L:最後一個位置"]
