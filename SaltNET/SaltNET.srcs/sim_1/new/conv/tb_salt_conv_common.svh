@@ -322,7 +322,7 @@
 		end
 		-> read_check_request;
 		#1;
-		weight_truth = dut.weight_memory.rom[out_channel_sent * IN_CHANNELS + in_channel_sent];
+		weight_truth = dut.weight_memory.memory_array.rom[out_channel_sent * IN_CHANNELS + in_channel_sent];
 		if (dut.kernel_word !== weight_truth) begin
 			report_error($sformatf("%s 權重讀錯:o_c=%0d c=%0d used=%h truth=%h", where,
 			                       out_channel_sent, in_channel_sent, dut.kernel_word, weight_truth));

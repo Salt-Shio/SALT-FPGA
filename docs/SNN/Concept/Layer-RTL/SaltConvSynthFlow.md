@@ -70,7 +70,7 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_c
 | `NeuronUpdate` | 衰減表 `rom_style = "distributed"` | 用 LUT 查表，$M\times M$ 份同一拍各查各的 |
 | `EventFIFO` | `ram_style = "distributed"` | 用 LUT 當記憶體 |
 | `NeuronMemoryArray` | `ram_style = "block"`、模組 `keep_hierarchy = "soft"` | 神經元記憶體用 BRAM；保留模組邊界，$R=2$ 的第二級才併得進 BRAM 輸出暫存器(vivado-usage skill 第 10 節) |
-| `WeightMemory` | `rom_style = "block"`、模組 `keep_hierarchy = "soft"` | 權重用 BRAM，原因同上 |
+| `ReadOnlyMemory`(`WeightMemory` 例化) | `rom_style = "block"`、模組 `keep_hierarchy = "soft"` | 權重用 BRAM，原因同上；位址計算留在 `WeightMemory`，不框進去 |
 
 ## 約束
 
@@ -157,14 +157,17 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_c
 - 2026-10-21 之前(Part 7~8.x 前半)的時脈都是舊做法：固定 10 ns 目標、單次，用 $1000/(10-\text{WNS})$ 換算，偏低、單組有 ±10~20 MHz 的變動，只能看大方向。
 - 每項的完整過程(實驗設計、每組數字、反向測試)在 commit `dc9b22a` 版本的 [TODO](../../Todo/csnn_pl_implementation_todo.md)，各 Part 的段落。
 
-### 現行 RTL：兩層串接(這支腳本，4.8 ns，2026-10-22)
+### 現行 RTL：兩層串接(這支腳本，4.8 ns，2026-10-25)
 
 | 版本 | WNS | 最長路徑 | conv1 → conv2 | conv2 → conv1 | LUT | FF | BRAM | DSP |
 |---|---|---|---|---|---|---|---|---|
-| 繞回 | +0.213 | conv2 內：計算第 1 級(到 DSP 的切點) | +0.553 | +1.149 | 1260(1.08%) | 668(0.29%) | 8(5.56%) | 8(0.64%) |
-| 飽和 | +0.131 | conv2 內：FIFO 讀指標 → BRAM 讀位址 | +0.358 | +1.452 | 1282(1.09%) | 655(0.28%) | 8(5.56%) | 8(0.64%) |
+| 繞回 | +0.319 | conv1 內：神經元 BRAM 讀出 → 計算第 1 級(到 DSP 的切點) | +0.898 | +1.292 | 1243(1.06%) | 421(0.18%) | 8(5.56%) | 8(0.64%) |
+| 飽和 | +0.128 | conv1 內：乘法 DSP 輸出 → 神經元 BRAM 的 `ENBWREN` | +0.454 | +1.990 | 1290(1.10%) | 679(0.29%) | 8(5.56%) | 8(0.64%) |
 
 - 8 顆乘法 DSP 都套上 `DONT_TOUCH`(PSIP 摘要表 DSP Register 列 Dont Touch 8)。百分比的分母是 xck26 整顆。
+- 這次是權重 ROM 搬到 `lib/ReadOnlyMemory` 之後(SaltFC Part 4a)。合成後(布局前)的 LUT、FF、BRAM、DSP 跟每顆 BRAM 的 `DOA_REG`/`DOB_REG` 跟搬之前完全相同。
+    - 搬之前(2026-10-22)：繞回 +0.213、FF 668；飽和 +0.131、FF 655。
+    - FF 數不同，是因為布局時 BRAM register optimization 搬出的神經元 BRAM 輸出暫存器數量不同：繞回版搬之前 8 顆(232 個 FF)、搬之後 0 顆(布局估計沒有違規，沒有做)；飽和版 7 顆 → 8 顆。cell 名稱變了(權重 BRAM 多一層 `memory_array/`)，布局的結果就會不同。
 - 層與層之間兩條都不是最長路徑：
     - conv1 → conv2：起點 conv1 的 `cut_after_step2` 暫存器，終點 conv2 FIFO 的 `full`、`empty`、寫指標、distributed RAM 的 WE。
     - conv2 → conv1：起點 conv2 的 `full` 或 `clearing` 暫存器，終點 conv1 的 BRAM 讀取開關、管線暫存器的 CE。

@@ -12,7 +12,7 @@
 
 - Conv 層 `SaltConv` 完成(Part 0~9，2026-10-05 ~ 10-22)。
     - conv1 → conv2 串接(`SaltConvNet`)的輸出、兩層最終狀態跟訓練端逐位元相同。
-    - 目標時脈 5 ns(200 MHz)：4.8 ns 下繞回、飽和兩版都過(+0.213、+0.131 ns)。
+    - 目標時脈 5 ns(200 MHz)：4.8 ns 下繞回、飽和兩版都過(+0.319、+0.128 ns，2026-10-25 SaltFC Part 4a 之後)。
     - 量測結果、合成流程見 [`SaltConvSynthFlow.md`](../Concept/Layer-RTL/SaltConvSynthFlow.md)。
     - 各 Part 的完整過程(定案討論、反向測試)在 commit `dc9b22a` 版本的這份 TODO。
 - Vivado 專案 `SaltNET/`(2026-10-24 從 `SaltConv/` 改名，見 Part 0)：
@@ -28,13 +28,11 @@
 
 ## 交接(2026-10-25)
 
-- SaltFC Part 0、1 完成(Part 1 的驗證結果見下面「Part 1 訓練端匯出」)。
-- SaltFC Part 2(介面)寫完 `fc/SaltFC.sv`，只有 parameter、port，本體是空的。驗證(細節見「Part 2 介面」)：
-    - non-project `synth_design -rtl` 跑 4 組參數，每個 port 的位元數都跟預期相同；唯一的 warning 是 `Synth 8-3330`(本體是空的)。
+- SaltFC Part 0~3 完成。
+- SaltFC Part 4a(conv 權重 ROM 改用 `lib/ReadOnlyMemory`)完成(細節見下面「Part 4 權重 BRAM」)。
 - 下一步：
-    - Part 2 使用者確認，標完成。
-    - Part 3 跟使用者確認直接用 `lib/EventFIFO`(寬 `TIME_WIDTH + IN_NEURON_WIDTH`，寫入 `{in_time, in_neuron}`；清除期間擋寫入由 SaltFC 做，跟 SaltConv 一樣)，標完成。
-    - SaltFC Part 4(權重 BRAM)，先規劃給使用者確認。
+    - 4b(`fc/FCWeightMemory` 與 `tb_fc_weight_lookup`)。
+    - 正式專案的 `.xpr` 還沒登記 `lib/ReadOnlyMemory.sv`(4a 的模擬在專案副本上跑)：下次跑任何 `run_tb_*.tcl` 時 `sim_common.tcl` 會自動加；GUI 要先關掉，或在 GUI 的 Tcl Console 執行 `add_files` 加進 `sources_1`。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
     - 從 Git Bash 呼叫 `wsl` 時，`/mnt/c/...` 會被 MSYS 轉成 Windows 路徑，要加 `MSYS_NO_PATHCONV=1`。
@@ -58,7 +56,7 @@
 | 1 | 訓練端匯出 FC 的權重、門檻、衰減表 | 第 2 節、第 3 節 ① | 完成 |
 | 2 | 介面規格(parameter、port) | 第 1、6 節 | 完成 |
 | 3 | 輸入 FIFO:直接用 `lib/EventFIFO`，不寫新模組，例化在 Part 8 | 第 1 節 | 完成 |
-| 4 | 權重 BRAM | 第 2 節「權重」 | 未開始 |
+| 4 | 權重 BRAM：4a conv 權重 ROM 改用 lib 通用 ROM；4b FC 權重查表 | 第 2 節「權重」 | 4a 完成；4b 進行中 |
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 未開始 |
 | 6 | 膜電位更新 | 第 3 節 | 未開始 |
 | 7 | spike 選擇與輸出(優先權編碼器、bitmask) | 第 4 節 | 未開始 |
@@ -100,7 +98,7 @@
     - `tb_event_fifo`：參數改成 `parameter`，總結行改成共用格式，新增 `scripts/lib/run_tb_event_fifo.tcl`。
     - testbench 參數預設值(GUI 單組模擬用的相對路徑)、答案腳本、合成腳本裡的 `SaltConv.srcs` 改成 `SaltNET.srcs`。
 - 還要定的：
-    - `NeuronUpdate`(每顆自己算 $\Delta t$，FC 整層共用一個)、`WeightMemory`(位址是 conv 的 $(o_c,c)$)要不要改成兩層共用：到 SaltFC Part 4、6 設計時再看。
+    - `NeuronUpdate`(每顆自己算 $\Delta t$，FC 整層共用一個)要不要改成兩層共用：到 SaltFC Part 6 設計時再看。`WeightMemory` 在 Part 4 定了(見「Part 4 權重 BRAM」)。
 
 ### Part 1 訓練端匯出
 
@@ -137,6 +135,23 @@
 | $w=11$、$n_{col}=10$、spike 關、膜電位開 | 11 | 4 | 110 |
 
 - 時間 port 都是 16 位元，`valid`/`ready`、`clk`、`rst_n` 都是 1 位元。
+
+### Part 4 權重 BRAM
+
+- 已定(2026-10-25)：做法 A，唯讀 ROM 收成 `lib/ReadOnlyMemory`(參數只有深度、寬度、$R$、檔名，位址從外面給)，conv 權重、FC 權重、FC 門檻(Part 5)共用。
+    - 不選 B(lib ROM 只給 FC，conv 不動)、C(FC 自己一份)：同一段 ROM 會重複兩、三份。
+    - conv 的 `WeightMemory` 只留位址計算 $o_c\cdot C+c$；`keep_hierarchy = "soft"` 跟 `NeuronMemoryArray` 一樣只框陣列跟讀出暫存器。
+    - 分兩步：4a 先讓 conv 改用 lib ROM、證明行為跟時序沒變，4b 才做 FC。
+- 4a 做法(2026-10-25)：
+    - 新增 `lib/ReadOnlyMemory.sv`；`conv/WeightMemory.sv` 改成算位址 + 例化 `ReadOnlyMemory`(實例名 `memory_array`)。
+    - `tb_salt_conv_common.svh` 讀權重真值的階層路徑改成 `dut.weight_memory.memory_array.rom`。
+- 4a 驗證(2026-10-25)：
+    - 模擬(專案副本，GUI 開著)：`tb_weight_lookup` 9 組、`tb_salt_conv_ready_{high,random,burst,alternate}` 各 70 組、`tb_salt_conv_net_ready_{high,random,burst}` 各 2 組，全部 ALL PASS。
+    - 合成後(布局前)：兩版的 LUT、FF、BRAM、DSP，跟 10 顆 BRAM 的 `DOA_REG`/`DOB_REG`，跟改動前完全相同(改動前的 RTL 從 git HEAD 取出，同一支檢查腳本各跑一次)。
+    - 布局繞線 4.8 ns：繞回 +0.213 → +0.319、飽和 +0.131 → +0.128，兩版都過；FF 數的差異是布局時搬出的 BRAM 輸出暫存器數量不同，見 `SaltConvSynthFlow.md`「現行 RTL：兩層串接」。
+    - 碰到的工具問題：
+        - 飽和版第一次合成在 `opt_design` 報 `[Synth 20-411]`(訊息空白，模擬同時在跑)，單獨重跑就過，同 vivado-usage skill 第 11 節。
+        - 專案副本放在 agent 的暫存目錄(路徑約 140 字元)時，模擬集名稱長的幾支 elaborate 報 `XSIM 43-3409 Failed to compile generated C file`：xsim 的 `.obj` 路徑 260 字元以上的都失敗，258 以下的都過(Windows MAX_PATH)。副本改放 `C:/Users/salt/AppData/Local/Temp/s4a/` 重跑就過。`ready_burst` 還碰到一次讀 `simulate.log` 的 `open` 失敗(偶發，同上)。
 
 ### Part 11 串接比對
 
