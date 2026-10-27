@@ -300,7 +300,7 @@ ceil$。
         - testbench 串 `DecayLookup` → `NeuronUpdate`，加參數 `SPIKE_OUTPUT`。
         - 答案檔每行多一欄 $\hat V'$(`process_event` 不給門檻算的，訓練端不 fire 的層也是這樣呼叫，`salt_core/quant/scan.py` `_run_layer_scan`)；`SPIKE_OUTPUT = 0` 時比 `spike = 0`、`new_membrane` = $\hat V'$。
         - 參數組：原本 8 組 × ROUND × SATURATE 都是 `SPIKE_OUTPUT = 1`，另加 8 組 × SATURATE 的 `SPIKE_OUTPUT = 0`(ROUND = 1；不 fire 只差在 fit 之後，繞回、飽和兩種就夠)，共 48 組。
-    - 正式專案 `.xpr` 用 batch `remove_files` 拿掉 `sources_1/new/conv/NeuronUpdate.sv`，`sim_neuron_update` 的 testbench 換成新路徑(`.xpr` 照慣例不 commit)。
+    - 正式專案 `.xpr` 用 batch `remove_files` 拿掉 `sources_1/new/conv/NeuronUpdate.sv`，`sim_neuron_update` 的 testbench 換成新路徑。
     - 文件：FC.md 第 3 節 ①②④ 記上用哪個 lib 模組、spike 開關就是 `SPIKE_OUTPUT`；`SaltConvDataflow.md`、`SaltConvSynthFlow.md` 的名稱跟著改。
 - 驗證(2026-10-27)：
     - 重新產生的答案檔前 7 欄跟改動前(git HEAD)逐行相同(36 個檔)，衰減表檔逐檔相同。
@@ -388,7 +388,7 @@ ceil$。
     - 多組參數一律用 batch 模式跑；從 GUI 的 Tcl Console 跑，連續 elaborate 會不定時出現 `Spawn failed`。
     - 一個 Vivado session 只跑一個模擬集：第二個會沿用第一個的檔案清單(vivado-usage skill 8.8)。多支 testbench 由 `run_testbenches_in_children` 每支開一個子 Vivado。
     - 同一個專案一次只跑一支：多個 Vivado 同時開 `.xpr` 跑模擬會互相改寫專案檔。non-project 的合成不碰 `.xpr`，可以跟模擬同時跑。
-    - 跑完 `.xpr` 會留下作用中的模擬集、generic 這些改動，commit 時不放，`git checkout` 還原。
+    - 跑完 `.xpr` 會留下作用中的模擬集、generic 這些改動，直接跟著 commit，不還原(2026-10-27 改：還原會讓 repo 裡的 `.xpr` 留著搬走的舊路徑)。
     - `run_tb_salt_conv.tcl` 只跑部分參數組時，`-tclargs` 加 `NAME:value` 條件(例：`OUT_CHANNELS:1`)。
     - GUI 只用來跑 testbench 預設參數的單組模擬、看波形；GUI 開著時在專案副本上跑，不要動正式專案的 `.xpr`。
 - Vivado 的已知陷阱記在本機的 `.claude/skills/vivado-usage/SKILL.md`(不進 repo)。從 agent 的 shell 跑 Vivado 要先 `env -u NoDefaultCurrentDirectoryInExePath`(8.6)。

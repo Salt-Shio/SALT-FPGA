@@ -59,7 +59,7 @@
     <Option Name="IPStaticSourceDir" Val="$PIPUSERFILESDIR/ipstatic"/>
     <Option Name="EnableBDX" Val="FALSE"/>
     <Option Name="DSABoardId" Val="kv260_som"/>
-    <Option Name="WTXSimLaunchSim" Val="758"/>
+    <Option Name="WTXSimLaunchSim" Val="894"/>
     <Option Name="WTModelSimLaunchSim" Val="0"/>
     <Option Name="WTQuestaLaunchSim" Val="0"/>
     <Option Name="WTIesLaunchSim" Val="0"/>
@@ -90,6 +90,14 @@
   <FileSets Version="1" Minor="32">
     <FileSet Name="sources_1" Type="DesignSrcs" RelSrcDir="$PSRCDIR/sources_1" RelGenDir="$PGENDIR/sources_1">
       <Filter Type="Srcs"/>
+      <File Path="$PSRCDIR/sources_1/new/fc/SaltFC.sv">
+        <FileInfo>
+          <Attr Name="AutoDisabled" Val="1"/>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
       <File Path="$PSRCDIR/sources_1/new/conv/CandidateAxis.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
@@ -104,6 +112,13 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
+      <File Path="$PSRCDIR/sources_1/new/lib/DecayLookup.sv">
+        <FileInfo>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
       <File Path="$PSRCDIR/sources_1/new/lib/EventFIFO.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
@@ -111,7 +126,7 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
-      <File Path="$PSRCDIR/sources_1/new/conv/NeuronMemory.sv">
+      <File Path="$PSRCDIR/sources_1/new/lib/NeuronMemory.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
@@ -132,7 +147,14 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
-      <File Path="$PSRCDIR/sources_1/new/conv/NeuronUpdate.sv">
+      <File Path="$PSRCDIR/sources_1/new/lib/NeuronUpdate.sv">
+        <FileInfo>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="implementation"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PSRCDIR/sources_1/new/lib/ReadOnlyMemory.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
@@ -153,14 +175,7 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
-      <File Path="$PSRCDIR/sources_1/new/conv/WeightMemory.sv">
-        <FileInfo>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="UsedIn" Val="implementation"/>
-          <Attr Name="UsedIn" Val="simulation"/>
-        </FileInfo>
-      </File>
-      <File Path="$PSRCDIR/sources_1/new/conv/WeightTapSelect.sv">
+      <File Path="$PSRCDIR/sources_1/new/lib/WeightMemory.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
@@ -405,7 +420,7 @@
     </FileSet>
     <FileSet Name="sim_neuron_update" Type="SimulationSrcs" RelSrcDir="$PSRCDIR/sim_neuron_update" RelGenDir="$PGENDIR/sim_neuron_update">
       <Filter Type="Srcs"/>
-      <File Path="$PSRCDIR/sim_1/new/conv/tb_neuron_update.sv">
+      <File Path="$PSRCDIR/sim_1/new/lib/tb_neuron_update.sv">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
@@ -437,7 +452,7 @@
         <Option Name="LogicalNoCTopLib" Val=""/>
         <Option Name="Dmv" Val=""/>
         <Option Name="xsim.simulate.runtime" Val="-all"/>
-        <Option Name="xsim.simulate.xsim.more_options" Val="-testplusarg REF_DIR=D:/Project/SALT-FPGA/SaltNET/SaltNET.srcs/sim_1/new/conv/ref"/>
+        <Option Name="xsim.simulate.xsim.more_options" Val="-testplusarg REF_DIR=D:/Project/SALT-FPGA/SaltNET/SaltNET.srcs/sim_1/new/lib/ref"/>
       </Config>
     </FileSet>
     <FileSet Name="sim_spike_select" Type="SimulationSrcs" RelSrcDir="$PSRCDIR/sim_spike_select" RelGenDir="$PGENDIR/sim_spike_select">
