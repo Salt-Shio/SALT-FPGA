@@ -29,17 +29,16 @@
 ## 交接(2026-10-25)
 
 - SaltFC Part 0~3 完成。
-- SaltFC Part 4a(conv 權重 ROM 改用 `lib/ReadOnlyMemory`)完成(細節見下面「Part 4 權重 BRAM」)。
-- 下一步：
-    - 4b(`fc/FCWeightMemory` 與 `tb_fc_weight_lookup`)。
-    - 正式專案的 `.xpr` 還沒登記 `lib/ReadOnlyMemory.sv`(4a 的模擬在專案副本上跑)：下次跑任何 `run_tb_*.tcl` 時 `sim_common.tcl` 會自動加；GUI 要先關掉，或在 GUI 的 Tcl Console 執行 `add_files` 加進 `sources_1`。
+- SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
+- 下一步：規劃 Part 5(神經元 BRAM、門檻 BRAM、清除)。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
     - 從 Git Bash 呼叫 `wsl` 時，`/mnt/c/...` 會被 MSYS 轉成 Windows 路徑，要加 `MSYS_NO_PATHCONV=1`。
     - agent 的 Bash 工具用 heredoc 餵 Python 時，`\\` 會被吃掉一個；含反斜線的替換腳本改用檔案寫。
     - `wsl bash -lc "..."` 裡的 `\$變數` 到 WSL 那邊是空的；有迴圈、變數的指令寫成 `.sh` 檔再 `wsl bash <檔案>`。
     - 訓練端在 WSL 跑匯出、測試時 GPU 可能被別的程式佔滿(JAX 會印一串 `CUDA_ERROR_OUT_OF_MEMORY`)；這些都不用 GPU，加 `JAX_PLATFORMS=cpu`。直接跑 `.py` 要加 `PYTHONPATH=.`,`python -m` 不用。
-    - `run_tb_neuron_memory.tcl` 9 組 ALL PASS 之後，印結果的 `puts` 報 `can not find channel named "stdout"`，exit 1；同一個 `puts` 在其他腳本都正常，原因查不到。`run_tb_salt_conv.tcl` 的 `ready_alternate` 第 3 組也碰到類似的事：模擬跑完，讀 `simulate.log` 的 `open` 失敗、錯誤訊息是空的。兩支單獨重跑都 ALL PASS，當偶發處理。
+    - `run_tb_neuron_memory.tcl` 9 組 ALL PASS 之後，印結果的 `puts` 報 `can not find channel named "stdout"`，exit 1；同一個 `puts` 在其他腳本都正常，原因查不到。`run_tb_salt_conv.tcl` 的 `ready_alternate` 第 3 組也碰到類似的事：模擬跑完，讀 `simulate.log` 的 `open` 失敗、錯誤訊息是空的。兩支單獨重跑都 ALL PASS，當偶發處理。2026-10-27 `run_tb_fc_weight_lookup.tcl`、`run_tb_weight_lookup.tcl` 各碰到一次 `stdout` 那個(各組的總結行都是 ALL PASS，只有最後印總表的 `puts` 失敗)；網路上查不到 Vivado 的說明。
+    - 2026-10-27 `tb_salt_conv_net_ready_burst` 第一次 elaborate 報 `Spawn failed: %1 不是有效的 Win32 應用程式`(vivado-usage skill 8.7)，單獨重跑就過。
 
 ## SaltFC
 
@@ -56,7 +55,7 @@
 | 1 | 訓練端匯出 FC 的權重、門檻、衰減表 | 第 2 節、第 3 節 ① | 完成 |
 | 2 | 介面規格(parameter、port) | 第 1、6 節 | 完成 |
 | 3 | 輸入 FIFO:直接用 `lib/EventFIFO`，不寫新模組，例化在 Part 8 | 第 1 節 | 完成 |
-| 4 | 權重 BRAM：4a conv 權重 ROM 改用 lib 通用 ROM；4b FC 權重查表 | 第 2 節「權重」 | 4a 完成；4b 進行中 |
+| 4 | 權重 BRAM：4a conv 權重 ROM 改用 lib 通用 ROM；4b 權重位址兩層共用 `lib/WeightMemory`、FC 權重查表 | 第 2 節「權重」 | 完成 |
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 未開始 |
 | 6 | 膜電位更新 | 第 3 節 | 未開始 |
 | 7 | spike 選擇與輸出(優先權編碼器、bitmask) | 第 4 節 | 未開始 |
@@ -75,7 +74,8 @@
     - 一個 Vivado 專案，從 `SaltConv` 改名 `SaltNET`，底下分 SaltConv、SaltFC 兩部分。
         - 不選兩個專案：Part 11 三層串接要在同一個地方模擬、合成，不用跨專案拉檔案。代價是同一個專案一次只跑一支模擬，這個限制現在本來就有。
     - RTL 放 `SaltNET.srcs/sources_1/new/` 底下四個資料夾：
-        - `lib/`：跟層無關的通用模組，先放 `EventFIFO`、`NeuronMemoryArray`、`NeuronMemoryClear`(參數只有寬度、深度、`READ_LATENCY`)。
+        - `lib/`：跟層無關的通用模組，先放 `EventFIFO`、`NeuronMemoryArray`、`NeuronMemoryClear`(參數只有寬度、深度、`READ_LATENCY`)；Part 4 加了 `ReadOnlyMemory`、`WeightMemory`。
+            - 依賴方向(2026-10-27)：lib 可以用 lib，conv、fc 可以用 lib，lib 不用 conv、fc。第一個例子是 `WeightMemory` 例化 `ReadOnlyMemory`，跟 XPM 的 `xpm_memory_sprom` 例化 `xpm_memory_base` 同一種分法。
         - `conv/`：SaltConv 專用。
         - `fc/`：SaltFC 專用。
         - `net/`：多層串接的頂層，`SaltConvNet`、之後的三層串接。
@@ -152,6 +152,54 @@
     - 碰到的工具問題：
         - 飽和版第一次合成在 `opt_design` 報 `[Synth 20-411]`(訊息空白，模擬同時在跑)，單獨重跑就過，同 vivado-usage skill 第 11 節。
         - 專案副本放在 agent 的暫存目錄(路徑約 140 字元)時，模擬集名稱長的幾支 elaborate 報 `XSIM 43-3409 Failed to compile generated C file`：xsim 的 `.obj` 路徑 260 字元以上的都失敗，258 以下的都過(Windows MAX_PATH)。副本改放 `C:/Users/salt/AppData/Local/Temp/s4a/` 重跑就過。`ready_burst` 還碰到一次讀 `simulate.log` 的 `open` 失敗(偶發，同上)。
+- 4b 已定(2026-10-27)：
+    - 權重位址兩層同一個算法：外層編號 × 內層數量 + 事件編號(conv $o_c\cdot C+c$，FC $y\cdot n_{in}+	ext{src}$)，每拍用組合邏輯算。
+        - 比過另一種：位址存在暫存器，新事件時放事件編號、之後每拍加內層數量，加法器不在輸入 FIFO → 讀位址的路徑上。
+        - 單獨量 FC 讀取這一段(`EventFIFO` → 位址 → `ReadOnlyMemory`，實際參數，4.8 ns，$R=1$、$2$ 結果相同；量測 RTL 沒進 repo)：
+
+| | 每拍算(選這個) | 位址暫存器 |
+|---|---|---|
+| 繞線後 WNS | +2.275 ns | +2.419 ns |
+| 最長路徑 | 2.066 ns：FIFO 讀指標 → LUT 記憶體 → 2 段 CARRY8 → LUT → BRAM 位址 | 1.934 ns：FIFO 讀指標 → LUT 記憶體 → LUT → BRAM 位址 |
+| LUT / FF / BRAM | 34 / 23 / 3.5 | 35 / 24 / 3.5 |
+
+        - 差 0.13 ns，在單次 ±0.2 ns 的變動內。選每拍算：位址只看兩個輸入，不用處理新事件、停住；conv 的 $C$(2、8)是 2 的次方，這個算法沒有邏輯，conv 不用改。
+        - Part 12 量整個 FC 時這條路徑如果卡住，再把 `WeightMemory` 改成位址暫存器的算法，兩層一起換。
+    - 位址計算收成 `lib/WeightMemory`，conv、FC 共用：
+        - 不拆成 `ConvWeightMemory`、`FCWeightMemory`：算法一樣，兩份內容相同。
+        - 不在各層 top 各寫一次：算式單獨測不到，FC 要到 Part 8 才驗得到。
+        - 參數 `IN_INDEX_WIDTH`、`IN_COUNT`、`OUT_COUNT`、`WORD_WIDTH`、`READ_LATENCY`、`WEIGHT_FILE`；port `out_index`(conv $o_c$、FC $y$)、`in_index`(conv $c$、FC $	ext{src}$)、`read_word`。
+        - `IN_INDEX_WIDTH` 開成參數：conv 的 `IN_CHANNEL_WIDTH` 由上游決定，不一定等於 $\lceil\log_2 C
+ceil$。
+    - 寬字切段放各層 top：
+        - conv 照舊用 `WeightTapSelect`：依 tap 選、要檢查範圍，不是固定切段。
+        - FC 在 SaltFC 每行的 generate 區塊裡切第 $x$ 段；$\hat V$、門檻的寬字也在同一個區塊切。SaltFC 本體到 Part 8 才寫，切段跟著寫。
+    - 原本做的 `fc/FCWeightMemory`(位址由上層算、模組裡切段)沒 commit，刪掉。
+- 4b 做法(2026-10-27)：
+    - `conv/WeightMemory.sv` 用 `git mv` 搬到 `lib/`，改成上面的參數、port；`SaltConv`、`tb_weight_lookup` 跟著改。實例名 `weight_memory`、`memory_array` 不變，`tb_salt_conv_common.svh` 的階層路徑不用改。
+    - 正式專案 `.xpr` 用 batch `remove_files` 拿掉舊路徑；新路徑、`lib/ReadOnlyMemory.sv` 由 `sim_common.tcl` 加進去了。
+    - `sim_1/new/fc/tb_fc_weight_lookup.sv`：例化 `lib/WeightMemory`(FC 參數)，送 $(y,	ext{src})$，在 testbench 裡照 SaltFC 的切法切段，窮舉比對 $n_{col}$ 個權重碼(含最後一列補 0 的位置)。
+    - `scripts/fc/gen_fc_weight_lookup_ref.py`：答案直接從 $q$ 算，不經過權重檔的打包；權重檔用訓練端 `fc_weight_lines` 寫，跟答案放在 `sim_1/new/fc/ref/`(實際參數的也放這裡，不放 `sources_1/mem/`，見 Part 1)。讀量化資料夾、隨機 $q$ import `scripts/conv/gen_weight_lookup_ref.py` 的 `trained_q`、`synthetic_q`。
+    - `scripts/fc/run_tb_fc_weight_lookup.tcl`：參數組 $(n_{in},n_{out},n_{col},b,R)$。
+- 4b 驗證(2026-10-27，正式專案，GUI 已關)：
+    - `tb_fc_weight_lookup` 的參數組：
+
+| $n_{in}$ | $n_{out}$ | $n_{col}$ | $b$ | $R$ | 情況 | 比對數 |
+|---|---|---|---|---|---|---|
+| 1296 | 10 | 4 | 7 | 1、2 | 實際參數 | 各 15552 |
+| 7 | 5 | 1 | 7 | 1 | 一個位址一個碼 | 35 |
+| 7 | 10 | 3 | 9 | 2 | 最後一列補 2 格 0、寬字 27 bits | 84 |
+| 5 | 3 | 4 | 4 | 1 | $n_{col}>n_{out}$，只有一列 | 20 |
+| 1 | 1 | 1 | 4 | 2 | 深度 1、位寬下限 | 1 |
+
+    - 模擬：`tb_fc_weight_lookup` 6 組、`tb_weight_lookup` 9 組、`tb_salt_conv_ready_{high,random,burst,alternate}` 各 70 組、`tb_salt_conv_net_ready_{high,random,burst}` 各 2 組，全部 ALL PASS。
+    - 實際參數的權重檔跟 Part 1 用 `tools/export_fpga.py --fc-cols 4` 匯出的 `out_weight.mem`(繞回、飽和兩版)逐 byte 相同。
+    - 合成後(布局前，兩層串接)：兩版跟改動前(git HEAD)的 `report_utilization` 除了日期、指令兩行逐行相同(LUT 繞回 1275、飽和 1273，FF 421，BRAM 8，DSP 8)，10 顆 BRAM 的 `DOA_REG`/`DOB_REG` 也相同。
+    - 反向測試：`WeightMemory` 的位址改成 `in_index * OUT_COUNT + out_index`。
+        - 外層、內層數量都大於 1 的組全部 FAIL：FC 4 組、conv 8 組。
+        - 外層數量是 1 的組(FC 的 $n_{row}=1$ 兩組、conv 的 OC=1)兩種算式相同，PASS。
+        - 改回後兩支再跑一次，全部 ALL PASS。
+    - FC 的切段寫在 testbench 裡，RTL 的切段要等 SaltFC 寫好，由整層 testbench 驗。
 
 ### Part 11 串接比對
 

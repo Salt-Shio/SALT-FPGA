@@ -31,7 +31,7 @@ module tb_weight_lookup;
 	// 相對路徑以 xsim 的執行目錄 SaltNET.sim/<模擬集>/behav/xsim 為準;run_tb_weight_lookup.tcl 會改傳絕對路徑
 	parameter WEIGHT_FILE = "../../../../SaltNET.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1/conv1_weight.mem";
 
-	// 跟 WeightMemory、WeightTapSelect 的 localparam 同一套公式,port 位寬要對上才能接
+	// 跟 WeightMemory、WeightTapSelect 的 localparam 同一套公式,port 位寬要對上才能接(WeightMemory 的 OUT_INDEX_WIDTH 是 OUT_CHANNEL_WIDTH)
 	localparam integer KERNEL_WORD_WIDTH = KERNEL_SIZE * KERNEL_SIZE * WEIGHT_WIDTH;
 	localparam integer OUT_CHANNEL_WIDTH = (OUT_CHANNELS > 1) ? $clog2(OUT_CHANNELS) : 1;
 	localparam integer AXIS_BANK_COUNT   = (KERNEL_SIZE + STRIDE - 1) / STRIDE;
@@ -51,19 +51,18 @@ module tb_weight_lookup;
 	logic signed [WEIGHT_WIDTH-1:0]      weight_code [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 
 	WeightMemory #(
-		.IN_CHANNEL_WIDTH(IN_CHANNEL_WIDTH),
-		.IN_CHANNELS     (IN_CHANNELS),
-		.OUT_CHANNELS    (OUT_CHANNELS),
-		.KERNEL_SIZE     (KERNEL_SIZE),
-		.WEIGHT_WIDTH    (WEIGHT_WIDTH),
-		.WEIGHT_FILE     (WEIGHT_FILE)
+		.IN_INDEX_WIDTH(IN_CHANNEL_WIDTH),
+		.IN_COUNT      (IN_CHANNELS),
+		.OUT_COUNT     (OUT_CHANNELS),
+		.WORD_WIDTH    (KERNEL_WORD_WIDTH),
+		.WEIGHT_FILE   (WEIGHT_FILE)
 	) memory (
-		.clk        (clk),
-		.read_enable(read_enable),
+		.clk         (clk),
+		.read_enable (read_enable),
 		.shift_enable(1'b1),   // READ_LATENCY 用預設 1,用不到
-		.out_channel(out_channel),
-		.in_channel (in_channel),
-		.kernel_word(kernel_word)
+		.out_index   (out_channel),
+		.in_index    (in_channel),
+		.read_word   (kernel_word)
 	);
 
 	WeightTapSelect #(

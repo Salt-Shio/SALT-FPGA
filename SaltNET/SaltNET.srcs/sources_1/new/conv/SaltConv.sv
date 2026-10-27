@@ -329,20 +329,19 @@ module SaltConv #(
 	logic signed [WEIGHT_WIDTH-1:0]      weight_code [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 
 	WeightMemory #(
-		.IN_CHANNEL_WIDTH(IN_CHANNEL_WIDTH),
-		.IN_CHANNELS     (IN_CHANNELS),
-		.OUT_CHANNELS    (OUT_CHANNELS),
-		.KERNEL_SIZE     (KERNEL_SIZE),
-		.WEIGHT_WIDTH    (WEIGHT_WIDTH),
-		.READ_LATENCY    (READ_LATENCY),
-		.WEIGHT_FILE     (WEIGHT_FILE)
+		.IN_INDEX_WIDTH(IN_CHANNEL_WIDTH),
+		.IN_COUNT      (IN_CHANNELS),
+		.OUT_COUNT     (OUT_CHANNELS),
+		.WORD_WIDTH    (KERNEL_WORD_WIDTH),
+		.READ_LATENCY  (READ_LATENCY),
+		.WEIGHT_FILE   (WEIGHT_FILE)
 	) weight_memory (
-		.clk        (clk),
+		.clk         (clk),
 		.read_enable (read_enable),
 		.shift_enable(read_shift_enable),
-		.out_channel(read_out_channel),
-		.in_channel (read_channel),
-		.kernel_word(kernel_word)
+		.out_index   (read_out_channel),   // o_c
+		.in_index    (read_channel),       // c
+		.read_word   (kernel_word)         // q[o_c,c]
 	);
 
 	WeightTapSelect #(
