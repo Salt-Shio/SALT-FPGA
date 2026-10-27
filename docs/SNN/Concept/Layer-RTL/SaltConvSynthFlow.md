@@ -157,20 +157,22 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_c
 - 2026-10-21 之前(Part 7~8.x 前半)的時脈都是舊做法：固定 10 ns 目標、單次，用 $1000/(10-\text{WNS})$ 換算，偏低、單組有 ±10~20 MHz 的變動，只能看大方向。
 - 每項的完整過程(實驗設計、每組數字、反向測試)在 commit `dc9b22a` 版本的 [TODO](../../Todo/csnn_pl_implementation_todo.md)，各 Part 的段落。
 
-### 現行 RTL：兩層串接(這支腳本，4.8 ns，2026-10-25)
+### 現行 RTL：兩層串接(這支腳本，4.8 ns，2026-10-27)
 
 | 版本 | WNS | 最長路徑 | conv1 → conv2 | conv2 → conv1 | LUT | FF | BRAM | DSP |
 |---|---|---|---|---|---|---|---|---|
-| 繞回 | +0.319 | conv1 內：神經元 BRAM 讀出 → 計算第 1 級(到 DSP 的切點) | +0.898 | +1.292 | 1243(1.06%) | 421(0.18%) | 8(5.56%) | 8(0.64%) |
-| 飽和 | +0.128 | conv1 內：乘法 DSP 輸出 → 神經元 BRAM 的 `ENBWREN` | +0.454 | +1.990 | 1290(1.10%) | 679(0.29%) | 8(5.56%) | 8(0.64%) |
+| 繞回 | +0.283 | conv1 內：神經元 BRAM 讀出 → 計算第 1 級(乘法 DSP) | +1.160 | +1.557 | 1207(1.03%) | 597(0.25%) | 8(5.56%) | 8(0.64%) |
+| 飽和 | +0.254 | conv1 內：`pipe_time` 暫存器 → 計算第 1 級(乘法 DSP) | +0.825 | +1.449 | 1197(1.02%) | 525(0.22%) | 8(5.56%) | 8(0.64%) |
 
 - 8 顆乘法 DSP 都套上 `DONT_TOUCH`(PSIP 摘要表 DSP Register 列 Dont Touch 8)。百分比的分母是 xck26 整顆。
-- 這次是權重 ROM 搬到 `lib/ReadOnlyMemory` 之後(SaltFC Part 4a)。合成後(布局前)的 LUT、FF、BRAM、DSP 跟每顆 BRAM 的 `DOA_REG`/`DOB_REG` 跟搬之前完全相同。
-    - 搬之前(2026-10-22)：繞回 +0.213、FF 668；飽和 +0.131、FF 655。
-    - FF 數不同，是因為布局時 BRAM register optimization 搬出的神經元 BRAM 輸出暫存器數量不同：繞回版搬之前 8 顆(232 個 FF)、搬之後 0 顆(布局估計沒有違規，沒有做)；飽和版 7 顆 → 8 顆。cell 名稱變了(權重 BRAM 多一層 `memory_array/`)，布局的結果就會不同。
-- 層與層之間兩條都不是最長路徑：
-    - conv1 → conv2：起點 conv1 的 `cut_after_step2` 暫存器，終點 conv2 FIFO 的 `full`、`empty`、寫指標、distributed RAM 的 WE。
-    - conv2 → conv1：起點 conv2 的 `full` 或 `clearing` 暫存器，終點 conv1 的 BRAM 讀取開關、管線暫存器的 CE。
+- 這次是 SaltFC Part 5 之後：選 tap 從 `WeightTapSelect` 展開到 SaltConv 每個 bank 的 generate 區塊、`NeuronMemory` 搬到 lib 改成寬字進出。
+    - 合成後(布局前)跟改動前比：FF 421、BRAM 8、DSP 8、每顆 BRAM 的 `DOA_REG`/`DOB_REG` 相同；LUT 繞回 1275 → 1233、飽和 1273 → 1231，都少 42，全部來自選 tap 展開那一步(`NeuronMemory` 搬移前後合成結果逐行相同)。選法照搬，LUT 為什麼變少沒查出原因。
+    - FF 比合成後多的，是布局時 BRAM register optimization 搬出的神經元 BRAM 輸出暫存器：繞回版 6 顆 176 個、飽和版 4 顆 104 個。
+    - 改動前(2026-10-25，Part 4a 之後)：繞回 +0.319、LUT 1243、FF 421；飽和 +0.128、LUT 1290、FF 679。兩次都在單次 ±0.2 ns 的變動附近，不拿來說時序變好。
+- 層與層之間兩條都不是最長路徑(這次兩版最差的一條)：
+    - conv1 → conv2：起點 conv1 的乘法 DSP 輸出(`rounded_product`)，終點 conv2 FIFO 的 `empty`(繞回)、`full`(飽和)暫存器的 CE。
+    - conv2 → conv1：起點 conv2 的 `clearing` 暫存器，終點 conv1 神經元 BRAM 的寫入開關 `ENBWREN`。
+    - 2026-10-25 那次：conv1 → conv2 起點是 `cut_after_step2`，終點還有寫指標、distributed RAM 的 WE；conv2 → conv1 起點還有 `full`，終點是 BRAM 讀取開關、管線暫存器的 CE。
 
 ### 乘法一律用 DSP(2026-10-21)
 
@@ -248,4 +250,4 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_c
 | $C=2$ 切在 ② 之後 | 6 組裡 5 組最快，兩級最平均；切在 ① 時暫存器被 DSP 的 AREG、BREG 吸收 | 2026-10-18 |
 | $o_c$ 重疊用 A(停住)，不用 B(丟掉重讀) | B 時脈相同或略低(R2C2 重疊 6 組平均 158.3 對 158 MHz)、FF 3259 對 1933、conv1 拍數多 1~2% | 2026-10-19 |
 | 時序改善 A+B($\Delta t=0$ 乘 1.0、`fires_left` 只看個數) | R2C2 重疊 6 組平均 160.8 → 175.5 MHz；C=2 的切點併進 DSP 的 PREG | 2026-10-21 |
-| `WeightTapSelect` 保留 `tap < K` 檢查 | K=3、M=2 單獨合成：保留 84 LUT，拿掉 98 LUT | 2026-10-21 |
+| 權重選 tap 保留 `tap < K` 檢查(當時在 `WeightTapSelect`，2026-10-27 起寫在 SaltConv 每個 bank 的 generate 區塊) | K=3、M=2 單獨合成：保留 84 LUT，拿掉 98 LUT | 2026-10-21 |

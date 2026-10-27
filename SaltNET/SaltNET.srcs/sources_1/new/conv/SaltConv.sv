@@ -103,6 +103,7 @@ module SaltConv #(
 	localparam integer TAP_WIDTH         = (KERNEL_SIZE > 1) ? $clog2(KERNEL_SIZE) : 1;
 	localparam integer BANK_INDEX_WIDTH  = (AXIS_BANK_COUNT > 1) ? $clog2(AXIS_BANK_COUNT) : 1;
 	localparam integer KERNEL_WORD_WIDTH = KERNEL_SIZE * KERNEL_SIZE * WEIGHT_WIDTH;
+	localparam integer NEURON_WORD_WIDTH = TIME_WIDTH + MEMBRANE_WIDTH;                                 // 神經元記憶體一格 {t_last, V̂}
 	localparam integer EVENT_WIDTH       = TIME_WIDTH + IN_CHANNEL_WIDTH + Y_WIDTH + X_WIDTH;   // FIFO 一格 {t, c, y, x}
 	localparam integer PIPELINE_DEPTH    = READ_LATENCY + COMPUTE_LATENCY - 1;                  // L,計算第 2 級的位置
 
@@ -324,9 +325,9 @@ module SaltConv #(
 	// ===============================================================
 	// 5 讀出、算、寫回
 	// ===============================================================
-	// 權重:讀下一個 o_c 的 (o_c, c),位置 R 用那個 o_c 的 tap 選(C = 2 時選好的權重碼存進切點暫存器)
-	logic        [KERNEL_WORD_WIDTH-1:0] kernel_word;
-	logic signed [WEIGHT_WIDTH-1:0]      weight_code [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
+	// 權重:讀下一個 o_c 的 (o_c, c);每個 bank 在下面的 generate 區塊裡用位置 R 那個 o_c 的 tap 選
+	// (C = 2 時選好的權重碼存進切點暫存器)
+	logic [KERNEL_WORD_WIDTH-1:0] kernel_word;
 
 	WeightMemory #(
 		.IN_INDEX_WIDTH(IN_CHANNEL_WIDTH),
@@ -344,17 +345,6 @@ module SaltConv #(
 		.read_word   (kernel_word)         // q[o_c,c]
 	);
 
-	WeightTapSelect #(
-		.KERNEL_SIZE (KERNEL_SIZE),
-		.STRIDE      (STRIDE),
-		.WEIGHT_WIDTH(WEIGHT_WIDTH)
-	) weight_tap_select (
-		.kernel_word(kernel_word),
-		.tap_y      (pipe_tap_y[READ_LATENCY]),
-		.tap_x      (pipe_tap_x[READ_LATENCY]),
-		.weight_code(weight_code)
-	);
-
 	// 門檻:每個 o_c 一個,載入後是常數,依 o_c 選
 	logic signed [MEMBRANE_WIDTH-1:0] thresholds [0:OUT_CHANNELS-1];
 
@@ -362,37 +352,54 @@ module SaltConv #(
 		$readmemh(THRESHOLD_FILE, thresholds);
 	end
 
-	// 神經元記憶體與膜電位更新:每個 bank 一份 NeuronMemory + NeuronUpdate
+	// 每個 bank 一份:權重選 tap、NeuronMemory(打包 {t_last, V̂})+ NeuronUpdate
 	// 讀:下一個 o_c(第 3 段的 grid_*);寫:位置 L 的 o_c(第 4 段的 pipe_*),只在算的那一拍
 	logic spike [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 
 	for (genvar row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin : row_banks
 		for (genvar col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin : col_banks
-			logic signed [MEMBRANE_WIDTH-1:0] membrane;       // 讀出的 V̂
-			logic        [TIME_WIDTH-1:0]     last_time;      // 讀出的 t_last
-			logic signed [MEMBRANE_WIDTH-1:0] new_membrane;   // 算出的 V̂_new
+			// 權重碼:用位置 R 的 (k_y, k_x) 從 kernel 寬字選出 tap k_y*K + k_x(寬字排列見 Conv.md 第 2 節「權重」)。
+			// tap 照軸各一份(跟 CandidateGrid 相同),這個 bank 用第 row_bank 列的 k_y、第 col_bank 行的 k_x。
+			// K 不是 2 的次方時 tap 可能大於 K-1(這種候選的 valid 一定是 0),這時給 0,不去選寬字範圍外的 bit。
+			// 這個檢查不能拿掉:拿掉後合成反而多 LUT(K=3、M=2 單獨合成 84 → 98),
+			// tap 超出範圍的組合從常數 0 變成選到別的 tap 或超出寬字(Vivado 當 X 處理),選擇邏輯變大。
+			logic        [TAP_WIDTH-1:0]    tap_y;         // k_y
+			logic        [TAP_WIDTH-1:0]    tap_x;         // k_x
+			logic signed [WEIGHT_WIDTH-1:0] weight_code;   // q[o_c,c,k_y,k_x]
+
+			assign tap_y       = pipe_tap_y[READ_LATENCY][row_bank];
+			assign tap_x       = pipe_tap_x[READ_LATENCY][col_bank];
+			assign weight_code = (tap_y < KERNEL_SIZE && tap_x < KERNEL_SIZE)
+			                   ? kernel_word[(tap_y * KERNEL_SIZE + tap_x) * WEIGHT_WIDTH +: WEIGHT_WIDTH]
+			                   : '0;
+
+			// 神經元記憶體:每格一個字 {t_last, V̂},V̂ 在低位(Conv.md 第 2 節「神經元」)
+			logic        [NEURON_WORD_WIDTH-1:0] read_word;
+			logic signed [MEMBRANE_WIDTH-1:0]    membrane;       // 讀出的 V̂
+			logic        [TIME_WIDTH-1:0]        last_time;      // 讀出的 t_last
+			logic signed [MEMBRANE_WIDTH-1:0]    new_membrane;   // 算出的 V̂_new
 
 			NeuronMemory #(
-				.BANK_DEPTH    (BANK_DEPTH),
-				.MEMBRANE_WIDTH(MEMBRANE_WIDTH),
-				.TIME_WIDTH    (TIME_WIDTH),
-				.READ_LATENCY  (READ_LATENCY)
+				.DEPTH       (BANK_DEPTH),
+				.WORD_WIDTH  (NEURON_WORD_WIDTH),
+				.READ_LATENCY(READ_LATENCY)
 			) neuron_memory (
-				.clk            (clk),
-				.clearing       (clearing),
-				.clear_addr     (clear_addr),
+				.clk         (clk),
+				.clearing    (clearing),
+				.clear_addr  (clear_addr),
 				// 沒有合法候選的 bank 不讀
-				.read_enable    (read_enable && grid_valid[row_bank][col_bank]),
-				.shift_enable   (read_shift_enable),
-				.read_addr      (grid_bank_addr[row_bank][col_bank]),
-				.read_membrane  (membrane),
-				.read_last_time (last_time),
+				.read_enable (read_enable && grid_valid[row_bank][col_bank]),
+				.shift_enable(read_shift_enable),
+				.read_addr   (grid_bank_addr[row_bank][col_bank]),
+				.read_word   (read_word),
 				// NeuronUpdate 對不合法的候選也照算,只寫回合法的;不是算的那一拍,讀出的資料跟候選對不上,不寫
-				.write_enable   (compute_cycle && pipe_candidate_valid[PIPELINE_DEPTH][row_bank][col_bank]),
-				.write_addr     (pipe_bank_addr[PIPELINE_DEPTH][row_bank][col_bank]),
-				.write_membrane (new_membrane),
-				.write_last_time(pipe_time[PIPELINE_DEPTH])   // t_last,new = t
+				.write_enable(compute_cycle && pipe_candidate_valid[PIPELINE_DEPTH][row_bank][col_bank]),
+				.write_addr  (pipe_bank_addr[PIPELINE_DEPTH][row_bank][col_bank]),
+				.write_word  ({pipe_time[PIPELINE_DEPTH], new_membrane})   // {t_last,new = t, V̂_new}
 			);
+
+			assign membrane  = read_word[MEMBRANE_WIDTH-1:0];
+			assign last_time = read_word[NEURON_WORD_WIDTH-1:MEMBRANE_WIDTH];
 
 			NeuronUpdate #(
 				.TIME_WIDTH         (TIME_WIDTH),
@@ -407,7 +414,7 @@ module SaltConv #(
 				.COMPUTE_LATENCY    (COMPUTE_LATENCY)
 			) neuron_update (
 				.clk         (clk),
-				.weight_code (weight_code[row_bank][col_bank]),
+				.weight_code (weight_code),
 				.membrane    (membrane),
 				.last_time   (last_time),
 				.event_time  (pipe_time[READ_LATENCY]),                // 計算第 1 級用

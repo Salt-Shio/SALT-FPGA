@@ -101,6 +101,7 @@
     $$
     - 輸入位址 $y$，讀出第 $y$ 列 $n_{col}$ 顆的 $\hat V$，寬 $n_{col}\cdot w$；算完寫回同一個位址
     - 第 $x$ 行的 $\hat V[y\cdot n_{col}+x]$ 放在第 $x\,w$ 到 $(x+1)\,w-1$ 位元，第 $0$ 行在最低位
+    - 跟 conv 共用 `lib/NeuronMemory`(清除選擇 + BRAM，寬字進出)；第 $x$ 段在 SaltFC 第 $x$ 行的 generate 區塊裡切
 
 - **$t_{last}$**：整層一份，用暫存器
     - 每筆事件都更新全部神經元，所以 $t_{last}$ 就是上一筆事件的 $t$
@@ -126,6 +127,7 @@
     - 輸入位址 $y$，讀出第 $y$ 列 $n_{col}$ 顆的門檻，寬 $n_{col}\cdot w$
     - 第 $x$ 行的 $\hat v_{th}[y\cdot n_{col}+x]$ 放在第 $x\,w$ 到 $(x+1)\,w-1$ 位元，第 $0$ 行在最低位；最後一列空的位置補 $0$
     - 跟 $\hat V$ 同一個位址、同一個讀取延遲，同一拍一起讀出
+    - 沒有位址要算，SaltFC 直接例化 `lib/ReadOnlyMemory`；第 $x$ 段跟 $\hat V$ 一樣在第 $x$ 行的 generate 區塊裡切
 
 - **檔案格式**：給 `$readmemh` 讀的 hex 文字檔
     - 一行一個位址，依位址排列，不寫 `@位址`

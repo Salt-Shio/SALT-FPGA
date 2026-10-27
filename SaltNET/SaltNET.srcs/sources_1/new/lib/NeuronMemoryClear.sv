@@ -2,7 +2,7 @@
 //////////////////////////////////////////////////////////////////////////////////
 // Module Name: NeuronMemoryClear
 // Description:
-//   神經元記憶體的清除計數器(Conv.md 第 2 節「清除」),一層只有一份,接進每個 NeuronMemory bank。
+//   神經元記憶體的清除計數器(Conv.md、FC.md 第 2 節「清除」),一層只有一份,接進這一層每個 NeuronMemory(conv M x M 個 bank、FC 1 個)。
 //   rst_n=0 期間 clearing=1、clear_addr=0;釋放後每個 posedge clear_addr 加 1,
 //   bank 在第 n 個 posedge 寫位址 n-1,寫完位址 BANK_DEPTH-1 的那個 posedge 之後 clearing 變 0。
 //   所有 bank 同一拍清同一個位址,所以共用這一份。

@@ -7,7 +7,7 @@
 //   位址 out_index * IN_COUNT + in_index,深度 OUT_COUNT * IN_COUNT,緊密排列,不補到 2 的次方。
 //     conv:o_c * C + c,寬字是一個 kernel(Conv.md 第 2 節「權重」)
 //     FC  :y * n_in + src,寬字是一列 n_col 顆的權重碼(FC.md 第 2 節「權重」)
-//   寬字裡怎麼切由上層決定(conv 是 WeightTapSelect,FC 在每行的 generate 區塊裡切)。
+//   寬字裡怎麼切由上層決定(conv 在每個 bank 的 generate 區塊裡選 tap,FC 在每行的 generate 區塊裡切)。
 //   這裡只算位址;陣列、$readmemh、讀出暫存器在 lib/ReadOnlyMemory(READ_LATENCY、read_enable、shift_enable 的行為見那裡)。
 //   內容用 $readmemh 從 WEIGHT_FILE 載入,檔案格式見 Conv.md、FC.md 第 2 節「權重」的「檔案格式」。
 //   上層保證 in_index < IN_COUNT、out_index < OUT_COUNT,超出時讀出的值不保證。

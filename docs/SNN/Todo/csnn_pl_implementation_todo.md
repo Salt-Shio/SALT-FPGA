@@ -30,7 +30,8 @@
 
 - SaltFC Part 0~3 完成。
 - SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
-- 下一步：規劃 Part 5(神經元 BRAM、門檻 BRAM、清除)。
+- SaltFC Part 5 完成(細節見下面「Part 5」)：conv 展開 `WeightTapSelect`、`NeuronMemory` 搬到 lib、FC $\hat V$ 跟門檻的 testbench。
+- 下一步：規劃 Part 6(膜電位更新)。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
     - 從 Git Bash 呼叫 `wsl` 時，`/mnt/c/...` 會被 MSYS 轉成 Windows 路徑，要加 `MSYS_NO_PATHCONV=1`。
@@ -56,7 +57,7 @@
 | 2 | 介面規格(parameter、port) | 第 1、6 節 | 完成 |
 | 3 | 輸入 FIFO:直接用 `lib/EventFIFO`，不寫新模組，例化在 Part 8 | 第 1 節 | 完成 |
 | 4 | 權重 BRAM：4a conv 權重 ROM 改用 lib 通用 ROM；4b 權重位址兩層共用 `lib/WeightMemory`、FC 權重查表 | 第 2 節「權重」 | 完成 |
-| 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 未開始 |
+| 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 完成 |
 | 6 | 膜電位更新 | 第 3 節 | 未開始 |
 | 7 | spike 選擇與輸出(優先權編碼器、bitmask) | 第 4 節 | 未開始 |
 | 8 | pipeline 整合 | 第 5 節 | 未開始 |
@@ -74,7 +75,7 @@
     - 一個 Vivado 專案，從 `SaltConv` 改名 `SaltNET`，底下分 SaltConv、SaltFC 兩部分。
         - 不選兩個專案：Part 11 三層串接要在同一個地方模擬、合成，不用跨專案拉檔案。代價是同一個專案一次只跑一支模擬，這個限制現在本來就有。
     - RTL 放 `SaltNET.srcs/sources_1/new/` 底下四個資料夾：
-        - `lib/`：跟層無關的通用模組，先放 `EventFIFO`、`NeuronMemoryArray`、`NeuronMemoryClear`(參數只有寬度、深度、`READ_LATENCY`)；Part 4 加了 `ReadOnlyMemory`、`WeightMemory`。
+        - `lib/`：跟層無關的通用模組，先放 `EventFIFO`、`NeuronMemoryArray`、`NeuronMemoryClear`(參數只有寬度、深度、`READ_LATENCY`)；Part 4 加了 `ReadOnlyMemory`、`WeightMemory`，Part 5 `NeuronMemory` 從 conv 搬過來。
             - 依賴方向(2026-10-27)：lib 可以用 lib，conv、fc 可以用 lib，lib 不用 conv、fc。第一個例子是 `WeightMemory` 例化 `ReadOnlyMemory`，跟 XPM 的 `xpm_memory_sprom` 例化 `xpm_memory_base` 同一種分法。
         - `conv/`：SaltConv 專用。
         - `fc/`：SaltFC 專用。
@@ -84,7 +85,7 @@
     - testbench、答案檔、腳本照 RTL 同一套資料夾分：
         - `sim_1/new/lib/`、`conv/`、`net/`、`fc/`，答案檔放在各自 testbench 旁邊的 `ref/`(例：`sim_1/new/conv/ref/`)。
         - `scripts/lib/`、`scripts/conv/`、`scripts/net/`；所有 `run_tb_*.tcl` 共用的 `sim_common.tcl` 留在 `scripts/` 最上層。
-        - `tb_neuron_memory` 放 `conv/`：測的是 `CandidateGrid` 加 `NeuronMemory`，`NeuronMemory` 有 conv 專用的 $\{t_{last},\hat V\}$ 打包。
+        - `tb_neuron_memory` 放 `conv/`：測的是 `CandidateGrid` 加 `NeuronMemory`，$\{t_{last},\hat V\}$ 打包是 conv 的(Part 5 起 `NeuronMemory` 在 lib，打包寫在 testbench 跟 SaltConv 裡)。
         - conv 的 Python 答案腳本彼此 import，全部放 `scripts/conv/` 同一層。
         - 例外：`gen_salt_conv_ref.py` 在 `scripts/conv/`，同一次計算順便寫兩層串接的答案檔，用 `--net-out-dir` 輸出到 `sim_1/new/net/ref/`。
 - 做法(2026-10-24)：
@@ -172,7 +173,7 @@
         - `IN_INDEX_WIDTH` 開成參數：conv 的 `IN_CHANNEL_WIDTH` 由上游決定，不一定等於 $\lceil\log_2 C
 ceil$。
     - 寬字切段放各層 top：
-        - conv 照舊用 `WeightTapSelect`：依 tap 選、要檢查範圍，不是固定切段。
+        - conv 原本照舊用 `WeightTapSelect`；Part 5 第 1 步改成在 SaltConv 每個 bank 的 generate 區塊裡選(見 Part 5)。
         - FC 在 SaltFC 每行的 generate 區塊裡切第 $x$ 段；$\hat V$、門檻的寬字也在同一個區塊切。SaltFC 本體到 Part 8 才寫，切段跟著寫。
     - 原本做的 `fc/FCWeightMemory`(位址由上層算、模組裡切段)沒 commit，刪掉。
 - 4b 做法(2026-10-27)：
@@ -200,6 +201,63 @@ ceil$。
         - 外層數量是 1 的組(FC 的 $n_{row}=1$ 兩組、conv 的 OC=1)兩種算式相同，PASS。
         - 改回後兩支再跑一次，全部 ALL PASS。
     - FC 的切段寫在 testbench 裡，RTL 的切段要等 SaltFC 寫好，由整層 testbench 驗。
+
+### Part 5 神經元 BRAM、門檻 BRAM、清除
+
+- 已定(2026-10-27)：
+    - 模組怎麼分，兩層用同一條規則：
+        - 有邏輯要做(算位址、清除選擇)才包模組；兩層相同的邏輯放 lib，共用一份。
+        - 寬字的打包、切段(conv 選 tap、打包 $\{t_{last},\hat V\}$；FC 切 $n_{col}$ 段)一律寫在各層 top 每份電路的 generate 區塊裡，不包模組。
+        - 結果是 conv、fc 資料夾沒有記憶體的包裝模組，兩層 top 都直接用 lib。
+    - 選 tap 不包模組的取捨：
+        - 兩邊都包(conv `WeightTapSelect`、FC 另包一個只有接線的模組)：$\hat V$、門檻的切段也得各包一個，模組越包越多。
+        - 兩邊都不包：SaltConv 每個 bank 多一行 `assign`，拿掉例化的 10 行，總行數幾乎不變。
+        - 代價：tap 選擇沒有單獨的 testbench，`tb_weight_lookup` 裡照 SaltConv 的寫法選；RTL 那份由 `tb_salt_conv` 驗(K=1、3、4、5，S=1、2，沒有 K=7、S=3)。
+    - 新的 lib 模組沿用名字 `NeuronMemory`(從 `conv/` 搬到 `lib/`)，port `clearing`、`clear_addr`、`write_enable`、`write_addr`、`write_word`、`read_enable`、`shift_enable`、`read_addr`、`read_word`。
+    - 門檻 BRAM 沒有位址計算，SaltFC 直接例化 `lib/ReadOnlyMemory`。
+    - $t_{last}$ 兩個暫存器不在 Part 5，跟膜電位更新放 Part 6。
+- 步驟：
+
+| 步驟 | 內容 | 狀態 |
+|---|---|---|
+| 1 | conv 展開 `WeightTapSelect`：刪掉模組，每個 bank 在 SaltConv 的 generate 區塊裡選 tap | 做完 |
+| 2 | `conv/NeuronMemory` 搬到 `lib/`，只留清除選擇 + `NeuronMemoryArray`，寬字進出；$\{t_{last},\hat V\}$ 打包搬到 SaltConv 的 generate 區塊 | 做完 |
+| 3 | FC $\hat V$：`lib/NeuronMemory` 用 FC 參數(寬 $n_{col}\cdot w$、深 $n_{row}$)，新 testbench 測清除 $n_{row}$ 拍、清完是 0、讀寫後切出的第 $x$ 段 | 做完 |
+| 4 | FC 門檻：`lib/ReadOnlyMemory` 讀 Part 1 格式的門檻檔，新 testbench 比對每列切出的 $n_{col}$ 個門檻(含最後一列補 0)；實際 `out` 層不 fire、沒有門檻檔，只用隨機參數組 | 做完 |
+
+- 第 3、4 步的切段先寫在 testbench 裡，SaltFC 的 generate 區塊到 Part 8 才有。
+- 第 1 步做法(2026-10-27)：
+    - `SaltConv.sv`：拿掉 `WeightTapSelect` 例化跟 `weight_code` 二維陣列；`row_banks`/`col_banks` 的 generate 區塊裡用 `pipe_tap_y[READ_LATENCY][row_bank]`、`pipe_tap_x[READ_LATENCY][col_bank]` 選，tap 超出 $K-1$ 給 0；`WeightTapSelect` 檔頭的範圍檢查說明、84 → 98 LUT 的量測搬到註解。
+    - `git rm conv/WeightTapSelect.sv`，`.xpr` 用 batch `remove_files` 拿掉。
+    - `tb_weight_lookup.sv`：例化 `WeightTapSelect` 改成 testbench 裡同一個寫法的 generate；答案檔、腳本不動。
+    - `lib/WeightMemory.sv` 檔頭、`SaltConvDataflow.md` 流程圖、`SaltConvSynthFlow.md`「設計決定的量測依據」表的名稱跟著改。
+- 第 1 步驗證(2026-10-27，只挑必要的)：
+    - `tb_weight_lookup` 9 組 ALL PASS(testbench 改了)。
+    - `tb_salt_conv_ready_high` 只跑 R2C2 重疊 10 組(`-tclargs tb_salt_conv_ready_high READ_LATENCY:2 COMPUTE_LATENCY:2 OVERLAP:1`)，K=1、3、4、5 都 ALL PASS，含訓練端 conv1、conv2 兩版。
+    - 合成後(布局前，兩層串接)跟 HEAD 比：FF 421、BRAM 8、DSP 8、10 顆 BRAM 的 `DOA_REG`/`DOB_REG` 相同；LUT 繞回 1275 → 1233、飽和 1273 → 1231，兩版都少 42。選法照搬，LUT 為什麼變少沒查出原因。
+- 第 2 步做法(2026-10-27)：
+    - `conv/NeuronMemory.sv` 用 `git mv` 搬到 `lib/`：參數 `DEPTH`、`WORD_WIDTH`、`READ_LATENCY`(跟 `NeuronMemoryArray` 同名)，寬字進出，只留清除選擇 + `NeuronMemoryArray`。
+    - `SaltConv.sv`：每個 bank 的 generate 區塊裡打包 `{pipe_time[L], new_membrane}`、讀出拆成 `membrane`、`last_time`；新增 `NEURON_WORD_WIDTH`。實例名 `neuron_memory`、`memory_array` 不變，`tb_salt_conv_common.svh`、`tb_salt_conv_net_common.svh` 的階層路徑不用改。
+    - `tb_neuron_memory.sv`：打包、拆開改寫在 testbench 的 generate 裡；答案檔、腳本不動。
+    - `lib/NeuronMemoryClear.sv` 檔頭改成 conv、FC 共用的說法。
+- 第 3 步做法(2026-10-27)：
+    - `sim_1/new/fc/tb_fc_neuron_memory.sv`：`NeuronMemoryClear` + `lib/NeuronMemory`(深 $n_{row}$、寬 $n_{col}\cdot w$)，切段照 SaltFC 每行的寫法寫在 testbench 裡；寫入值由 testbench 的函式產生(第一格下界、最後一格上界)，不用答案檔。
+    - 流程：reset(期間送全 1 的外部寫入，檢查 `clearing` 剛好 $n_{row}$ 拍)→ 讀全部要是 0 → 寫全部 → 讀回比對 → 再 reset → 讀全部要回到 0。
+    - `scripts/fc/run_tb_fc_neuron_memory.tcl`：參數組 $(n_{out},n_{col},w,R)$ = (10,4,14,1)、(10,4,11,2)(訓練端 out 層繞回、飽和的 $w$)、(10,3,9,2)、(5,1,7,1)、(3,4,6,1)(只有一列)、(1,1,4,2)。
+- 第 4 步做法(2026-10-27)：
+    - `scripts/fc/gen_fc_threshold_lookup_ref.py`：隨機門檻(前兩個是 $w$ 位元上下界，共用 conv 的 `synthetic_q`)，答案直接從門檻算，門檻檔用訓練端 `fc_threshold_lines` 寫，放 `sim_1/new/fc/ref/`。參數組跟第 3 步相同的 $(n_{out},n_{col},w)$。
+    - `sim_1/new/fc/tb_fc_threshold_lookup.sv`：`lib/ReadOnlyMemory`(深 $n_{row}$、寬 $n_{col}\cdot w$)讀每一列，切段寫在 testbench 裡，比對 $n_{col}$ 個門檻(含最後一列補 0)。
+    - `scripts/fc/run_tb_fc_threshold_lookup.tcl`：上面 6 組，$R$ 同第 3 步。
+- FC.md 第 2 節「神經元」「門檻」記上用哪個 lib 模組、切段在哪裡。
+- 第 2~4 步驗證(2026-10-27)：
+    - `tb_neuron_memory` 9 組 ALL PASS(第一次跑第 9 組 elaborate 碰到 `USF-XSIM-95 Failed to open file to read (elaborate.log)`，整支重跑就過)。
+    - `tb_fc_neuron_memory` 6 組、`tb_fc_threshold_lookup` 6 組、`tb_fc_weight_lookup` 6 組 ALL PASS。
+    - `tb_salt_conv_ready_high` R2C2 重疊 10 組、`tb_salt_conv_net_ready_high` 2 組 ALL PASS。
+    - 反向測試(新 testbench 才做)：
+        - `lib/NeuronMemory` 清除時照寫外部資料(不寫 0)：`tb_fc_neuron_memory` 6 組全部 FAIL，第一次清除後就抓到。
+        - 門檻答案檔改壞一格($n_{col}=3$ 那組)：只有那組 FAIL，`MISMATCH y=2 column=0`；重新產生後 12 個檔跟原本逐檔相同。
+    - 合成後(布局前)：第 2 步前後逐行相同(LUT 繞回 1233、飽和 1231)。
+    - 布局繞線 4.8 ns(Part 5 全部做完)：繞回 +0.283、飽和 +0.254，兩版都過，見 `SaltConvSynthFlow.md`「現行 RTL：兩層串接」。
 
 ### Part 11 串接比對
 
@@ -269,6 +327,7 @@ ceil$。
     - 機制維持一個 `initial` 流程(negedge 給值、posedge 前檢查)，不用多個並行 process、SVA。
     - 涵蓋統計跟核心流程分開，要加之前先問。
     - 反向測試：改壞 RTL 或答案檔，確認會 FAIL；跑完還原，確認跟 commit 相同。
+    - 驗證範圍看改動挑必要的：搬位置、改名、展開這類行為不變的整理，合成比對 + 改到的 testbench + 一支整層 testbench 的一部分參數組就好，不跑完整回歸(完整回歸 `tb_salt_conv` 四支約 40 分鐘)、不做反向測試。
 - 跑模擬：一個 testbench 一個模擬集，`scripts/<資料夾>/run_tb_*.tcl` 跑所有參數組，共用流程在 `scripts/sim_common.tcl`。
     - 第一次跑時腳本自己建模擬集，RTL 由 `sim_common.tcl` 一次加進 `sources_1`；新的 testbench 照 `scripts/lib/run_tb_event_fifo.tcl` 寫。
     - 多組參數一律用 batch 模式跑；從 GUI 的 Tcl Console 跑，連續 elaborate 會不定時出現 `Spawn failed`。

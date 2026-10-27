@@ -2,7 +2,8 @@
 //////////////////////////////////////////////////////////////////////////////////
 // Module Name: tb_weight_lookup
 // Description:
-//   WeightMemory + WeightTapSelect 一起驗證:讀出的權重要等於 q[o_c,c,k_y,k_x]。
+//   lib/WeightMemory 用 conv 的參數驗證:讀出 q[o_c,c] 再照 SaltConv 的寫法選 tap,權重要等於 q[o_c,c,k_y,k_x]。
+//   選 tap 寫在這裡(SaltConv 每個 bank 的 generate 區塊裡是同一個寫法)。
 //   答案是 scripts/gen_weight_lookup_ref.py 用訓練端的候選規則算的:每組 (o_c, c)、每個事件座標 (y, x),
 //   每個 bank 的 valid、(k_y, k_x),以及 q[o_c,c,k_y,k_x]。答案不經過權重檔的打包。
 //   答案檔一行跑一拍,o_c、c、in_y、in_x 由外到內:
@@ -31,7 +32,7 @@ module tb_weight_lookup;
 	// 相對路徑以 xsim 的執行目錄 SaltNET.sim/<模擬集>/behav/xsim 為準;run_tb_weight_lookup.tcl 會改傳絕對路徑
 	parameter WEIGHT_FILE = "../../../../SaltNET.srcs/sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1/conv1_weight.mem";
 
-	// 跟 WeightMemory、WeightTapSelect 的 localparam 同一套公式,port 位寬要對上才能接(WeightMemory 的 OUT_INDEX_WIDTH 是 OUT_CHANNEL_WIDTH)
+	// 跟 SaltConv、WeightMemory 的 localparam 同一套公式,port 位寬要對上才能接(WeightMemory 的 OUT_INDEX_WIDTH 是 OUT_CHANNEL_WIDTH)
 	localparam integer KERNEL_WORD_WIDTH = KERNEL_SIZE * KERNEL_SIZE * WEIGHT_WIDTH;
 	localparam integer OUT_CHANNEL_WIDTH = (OUT_CHANNELS > 1) ? $clog2(OUT_CHANNELS) : 1;
 	localparam integer AXIS_BANK_COUNT   = (KERNEL_SIZE + STRIDE - 1) / STRIDE;
@@ -65,16 +66,15 @@ module tb_weight_lookup;
 		.read_word   (kernel_word)
 	);
 
-	WeightTapSelect #(
-		.KERNEL_SIZE (KERNEL_SIZE),
-		.STRIDE      (STRIDE),
-		.WEIGHT_WIDTH(WEIGHT_WIDTH)
-	) tap_select (
-		.kernel_word(kernel_word),
-		.tap_y      (tap_y),
-		.tap_x      (tap_x),
-		.weight_code(weight_code)
-	);
+	// 選 tap 照 SaltConv 每個 bank 的寫法(tap 超出 K-1 時給 0)
+	for (genvar row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin : row_banks
+		for (genvar col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin : col_banks
+			assign weight_code[row_bank][col_bank] =
+				(tap_y[row_bank] < KERNEL_SIZE && tap_x[col_bank] < KERNEL_SIZE)
+				? kernel_word[(tap_y[row_bank] * KERNEL_SIZE + tap_x[col_bank]) * WEIGHT_WIDTH +: WEIGHT_WIDTH]
+				: '0;
+		end
+	end
 
 	string ref_dir;
 	string ref_path;

@@ -2,7 +2,8 @@
 //////////////////////////////////////////////////////////////////////////////////
 // Module Name: tb_neuron_memory
 // Description:
-//   CandidateGrid + NeuronMemoryClear + M x M 個 NeuronMemory 一起驗證:每顆神經元讀出的 (V̂, t_last) 要等於最後寫進去的值,清除後要回到 0。
+//   CandidateGrid + NeuronMemoryClear + M x M 個 lib/NeuronMemory 一起驗證(conv 的參數):每顆神經元讀出的 (V̂, t_last) 要等於最後寫進去的值,清除後要回到 0。
+//   每格 {t_last, V̂} 的打包、拆開寫在這裡(SaltConv 每個 bank 的 generate 區塊裡是同一個寫法)。
 //   讀寫位址都由 CandidateGrid 算,跟實際電路同一條路;上一拍的 valid、bank_addr 存起來當這一拍的寫入位址。
 //   答案是 scripts/gen_neuron_memory_ref.py 用訓練端的候選規則排出的每一拍操作跟預期讀出值,格式見那支腳本。
 //   reset 行:
@@ -31,7 +32,7 @@ module tb_neuron_memory;
 	parameter integer MEMBRANE_WIDTH = 12;
 	parameter integer TIME_WIDTH     = 16;
 
-	// 跟 CandidateGrid、NeuronMemory 的 localparam 同一套公式,port 位寬要對上才能接
+	// 跟 CandidateGrid、SaltConv 的 localparam 同一套公式,port 位寬要對上才能接
 	localparam integer AXIS_BANK_COUNT   = (KERNEL_SIZE + STRIDE - 1) / STRIDE;
 	localparam integer ROW_SLOTS         = (OUT_ROWS + AXIS_BANK_COUNT - 1) / AXIS_BANK_COUNT;
 	localparam integer COL_SLOTS         = (OUT_COLS + AXIS_BANK_COUNT - 1) / AXIS_BANK_COUNT;
@@ -41,6 +42,7 @@ module tb_neuron_memory;
 	localparam integer OUT_Y_WIDTH       = (OUT_ROWS > 1) ? $clog2(OUT_ROWS) : 1;
 	localparam integer OUT_X_WIDTH       = (OUT_COLS > 1) ? $clog2(OUT_COLS) : 1;
 	localparam integer TAP_WIDTH         = (KERNEL_SIZE > 1) ? $clog2(KERNEL_SIZE) : 1;
+	localparam integer NEURON_WORD_WIDTH = TIME_WIDTH + MEMBRANE_WIDTH;   // 一格 {t_last, V̂}
 
 	logic clk = 1'b0;
 	always #5 clk = ~clk;
@@ -102,26 +104,29 @@ module tb_neuron_memory;
 		.clear_addr(clear_addr)
 	);
 
+	// 每格 {t_last, V̂} 的打包、拆開照 SaltConv 每個 bank 的寫法
 	for (genvar row_bank = 0; row_bank < AXIS_BANK_COUNT; row_bank++) begin : row_banks
 		for (genvar col_bank = 0; col_bank < AXIS_BANK_COUNT; col_bank++) begin : col_banks
+			logic [NEURON_WORD_WIDTH-1:0] read_word;
+
 			NeuronMemory #(
-				.BANK_DEPTH    (BANK_DEPTH),
-				.MEMBRANE_WIDTH(MEMBRANE_WIDTH),
-				.TIME_WIDTH    (TIME_WIDTH)
+				.DEPTH     (BANK_DEPTH),
+				.WORD_WIDTH(NEURON_WORD_WIDTH)
 			) memory (
-				.clk            (clk),
-				.clearing       (clearing),
-				.clear_addr     (clear_addr),
-				.read_enable    (read_enable[row_bank][col_bank]),
-				.shift_enable   (1'b1),   // READ_LATENCY 用預設 1,用不到
-				.read_addr      (read_addr[row_bank][col_bank]),
-				.read_membrane  (read_membrane[row_bank][col_bank]),
-				.read_last_time (read_last_time[row_bank][col_bank]),
-				.write_enable   (write_enable[row_bank][col_bank]),
-				.write_addr     (write_addr[row_bank][col_bank]),
-				.write_membrane (write_membrane[row_bank][col_bank]),
-				.write_last_time(write_last_time[row_bank][col_bank])
+				.clk         (clk),
+				.clearing    (clearing),
+				.clear_addr  (clear_addr),
+				.read_enable (read_enable[row_bank][col_bank]),
+				.shift_enable(1'b1),   // READ_LATENCY 用預設 1,用不到
+				.read_addr   (read_addr[row_bank][col_bank]),
+				.read_word   (read_word),
+				.write_enable(write_enable[row_bank][col_bank]),
+				.write_addr  (write_addr[row_bank][col_bank]),
+				.write_word  ({write_last_time[row_bank][col_bank], write_membrane[row_bank][col_bank]})
 			);
+
+			assign read_membrane[row_bank][col_bank]  = read_word[MEMBRANE_WIDTH-1:0];
+			assign read_last_time[row_bank][col_bank] = read_word[NEURON_WORD_WIDTH-1:MEMBRANE_WIDTH];
 		end
 	end
 

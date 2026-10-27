@@ -44,7 +44,7 @@ flowchart TD
     end
 
     subgraph POSR["位置 R:資料出來"]
-        TAP["WeightTapSelect(第 5 段)<br/>用 pipe_tap[R] 從整組權重挑"]
+        TAP["每個 bank 選 tap(第 5 段)<br/>用 pipe_tap[R] 從整組權重挑"]
         STEP1["計算前一半(NeuronUpdate ①②)<br/>時間間隔、查衰減表、乘法捨回<br/>時間用 pipe_time[R]"]
     end
 
