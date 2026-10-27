@@ -18,7 +18,7 @@
 - Vivado 專案 `SaltNET/`(2026-10-24 從 `SaltConv/` 改名，見 Part 0)：
     - RTL 在 `SaltNET.srcs/sources_1/new/{lib,conv,fc,net}/`，`.mem` 在 `sources_1/mem/`。
     - testbench 在 `sim_1/new/{lib,conv,fc,net}/`，答案檔在各自的 `ref/`。
-    - 模擬、合成腳本在 `SaltNET/scripts/{lib,conv,net}/`，共用流程 `scripts/sim_common.tcl`。
+    - 模擬、合成腳本在 `SaltNET/scripts/{lib,conv,fc,net}/`，共用流程 `scripts/sim_common.tcl`。
 - 讀現行 RTL：`SaltConv.sv` 照事件流程分 0~6 段(檔頭有目錄)。
     - 控制總覽：[`SaltConvOverview.md`](../Concept/Layer-RTL/SaltConvOverview.md)。
     - 逐拍例子、資料流程圖：[`Conv-image/SaltConvControl.md`](../Concept/Layer-RTL/Conv-image/SaltConvControl.md)、[`SaltConvDataflow.md`](../Concept/Layer-RTL/Conv-image/SaltConvDataflow.md)。
@@ -26,17 +26,24 @@
 - 分支：Part 8.2、8.x 都已經 fast-forward 併進 `test`，`test` 已推到遠端。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
 - FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完，第 6 節 ⑤ 留到寫 RTL 時定；RTL 還沒開始。
 
-## 交接(2026-10-27)
+## 交接(2026-10-28)
 
+- 下一個 session 從 SaltFC Part 7 開始，先讀下面「Part 7」的起點資訊。
 - SaltFC Part 0~3 完成。
 - SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
 - SaltFC Part 5 完成(細節見下面「Part 5」)：conv 展開 `WeightTapSelect`、`NeuronMemory` 搬到 lib、FC $\hat V$ 跟門檻的 testbench。
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
-- 下一步：Part 7(spike 選擇與輸出)。
+- 下一步：Part 7(spike 選擇與輸出)，還沒開始討論。
+- 分支 `test`，最新 commit `66bbafd`，還沒 push；工作目錄乾淨。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
     - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
     - 跟使用者討論時一次只講一個決定：先列兩層現況對照，再給選項表跟建議。
+    - 只討論使用者要討論的事：TODO 延後表(D 編號)、程式裡的 reviewer 註解，使用者沒叫就不要自己拿出來處理。
+    - 講人話：講路徑、訊號時說它實際在做什麼(例：「conv2 的 `in_ready` 反壓 conv1」)，不要直接搬腳本、報告裡的標籤；testbench 細節使用者不在意，不用主動展開。
+    - 提量測時先想清楚目的再挑條件：要確認時序有沒有變差，就往更緊的目標週期跑(逼布局找好的)，不要排比現在還鬆的週期。
+    - 使用者說「直接做完」時，設計決定都已經定好的話就整個 Part 做完再回報，不用一步一步問。
+    - `SaltNET.xpr` 有改動就跟著 commit，不還原、不拿出來討論(見「作法 → 驗證」)。
 - 留著沒查的：Part 5 第 1 步(選 tap 展開)合成後 LUT 少 42，原因沒查出來；功能、4.8 ns 都確認過。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
@@ -65,7 +72,7 @@
 | 4 | 權重 BRAM：4a conv 權重 ROM 改用 lib 通用 ROM；4b 權重位址兩層共用 `lib/WeightMemory`、FC 權重查表 | 第 2 節「權重」 | 完成 |
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 完成 |
 | 6 | 膜電位更新：`NeuronUpdate` 拆成 lib `DecayLookup` + `NeuronUpdate`，加 spike 開關 | 第 3 節 | 完成 |
-| 7 | spike 選擇與輸出(優先權編碼器、bitmask) | 第 4 節 | 未開始 |
+| 7 | spike 選擇與輸出(優先權編碼器、bitmask) | 第 4 節 | 未開始(起點資訊見下面「Part 7」) |
 | 8 | pipeline 整合 | 第 5 節 | 未開始 |
 | 9 | 膜電位輸出 | 第 6 節 | 未開始 |
 | 10 | conv → FC 轉接模組 | 第 1 節 | 未開始 |
@@ -312,6 +319,22 @@ ceil$。
     - WNS 比改動前小，改動前、改動後再各跑一次 4.6 ns：改動後繞回 +0.300(改動前 +0.065)、飽和 +0.344(改動前 +0.022)。兩個目標取最好的 FMAX：繞回 221.4 → 232.6 MHz、飽和 220.0 → 235.0 MHz。差距在同一份電路布局的變動範圍內，沒有變差。
     - 合成腳本的跨層路徑改名：`conv1_output_to_conv2`(conv1 送 spike 事件給 conv2)、`conv2_ready_to_conv1`(conv2 反壓 conv1，沒有資料送回)。
     - 沒做：`tb_salt_conv` 完整回歸。
+
+### Part 7 spike 選擇與輸出(起點資訊，2026-10-28 整理，還沒討論)
+
+- 範圍：FC.md 第 4 節 ①~④。只有 `SPIKE_OUTPUT = 1` 時有這一節；最後一列空位置的 fire 遮罩($y\cdot n_{col}+x<n_{out}$)在 SaltFC top 做(Part 6 已定)。
+- FC 的做法(FC.md 已寫)：
+    - 一列算完最多 $n_{col}$ 顆 fire，存進 $n_{col}$ 位元的待送 bitmask，一拍送一顆，送出就清掉那個位元(第 4 節 ①)。
+    - 選哪一顆：固定順序的優先權編碼器，選 bitmask 裡最小的那一行(第 4 節 ②)。
+    - 送出 $(i,t)$，$i=y\cdot n_{col}+x$，$y\cdot n_{col}$ 用跟著這一列往管線後面帶的值，送出時只加 $x$(第 4 節 ③、第 5 節 ⑥)。
+    - 下游 `ready=0` 時 valid 維持、內容不變；bitmask 清空才推進到下一列(第 4 節 ④、第 5 節 ①④)。
+- conv 對應的現況：
+    - 選哪一顆：`conv/SpikeSelect`，純組合邏輯，M×M 格的優先權編碼器，順序由窗左上角的 bank 決定(會轉)。
+    - bitmask、送出交握、`out_*`：寫在 SaltConv top 第 6 段(`pending`、`pending_left`、`fires_left`、`stall`)，跟推進規則綁在一起。
+- 要先跟使用者定的(照「模組分法」先列兩層現況對照，一次一個)：
+    1. FC 的優先權編碼器要不要包模組、放 `fc/` 還是 `lib/`：conv 的順序會轉、FC 固定，兩個不一樣；有沒有共用的部分要先比過再提。
+    2. bitmask、送出交握放 Part 7 還是 Part 8：conv 寫在 top、跟推進規則綁在一起；FC 的「bitmask 清空才推進」也是 Part 8 的推進規則。可以參考 Part 6 把 FC 時間暫存器放 Part 8 的理由。
+    3. 驗證方式：照「作法 → 驗證」。
 
 ### Part 11 串接比對
 
