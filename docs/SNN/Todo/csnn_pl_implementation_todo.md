@@ -26,12 +26,17 @@
 - 分支：Part 8.2、8.x 都已經 fast-forward 併進 `test`，`test` 已推到遠端。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
 - FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完，第 6 節 ⑤ 留到寫 RTL 時定；RTL 還沒開始。
 
-## 交接(2026-10-25)
+## 交接(2026-10-27)
 
 - SaltFC Part 0~3 完成。
 - SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
 - SaltFC Part 5 完成(細節見下面「Part 5」)：conv 展開 `WeightTapSelect`、`NeuronMemory` 搬到 lib、FC $\hat V$ 跟門檻的 testbench。
-- 下一步：規劃 Part 6(膜電位更新)。
+- 下一步：Part 6(膜電位更新)，第一個決定還在等使用者回覆(見下面「Part 6」的提案)。
+- 這幾次定下來、之後的 Part 照著做的：
+    - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
+    - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
+    - 跟使用者討論時一次只講一個決定：先列兩層現況對照，再給選項表跟建議。
+- 留著沒查的：Part 5 第 1 步(選 tap 展開)合成後 LUT 少 42，原因沒查出來；功能、4.8 ns 都確認過。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
     - 從 Git Bash 呼叫 `wsl` 時，`/mnt/c/...` 會被 MSYS 轉成 Windows 路徑，要加 `MSYS_NO_PATHCONV=1`。
@@ -58,7 +63,7 @@
 | 3 | 輸入 FIFO:直接用 `lib/EventFIFO`，不寫新模組，例化在 Part 8 | 第 1 節 | 完成 |
 | 4 | 權重 BRAM：4a conv 權重 ROM 改用 lib 通用 ROM；4b 權重位址兩層共用 `lib/WeightMemory`、FC 權重查表 | 第 2 節「權重」 | 完成 |
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 完成 |
-| 6 | 膜電位更新 | 第 3 節 | 未開始 |
+| 6 | 膜電位更新 | 第 3 節 | 規劃中 |
 | 7 | spike 選擇與輸出(優先權編碼器、bitmask) | 第 4 節 | 未開始 |
 | 8 | pipeline 整合 | 第 5 節 | 未開始 |
 | 9 | 膜電位輸出 | 第 6 節 | 未開始 |
@@ -258,6 +263,22 @@ ceil$。
         - 門檻答案檔改壞一格($n_{col}=3$ 那組)：只有那組 FAIL，`MISMATCH y=2 column=0`；重新產生後 12 個檔跟原本逐檔相同。
     - 合成後(布局前)：第 2 步前後逐行相同(LUT 繞回 1233、飽和 1231)。
     - 布局繞線 4.8 ns(Part 5 全部做完)：繞回 +0.283、飽和 +0.254，兩版都過，見 `SaltConvSynthFlow.md`「現行 RTL：兩層串接」。
+
+### Part 6 膜電位更新
+
+- 提案(2026-10-27，等使用者回覆)：`conv/NeuronUpdate` 拆成兩個 lib 模組，conv、FC 共用。
+    - 起因：conv 每顆神經元有自己的 $t_{last}$，① 在 `NeuronUpdate` 裡每份各算；FC 整層共用 $t_{last}$，一列只要 1 份 ①，$n_{col}$ 顆共用。直接用 `NeuronUpdate`，FC 會多 $n_{col}-1$ 份衰減表；另寫一份 ②③④ 又跟 conv 重複。
+
+| 模組 | 內容 | conv 份數 | FC 份數 |
+|---|---|---|---|
+| 衰減查表 | ① $\Delta t$ → 衰減碼 $A$(含 $\Delta t=0$ 給 1.0、超過 $\Delta t_{\max}$ 給 0) | M×M | 1 |
+| 膜電位更新 | ②③④，輸入 $A$、$\hat V$、$q$、門檻；C=2 的切點留在 ② 之後；加 spike 開關參數(FC 可關) | M×M | $n_{col}$ |
+
+- 拆的時候要一起處理：
+    - `salt_conv_impl.xdc` 用 `*neuron_update/rounded_product` 找乘法 DSP 設 `DONT_TOUCH`，階層、實例名變了要跟著改，腳本會檢查 8 顆都套上。
+    - `NeuronUpdate.sv` 裡使用者留的 reviewer 註解：$\Delta t$ 位寬是否用 $\Delta t_{\max}$ 決定，拆到衰減查表時一起討論。
+    - FC 最後一列空位置的 fire 遮罩($y\cdot n_{col}+x<n_{out}$)在 SaltFC top 做，不放進模組。
+- 模組名稱、port 還沒定；定了方向之後再提。
 
 ### Part 11 串接比對
 
