@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// Module Name: SpikeSelect
+// Module Name: ConvSpikeSelect
 // Description:
 //   在還沒送出的 fire 裡挑 (o_y, o_x) 最小的那一個(Conv.md 第 4 節),純組合邏輯。
 //   先比 o_y 再比 o_x,跟神經元編號 o_y*W_out + o_x 由小到大的順序相同(model_operation_quant.md 第 5 節)。
@@ -25,7 +25,7 @@
 //   found=0 時 selected 全 0,selected_y、selected_x 的值不保證。
 //////////////////////////////////////////////////////////////////////////////////
 
-module SpikeSelect #(
+module ConvSpikeSelect #(
 	parameter integer OUT_ROWS    = 64,   // H_out
 	parameter integer OUT_COLS    = 64,   // W_out
 	parameter integer KERNEL_SIZE = 3,    // K

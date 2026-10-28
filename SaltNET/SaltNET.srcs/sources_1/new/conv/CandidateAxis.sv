@@ -9,7 +9,7 @@
 //   算法見 Conv.md 第 2 節「每個 bank 的候選怎麼算」:
 //   從 o_max 往左找每個 bank 的座標,整筆事件只除以 STRIDE、除以 AXIS_BANK_COUNT 各一次。
 //   窗:從 o_max 往左連續 AXIS_BANK_COUNT 格,每個 bank 一格,合法候選都在窗裡。
-//   min_bank 是窗最小座標 o_max-(M-1) 所在的 bank,= (m_max+1) mod M(Conv.md 第 4 節補充),給 SpikeSelect 用。
+//   min_bank 是窗最小座標 o_max-(M-1) 所在的 bank,= (m_max+1) mod M(Conv.md 第 4 節補充),給 ConvSpikeSelect 用。
 //     只看 in_coord,窗最小那格合不合法都有值。
 //     不是 Conv.md 第 2 節 o_min 的 bank:K 不是 S 的倍數時,有些 in_coord 只被 M-1 個輸出蓋到,
 //     o_min 比窗最小大 1(例:K=3,S=2,P=1,i=4 時窗是 o=1、2,o_min=2)。

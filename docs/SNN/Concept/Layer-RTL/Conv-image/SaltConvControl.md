@@ -89,7 +89,7 @@ flowchart LR
 | 訊號 | 段 | 怎麼算 | 誰用 |
 |---|---|---|---|
 | `compute_cycle` | 4 | `pipe_valid[L]` 而且 `!pipe_held` | 寫回開關、`pending` 取 spike 還是 bitmask |
-| `pending` | 6 | 剛到：spike 而且候選合法;停住:`bitmask` | SpikeSelect、`fires_left`、`pending_left` |
+| `pending` | 6 | 剛到：spike 而且候選合法;停住:`bitmask` | ConvSpikeSelect、`fires_left`、`pending_left` |
 | `fires_left` | 6 | 至少 1 個 fire,而且 `out_ready`=0 或不只 1 個 | `stall` |
 | `stall` | 6 | `pipe_valid[L]` 而且 `fires_left` | 管線位置、讀出第二級起、`read_next_oc`、`pipe_held` |
 | `next_from_fifo` | 2 | `last_read_out_channel` 是 OC−1 | 選這次要讀哪一筆、`next_oc_available`、`read_conflict`、`take_new_event` |

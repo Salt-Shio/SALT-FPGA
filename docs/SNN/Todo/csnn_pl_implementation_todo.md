@@ -28,13 +28,13 @@
 
 ## 交接(2026-10-28)
 
-- 下一個 session 從 SaltFC Part 7 開始，先讀下面「Part 7」的起點資訊。
+- SaltFC Part 7 做完、測完，已 commit，等使用者確認(細節見下面「Part 7」)。
+- 下一步：把不遵守「答案用訓練端 salt_core 的函式產生、testbench 拿來比對」這條規則的 testbench 挖出來處理(2026-10-28 使用者要求，Part 7 之後做)。已知一支:`gen_spike_select_ref.py` 的候選用訓練端 `_axis_candidates`,送出順序卻是腳本自己照座標排序，沒有呼叫 `salt_core.stream`。
 - SaltFC Part 0~3 完成。
 - SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
 - SaltFC Part 5 完成(細節見下面「Part 5」)：conv 展開 `WeightTapSelect`、`NeuronMemory` 搬到 lib、FC $\hat V$ 跟門檻的 testbench。
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
-- 下一步：Part 7(spike 選擇與輸出)，還沒開始討論。
-- 分支 `test`，最新 commit `66bbafd`，還沒 push；工作目錄乾淨。
+- 分支 `test`，最新 commit 是 SaltFC Part 7，還沒 push；工作目錄乾淨。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
     - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
@@ -51,7 +51,7 @@
     - agent 的 Bash 工具用 heredoc 餵 Python 時，`\\` 會被吃掉一個；含反斜線的替換腳本改用檔案寫。
     - `wsl bash -lc "..."` 裡的 `\$變數` 到 WSL 那邊是空的；有迴圈、變數的指令寫成 `.sh` 檔再 `wsl bash <檔案>`。
     - 訓練端在 WSL 跑匯出、測試時 GPU 可能被別的程式佔滿(JAX 會印一串 `CUDA_ERROR_OUT_OF_MEMORY`)；這些都不用 GPU，加 `JAX_PLATFORMS=cpu`。直接跑 `.py` 要加 `PYTHONPATH=.`,`python -m` 不用。
-    - `run_tb_neuron_memory.tcl` 9 組 ALL PASS 之後，印結果的 `puts` 報 `can not find channel named "stdout"`，exit 1；同一個 `puts` 在其他腳本都正常，原因查不到。`run_tb_salt_conv.tcl` 的 `ready_alternate` 第 3 組也碰到類似的事：模擬跑完，讀 `simulate.log` 的 `open` 失敗、錯誤訊息是空的。兩支單獨重跑都 ALL PASS，當偶發處理。2026-10-27 `run_tb_fc_weight_lookup.tcl`、`run_tb_weight_lookup.tcl` 各碰到一次 `stdout` 那個(各組的總結行都是 ALL PASS，只有最後印總表的 `puts` 失敗)；網路上查不到 Vivado 的說明。
+    - `run_tb_neuron_memory.tcl` 9 組 ALL PASS 之後，印結果的 `puts` 報 `can not find channel named "stdout"`，exit 1；同一個 `puts` 在其他腳本都正常，原因查不到。`run_tb_salt_conv.tcl` 的 `ready_alternate` 第 3 組也碰到類似的事：模擬跑完，讀 `simulate.log` 的 `open` 失敗、錯誤訊息是空的。兩支單獨重跑都 ALL PASS，當偶發處理。2026-10-27 `run_tb_fc_weight_lookup.tcl`、`run_tb_weight_lookup.tcl`，2026-10-28 `run_tb_spike_select.tcl` 各碰到一次 `stdout` 那個(各組的總結行都是 ALL PASS，只有最後印總表的 `puts` 失敗)；網路上查不到 Vivado 的說明。
     - 2026-10-27 `tb_salt_conv_net_ready_burst` 第一次 elaborate 報 `Spawn failed: %1 不是有效的 Win32 應用程式`(vivado-usage skill 8.7)，單獨重跑就過。
 
 ## SaltFC
@@ -72,7 +72,7 @@
 | 4 | 權重 BRAM：4a conv 權重 ROM 改用 lib 通用 ROM；4b 權重位址兩層共用 `lib/WeightMemory`、FC 權重查表 | 第 2 節「權重」 | 完成 |
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 完成 |
 | 6 | 膜電位更新：`NeuronUpdate` 拆成 lib `DecayLookup` + `NeuronUpdate`，加 spike 開關 | 第 3 節 | 完成 |
-| 7 | spike 選擇與輸出(優先權編碼器、bitmask) | 第 4 節 | 未開始(起點資訊見下面「Part 7」) |
+| 7 | spike 選擇：`fc/FCSpikeSelect`、conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8 | 第 4 節 ②③ | 做完，等使用者確認 |
 | 8 | pipeline 整合 | 第 5 節 | 未開始 |
 | 9 | 膜電位輸出 | 第 6 節 | 未開始 |
 | 10 | conv → FC 轉接模組 | 第 1 節 | 未開始 |
@@ -320,21 +320,37 @@ ceil$。
     - 合成腳本的跨層路徑改名：`conv1_output_to_conv2`(conv1 送 spike 事件給 conv2)、`conv2_ready_to_conv1`(conv2 反壓 conv1，沒有資料送回)。
     - 沒做：`tb_salt_conv` 完整回歸。
 
-### Part 7 spike 選擇與輸出(起點資訊，2026-10-28 整理，還沒討論)
+### Part 7 spike 選擇與輸出
 
-- 範圍：FC.md 第 4 節 ①~④。只有 `SPIKE_OUTPUT = 1` 時有這一節；最後一列空位置的 fire 遮罩($y\cdot n_{col}+x<n_{out}$)在 SaltFC top 做(Part 6 已定)。
-- FC 的做法(FC.md 已寫)：
-    - 一列算完最多 $n_{col}$ 顆 fire，存進 $n_{col}$ 位元的待送 bitmask，一拍送一顆，送出就清掉那個位元(第 4 節 ①)。
-    - 選哪一顆：固定順序的優先權編碼器，選 bitmask 裡最小的那一行(第 4 節 ②)。
-    - 送出 $(i,t)$，$i=y\cdot n_{col}+x$，$y\cdot n_{col}$ 用跟著這一列往管線後面帶的值，送出時只加 $x$(第 4 節 ③、第 5 節 ⑥)。
-    - 下游 `ready=0` 時 valid 維持、內容不變；bitmask 清空才推進到下一列(第 4 節 ④、第 5 節 ①④)。
-- conv 對應的現況：
-    - 選哪一顆：`conv/SpikeSelect`，純組合邏輯，M×M 格的優先權編碼器，順序由窗左上角的 bank 決定(會轉)。
-    - bitmask、送出交握、`out_*`：寫在 SaltConv top 第 6 段(`pending`、`pending_left`、`fires_left`、`stall`)，跟推進規則綁在一起。
-- 要先跟使用者定的(照「模組分法」先列兩層現況對照，一次一個)：
-    1. FC 的優先權編碼器要不要包模組、放 `fc/` 還是 `lib/`：conv 的順序會轉、FC 固定，兩個不一樣；有沒有共用的部分要先比過再提。
-    2. bitmask、送出交握放 Part 7 還是 Part 8：conv 寫在 top、跟推進規則綁在一起；FC 的「bitmask 清空才推進」也是 Part 8 的推進規則。可以參考 Part 6 把 FC 時間暫存器放 Part 8 的理由。
-    3. 驗證方式：照「作法 → 驗證」。
+- 範圍：FC.md 第 4 節 ②③(挑哪一顆、送出的編號 $i$)。只有 `SPIKE_OUTPUT = 1` 時用到。
+- 已定(2026-10-28)：
+    - FC 的挑選自己一個模組 `fc/FCSpikeSelect`，不收進 lib：conv 的順序由窗左上角的 bank 決定(每筆事件不同)、在 M×M 裡挑座標，FC 順序固定、在一列 $n_{col}$ 位元裡給行號，算法不一樣(Part 4b 的標準：算法一樣才收成一份)。兩層共用的只有「找第一個 1」，為了它改 conv 要重跑整層回歸跟時序。
+        - 不選「lib 放通用優先權編碼器，conv 也改用」：conv 挑 fire 那段在管線停不停的路徑上，改了要重量。
+        - 不選「寫在 SaltFC top」：違反 Part 5「有邏輯才包模組」，單獨測不到。
+    - conv 的 `SpikeSelect` 改名 `ConvSpikeSelect`，跟 `FCSpikeSelect` 配對；例化名 `spike_select`、testbench 那一串(`tb_spike_select`、`sim_spike_select`、`spike_select_*.txt`)不改：testbench 本來就靠有沒有 `fc_` 分層。
+    - bitmask、送出交握、停住放 Part 8，寫在 SaltFC top，跟 conv 第 6 段一樣：
+        - 這一拍要挑哪些(算的那一拍是 $s$ 加最後一列空位置的遮罩，停住的拍子是 bitmask)要分得出「是不是算的那一拍」，靠 Part 8 的管線。
+        - 輸出「還有沒有剩」決定整條管線停不停、讀不讀下一列，是 Part 8 的推進規則；FC 還要併 Part 9 膜電位輸出沒被收走的條件。
+        - 不選「收成 lib 模組兩層共用」：挑選模組夾在中間，port 要繞一圈(吐出要挑的 → 各層挑選模組 → 收回挑到哪顆)，而且 conv 這段在停住的路徑上，改了要重量。
+    - `FCSpikeSelect` 直接輸出 $i=y\cdot n_{col}+x$(輸入這一列帶的 $y\cdot n_{col}$)，跟 `ConvSpikeSelect` 直接輸出 $o_y$、$o_x$ 對稱，兩層 top 都只接線；$n_{col}$ 是 2 的次方就把 $x$ 接進低位，其他用加法，兩條分支都在 Part 7 的 testbench 測到。
+- 做法(2026-10-28)：
+    - 第 1 步 conv 改名：`git mv conv/SpikeSelect.sv conv/ConvSpikeSelect.sv`，module 名、SaltConv 與 `tb_spike_select` 的例化、`CandidateAxis`/`CandidateGrid`/SaltConv 註解、`gen_candidate_axis_ref.py`/`gen_spike_select_ref.py` 說明、`SaltConvOverview.md`、`SaltConvControl.md`、`SaltConvDataflow.md`、`SaltConvSynthFlow.md`、架構總覽 drawio(命令列重新匯出 svg)跟著改；`.xpr` 用 batch `remove_files` 拿掉舊路徑。
+    - 第 2 步 `fc/FCSpikeSelect.sv`：參數 `OUT_NEURONS`、`NEURONS_PER_ROW`；輸入 `pending`($n_{col}$ 位元)、`row_start`($y\cdot n_{col}$)，輸出 `found`、`selected`(one-hot)、`selected_neuron`($i$)。generate 三支：2 的次方而且 $i$ 位寬比 $x$ 寬(接位元)、2 的次方只有一列($i$ 就是 $x$)、其他(加法，含 $n_{col}=1$)。
+    - `scripts/fc/gen_fc_spike_select_ref.py`：送出順序用訓練端 `salt_core.stream.extract_output_events_fc` 算(FC 層 forward 把 spike 排成下一層事件流的函式)；每列窮舉合法行的子集合，做只有一筆輸入事件的 `spike_mask` 丟進去，前 `n_real_events` 筆的 `event_source_idx` 就是預期的 $i$。
+    - `sim_1/new/fc/tb_fc_spike_select.sv` + `scripts/fc/run_tb_fc_spike_select.tcl`：照預期順序一步一步比 `found`、`selected`、`selected_neuron`，每步用答案(不用 DUT 的 `selected`)清掉那一行；參數組 $(n_{out},n_{col})$ = (10,4)、(10,3)、(13,5)、(20,8)、(5,1)、(3,4)、(2,8)、(1,1)。
+    - FC.md 第 4 節 ②③ 記上用 `FCSpikeSelect`、bitmask 跟交握在 SaltFC top。
+- 驗證(2026-10-28)：
+    - 第 1 步(行為不變的整理)：
+        - 合成後(布局前，兩層串接)跟 HEAD 比：繞回、飽和兩版的 `report_utilization` 除了表頭(日期、指令、分隔線長度)逐行相同(LUT 1233、1231，FF 421，BRAM 8，DSP 8)，10 顆 BRAM 的 `DOA_REG`/`DOB_REG` 相同。
+        - `tb_spike_select` 8 組 ALL PASS(印總表的 `puts` 又報 `can not find channel named "stdout"`，同交接「工具問題」)。
+        - `tb_salt_conv_ready_high` R2C2 重疊 10 組 ALL PASS。
+    - 第 2 步：
+        - `tb_fc_spike_select` 8 組 ALL PASS(共 686 個 case、2379 步)。
+        - 反向測試：
+            - 改成挑最大的那一行：$n_{col}>1$ 的 6 組全部 FAIL;$n_{col}=1$ 的 (5,1)、(1,1) PASS(一列只有一行，挑最大跟最小是同一顆)。
+            - 「直接接位元」那支不接 $x$(低位給 0):只有走這支的 (10,4)、(20,8) FAIL;(3,4)、(2,8) 走「只有一列」那支，PASS。
+            - 還原後跟測過的版本逐 byte 相同。
+- 不做：合成量測。`FCSpikeSelect` 要等 Part 8 接進 SaltFC 才有實際電路，Part 12 一起量。
 
 ### Part 11 串接比對
 
@@ -345,7 +361,7 @@ ceil$。
 
 | 編號 | 項目 | 什麼時候處理 |
 |---|---|---|
-| D1 | 時序 C：`SpikeSelect` 改成看「窗裡排在我前面的有沒有 pending」，不轉讀的順序 | 整合後 5 ns 過不了才做 |
+| D1 | 時序 C：`ConvSpikeSelect` 改成看「窗裡排在我前面的有沒有 pending」，不轉讀的順序 | 整合後 5 ns 過不了才做 |
 | D2 | 時序 D：讀位址路徑(FIFO 最前面那筆 → 選這次要讀哪一筆 → `CandidateGrid` → BRAM 讀位址)；4.8 ns 量測裡 M=3 繞回、兩層串接飽和版的最長路徑就是這條 | 整合後 5 ns 過不了才做 |
 | D4 | 讀取開關每拍都開，還是推進那一拍才開 | 之後討論 |
 | D5 | testbench 重整：`tb_salt_conv_common.svh` 的 `run_sample` 一個 task 混了驅動、交握檢查、涵蓋統計、拍數、比對 | 碰到要改 testbench 時一起處理 |
@@ -486,7 +502,7 @@ ceil$。
 - 拆成單軸子模組，參數 $K,S,P,O_{max}$，y、x 各例化一次；兩軸配對、bank 內位址攤平在 `CandidateGrid`。
     - 候選條件兩軸獨立，只有位址攤平要兩軸合併；單軸可以窮舉驗證；非正方形 kernel 只要兩個實例傳不同參數。
 - 單軸輸出 $M$ 組，第 $r$ 組就是 bank $r$($o\bmod M=r$)的候選，每個欄位各自一個 unpacked array：`valid`、`out_coord`、`bank_offset`、`tap`。
-    - 另外一個值 `min_bank`：窗最小座標 $o_{max}-(M-1)$ 的 bank，$(m_{max}+1)\bmod M$，給 `SpikeSelect` 用；不是 Conv.md 第 2 節 $o_{min}$ 的 bank。
+    - 另外一個值 `min_bank`：窗最小座標 $o_{max}-(M-1)$ 的 bank，$(m_{max}+1)\bmod M$，給 `ConvSpikeSelect` 用；不是 Conv.md 第 2 節 $o_{min}$ 的 bank。
     - 不用 struct：要多一個共用巨集 `.svh`，上層兩軸位寬不同還要各開 generate block。
 - `CandidateGrid` 輸入 $(y,x)$ 跟這一拍的 $o_c$，輸出 $M\times M$ 組 `valid`、`bank_addr`、$(o_y,o_x)$、$(k_y,k_x)$，跟窗左上角的 bank `top_row_bank`、`left_col_bank`。
 - bank 內位址用乘常數攤平：$(o_c\cdot G_y+g_y)\cdot G_x+g_x$，不把每一維補到 2 的次方(補了在 $OC=16$、$G_y=G_x=22$ 時 BRAM 用量約兩倍)。

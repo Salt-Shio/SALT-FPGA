@@ -6,16 +6,16 @@
 同一個 o_c 內就是 o_y * OUT_COLS + o_x 由小到大(訓練端 salt_core/stream.py 用同一個編號 lexsort)。
 
 pending 怎麼取:
-  - SpikeSelect 的行為只由 (top_row_bank, left_col_bank, 合法 bank 的位置) 決定,同一種組合第一次出現時,
+  - ConvSpikeSelect 的行為只由 (top_row_bank, left_col_bank, 合法 bank 的位置) 決定,同一種組合第一次出現時,
     合法 bank 數 n <= EXHAUSTIVE_BANKS 就窮舉全部 2^n 個子集合,否則抽 SAMPLED_SUBSETS 個,再加上全亮、只亮一個。
   - 同一種組合之後再出現(座標不同),只抽 REPEAT_SUBSETS 個,加上全亮,讓不同座標也測到 selected_y、selected_x。
   - 兩軸都沒有候選的座標只有全 0 一種。
-不合法 bank 的 out_y、out_x 填亂數(一半機率填 0)。testbench 送進 SpikeSelect 的座標來自 RTL 的
+不合法 bank 的 out_y、out_x 填亂數(一半機率填 0)。testbench 送進 ConvSpikeSelect 的座標來自 RTL 的
 CandidateGrid,不是這裡的值;這裡的值只在 valid=1 時拿來跟 CandidateGrid 比對。
 
 top_row_bank、left_col_bank 是窗(這一拍的 M x M 候選)最上面那列的 o_y mod M、最左邊那行的 o_x mod M,
 用 gen_candidate_axis_ref.py 的 axis_min_bank 算;產生答案時用 check_min_bank_order 確認:
-合法候選照「從窗的最上面(最左邊)往下(往右)」排的順序,跟依座標排的順序相同(SpikeSelect 不比座標的前提)。
+合法候選照「從窗的最上面(最左邊)往下(往右)」排的順序,跟依座標排的順序相同(ConvSpikeSelect 不比座標的前提)。
 
 答案檔一行一個指令,第一個欄位是種類,欄位以空白分隔:
     case <in_y> <in_x> <top_row_bank> <left_col_bank> [bank (0,0)] ... [bank (M-1,M-1)] <count> <order_1> ... <order_count>

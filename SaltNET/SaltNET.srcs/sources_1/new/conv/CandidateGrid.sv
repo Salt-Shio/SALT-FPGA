@@ -12,7 +12,7 @@
 //     addr = (o_c * ROW_SLOTS + g_y) * COL_SLOTS + g_x,緊密排列,不補到 2 的次方。
 //   每個 bank 一律開 OUT_CHANNELS * ROW_SLOTS * COL_SLOTS 格,邊界不整除時有些 bank 會空幾格。
 //   top_row_bank、left_col_bank:窗(這一拍 M x M 個候選框住的範圍)左上角那格的 bank,
-//   就是 y 軸、x 軸 CandidateAxis 的 min_bank,給 SpikeSelect 決定讀的順序(Conv.md 第 4 節補充)。
+//   就是 y 軸、x 軸 CandidateAxis 的 min_bank,給 ConvSpikeSelect 決定讀的順序(Conv.md 第 4 節補充)。
 //   只看事件座標,跟 out_channel、valid 無關。
 //////////////////////////////////////////////////////////////////////////////////
 

@@ -6,7 +6,7 @@
 
 min_bank 是窗(從 o_max 往左連續 M 格)最小座標 o_max-(M-1) 的 bank,用 axis_min_bank 的公式算;
 訓練端沒有窗這個概念,改用 check_min_bank_order 拿訓練端的合法候選確認:
-從 min_bank 往後循環的 bank 順序,就是座標由小到大(SpikeSelect 不比座標的前提)。
+從 min_bank 往後循環的 bank 順序,就是座標由小到大(ConvSpikeSelect 不比座標的前提)。
 
 每組參數輸出一個文字檔,一行一個 in_coord,欄位以空白分隔:
     in_coord min_bank  valid_0 out_coord_0 bank_offset_0 tap_0  valid_1 out_coord_1 ...

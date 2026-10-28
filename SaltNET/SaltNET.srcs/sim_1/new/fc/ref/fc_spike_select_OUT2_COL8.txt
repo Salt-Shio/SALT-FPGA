@@ -1,0 +1,5 @@
+case 0 0 0
+case 0 1 1 0
+case 0 2 1 1
+case 0 3 2 0 1
+end 4 4

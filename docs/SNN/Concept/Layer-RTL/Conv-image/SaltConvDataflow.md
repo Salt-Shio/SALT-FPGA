@@ -53,7 +53,7 @@ flowchart TD
         CC["compute_cycle(第 4 段)<br/>pipe_valid[L] 而且上一拍沒停"]
         WB["寫回 NeuronMemory(第 5 段)<br/>只在 compute_cycle=1、候選合法"]
         PEND["pending(第 6 段)<br/>剛到：spike 而且合法<br/>停住:bitmask"]
-        SS["SpikeSelect(第 6 段)<br/>挑 o_y、o_x 最小的一個"]
+        SS["ConvSpikeSelect(第 6 段)<br/>挑 o_y、o_x 最小的一個"]
         OUT["送出 out_valid、out_x、out_y<br/>out_channel、out_time(第 6 段)"]
         READY["out_ready(下游)"]
         LEFT["pending_left(第 6 段)<br/>拿掉送出的"]
@@ -135,5 +135,5 @@ flowchart TD
 - 同一拍裡三塊處理的是三個不同的 o_c(L=3 時)。讀用 CandidateGrid 剛算出的 `grid_*`,寫回用 `pipe_*[L]`,選權重和算時間間隔用 `pipe_*[R]`。
 - 讀出暫存器跟管線位置用同一組條件移動：讀出第一級只在 `read_next_oc` 那拍讀，第二級起在 `stall`=0 時推。所以停住的拍子，位置 R 的 o_c 跟它的資料一起留著。
 - 切點暫存器每拍都存，不接 `stall`。位置 L 只在剛到那拍(`compute_cycle`)用它，那拍它存的剛好是這個 o_c 的前半結果;停住的拍子不寫回，fire 改從 bitmask 拿。
-- `fires_left` 只看要送的 fire 個數跟 `out_ready`,不等 SpikeSelect 挑完，`stall` 那條路比較短。
+- `fires_left` 只看要送的 fire 個數跟 `out_ready`,不等 ConvSpikeSelect 挑完，`stall` 那條路比較短。
 - 控制訊號每拍的值、四個逐拍例子，見 [SaltConvControl.md](SaltConvControl.md)。

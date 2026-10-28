@@ -2,13 +2,13 @@
 //////////////////////////////////////////////////////////////////////////////////
 // Module Name: tb_spike_select
 // Description:
-//   CandidateGrid + SpikeSelect 比對,答案由 scripts/gen_spike_select_ref.py 用訓練端 _axis_candidates 的候選、
+//   CandidateGrid + ConvSpikeSelect 比對,答案由 scripts/gen_spike_select_ref.py 用訓練端 _axis_candidates 的候選、
 //   神經元編號的順序產生。
-//   SpikeSelect 的 out_y、out_x、top_row_bank、left_col_bank 接 RTL 的 CandidateGrid(依事件座標算),
+//   ConvSpikeSelect 的 out_y、out_x、top_row_bank、left_col_bank 接 RTL 的 CandidateGrid(依事件座標算),
 //   一起測到兩個模組的 bank 編號規則接得起來;pending 由答案檔給。
 //   每個 case:
 //     先比 CandidateGrid:top_row_bank、left_col_bank、每個 bank 的 valid,valid=1 的 bank 再比 out_y、out_x。
-//     再照預期順序一步一步比 SpikeSelect:
+//     再照預期順序一步一步比 ConvSpikeSelect:
 //       還有要送的:found=1,selected 只有預期那個 bank 是 1,selected_y、selected_x 是那個 bank 的座標;
 //       比完把預期那個 bank 的 pending 清掉(不用 DUT 的 selected 清,錯誤不會一路傳下去)。
 //       全部送完:found=0,selected 全 0。
@@ -28,10 +28,10 @@ module tb_spike_select;
 	parameter integer Y_WIDTH     = 6;
 	parameter integer X_WIDTH     = 6;
 
-	// out_channel 不影響 SpikeSelect 要的輸出,CandidateGrid 只開 1 個 channel
+	// out_channel 不影響 ConvSpikeSelect 要的輸出,CandidateGrid 只開 1 個 channel
 	localparam integer OUT_CHANNELS = 1;
 
-	// 跟 CandidateGrid、SpikeSelect 的 localparam 同一套公式,port 位寬要對上才能接
+	// 跟 CandidateGrid、ConvSpikeSelect 的 localparam 同一套公式,port 位寬要對上才能接
 	localparam integer AXIS_BANK_COUNT   = (KERNEL_SIZE + STRIDE - 1) / STRIDE;
 	localparam integer BANK_COUNT        = AXIS_BANK_COUNT * AXIS_BANK_COUNT;
 	localparam integer BANK_INDEX_WIDTH  = (AXIS_BANK_COUNT > 1) ? $clog2(AXIS_BANK_COUNT) : 1;
@@ -57,7 +57,7 @@ module tb_spike_select;
 	logic [BANK_INDEX_WIDTH-1:0]  top_row_bank;
 	logic [BANK_INDEX_WIDTH-1:0]  left_col_bank;
 
-	// SpikeSelect
+	// ConvSpikeSelect
 	logic                         pending        [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 	logic                         found;
 	logic                         selected       [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
@@ -87,7 +87,7 @@ module tb_spike_select;
 		.left_col_bank(left_col_bank)
 	);
 
-	SpikeSelect #(
+	ConvSpikeSelect #(
 		.OUT_ROWS   (OUT_ROWS),
 		.OUT_COLS   (OUT_COLS),
 		.KERNEL_SIZE(KERNEL_SIZE),
@@ -223,7 +223,7 @@ module tb_spike_select;
 					end
 				end
 
-				// SpikeSelect:照預期順序一步一步比,每步清掉預期的那個 bank
+				// ConvSpikeSelect:照預期順序一步一步比,每步清掉預期的那個 bank
 				for (int step = 0; step <= order_count; step++) begin
 					#1;
 					if (step < order_count) begin

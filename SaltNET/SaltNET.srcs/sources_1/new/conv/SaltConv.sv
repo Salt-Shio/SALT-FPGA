@@ -462,7 +462,7 @@ module SaltConv #(
 	logic [OUT_Y_WIDTH-1:0] selected_y;
 	logic [OUT_X_WIDTH-1:0] selected_x;
 
-	SpikeSelect #(
+	ConvSpikeSelect #(
 		.OUT_ROWS   (OUT_ROWS),
 		.OUT_COLS   (OUT_COLS),
 		.KERNEL_SIZE(KERNEL_SIZE),
@@ -500,7 +500,7 @@ module SaltConv #(
 	end
 
 	// 送完還有沒有剩:有 fire,而且下游不收或不只一個(一拍最多送一個)。
-	// 跟挑中哪一個無關,只看個數,不等 SpikeSelect,stall 不用跟著 pending_left 那條走
+	// 跟挑中哪一個無關,只看個數,不等 ConvSpikeSelect,stall 不用跟著 pending_left 那條走
 	logic pending_any;        // 這一拍要送的 fire 至少一個
 	logic pending_multiple;   // 這一拍要送的 fire 至少兩個
 	logic fires_left;         // 這一拍做完還有沒送出的 fire

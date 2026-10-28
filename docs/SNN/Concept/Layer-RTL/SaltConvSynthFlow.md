@@ -131,7 +131,7 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_c
 - 規劃 Part 8 各種做法時用的，腳本沒有進 repo，每次在 session 暫存目錄重寫。
 - non-project 模式，不動 `.xpr`。每組參數一個包裝 module：port 位寬寫死、例化 `SaltConv` 帶入整組參數，資料檔用絕對路徑。
 - 6 組設定：訓練端 conv1、conv2 × 繞回、飽和(參數照 `run_tb_salt_conv.tcl` 的前 4 組)，加上 conv2 改成 K3 S1 P1(輸出 17×17，M=3)的繞回、飽和，沿用 conv2 的權重、門檻、衰減表。
-    - 加 M=3 的理由：計算第 2 級有 `SpikeSelect`、「還有沒有剩」，會隨 $M^2$ 變長。
+    - 加 M=3 的理由：計算第 2 級有 `ConvSpikeSelect`、「還有沒有剩」，會隨 $M^2$ 變長。
 - 管線設定：(R, C, OVERLAP) 跟 `run_tb_salt_conv.tcl` 的 7 種相同(R1C1、R2C1 不重疊/重疊、R1C2 不重疊/重疊、R2C2 不重疊/重疊)。
 - Tcl 步驟：
     - `read_verilog -sv` 讀 `sources_1/new/` 底下 `lib/`、`conv/` 的全部 `.sv` 跟包裝 module。
@@ -256,7 +256,7 @@ vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_c
 | 決定 | 量到的 | 時間 |
 |---|---|---|
 | `WeightMemory` 指定 `rom_style = "block"` | 不指定時 conv1(深度 16)做成 32 LUT + 63 FF、conv2 是 1 個 RAMB36；指定後都是 1 個 RAMB36 | 2026-10-07 |
-| `SpikeSelect` 用旋轉法，不用比較鍵法 | LUT 約 1/3~1/2、延遲約一半(conv1：17 對 55 LUT、1.05 對 1.98 ns；M=4：147 對 386 LUT) | 2026-10-11 |
+| `ConvSpikeSelect` 用旋轉法，不用比較鍵法 | LUT 約 1/3~1/2、延遲約一半(conv1：17 對 55 LUT、1.05 對 1.98 ns；M=4：147 對 386 LUT) | 2026-10-11 |
 | `EventFIFO` 資料陣列的寫入不放在有 reset 的 `always_ff` | 放在一起時推不出 distributed RAM，conv1 589 個 FF 裡約 464 個是 FIFO；改完 18 個 LUT 當記憶體 | 2026-10-12 |
 | 管線化(算完那一拍直接送) | 沒有 fire 的 $o_c$ 快 1.8~1.9 倍，時脈只掉 3~11%；讀位址不等推進的判斷是關鍵(+7~15 MHz) | 2026-10-15 |
 | 只做 $R=2$ 不划算 | 時脈 +2~10 MHz，一個沒 fire 的 $o_c$ 從 9.4 ns 變 18~19 ns | 2026-10-18 |
