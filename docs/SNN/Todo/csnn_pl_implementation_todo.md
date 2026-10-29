@@ -26,15 +26,16 @@
 - 分支：Part 8.2、8.x 都已經 fast-forward 併進 `test`，`test` 已推到遠端。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
 - FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完，第 6 節 ⑤ 留到寫 RTL 時定；RTL 還沒開始。
 
-## 交接(2026-10-28)
+## 交接(2026-10-29)
 
-- SaltFC Part 7 做完、測完，已 commit，等使用者確認(細節見下面「Part 7」)。
-- 下一步：把不遵守「答案用訓練端 salt_core 的函式產生、testbench 拿來比對」這條規則的 testbench 挖出來處理(2026-10-28 使用者要求，Part 7 之後做)。已知一支:`gen_spike_select_ref.py` 的候選用訓練端 `_axis_candidates`,送出順序卻是腳本自己照座標排序，沒有呼叫 `salt_core.stream`。
+- 下一步：SaltFC Part 8(pipeline 整合)，還沒開始討論。
 - SaltFC Part 0~3 完成。
 - SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
 - SaltFC Part 5 完成(細節見下面「Part 5」)：conv 展開 `WeightTapSelect`、`NeuronMemory` 搬到 lib、FC $\hat V$ 跟門檻的 testbench。
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
-- 分支 `test`，最新 commit 是 SaltFC Part 7，還沒 push；工作目錄乾淨。
+- SaltFC Part 7 完成(細節見下面「Part 7」)：FC 挑選模組 `fc/FCSpikeSelect`，conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8。
+- 2026-10-29 盤點「答案用訓練端 salt_core 的函式產生」這條規則：訓練端有對應函式卻沒用的只有 `tb_spike_select` 的送出順序，已改(見下面「Part 7」最後)。bank 排列、記憶體讀寫清除、FIFO、拍數、寬字切段這些訓練端沒有對應函式，使用者決定不處理。
+- 分支 `test`，最新 commit 是 `tb_spike_select` 答案腳本改用訓練端排順序，還沒 push；工作目錄乾淨。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
     - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
@@ -44,6 +45,8 @@
     - 提量測時先想清楚目的再挑條件：要確認時序有沒有變差，就往更緊的目標週期跑(逼布局找好的)，不要排比現在還鬆的週期。
     - 使用者說「直接做完」時，設計決定都已經定好的話就整個 Part 做完再回報，不用一步一步問。
     - `SaltNET.xpr` 有改動就跟著 commit，不還原、不拿出來討論(見「作法 → 驗證」)。
+    - 答案一律用訓練端 salt_core 的函式產生，testbench 拿來比對；訓練端有對應函式就要叫，不在腳本、testbench 裡自己重寫一份。只有硬體才有的東西(bank 排列、記憶體、FIFO、拍數、寬字切段)沒有對應函式，才自己算(2026-10-29)。
+    - 命名有一個明顯改動少、又符合既有命名習慣的選項時，直接提名字跟一句理由，不列選項表。
 - 留著沒查的：Part 5 第 1 步(選 tap 展開)合成後 LUT 少 42，原因沒查出來；功能、4.8 ns 都確認過。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
@@ -52,6 +55,7 @@
     - `wsl bash -lc "..."` 裡的 `\$變數` 到 WSL 那邊是空的；有迴圈、變數的指令寫成 `.sh` 檔再 `wsl bash <檔案>`。
     - 訓練端在 WSL 跑匯出、測試時 GPU 可能被別的程式佔滿(JAX 會印一串 `CUDA_ERROR_OUT_OF_MEMORY`)；這些都不用 GPU，加 `JAX_PLATFORMS=cpu`。直接跑 `.py` 要加 `PYTHONPATH=.`,`python -m` 不用。
     - `run_tb_neuron_memory.tcl` 9 組 ALL PASS 之後，印結果的 `puts` 報 `can not find channel named "stdout"`，exit 1；同一個 `puts` 在其他腳本都正常，原因查不到。`run_tb_salt_conv.tcl` 的 `ready_alternate` 第 3 組也碰到類似的事：模擬跑完，讀 `simulate.log` 的 `open` 失敗、錯誤訊息是空的。兩支單獨重跑都 ALL PASS，當偶發處理。2026-10-27 `run_tb_fc_weight_lookup.tcl`、`run_tb_weight_lookup.tcl`，2026-10-28 `run_tb_spike_select.tcl` 各碰到一次 `stdout` 那個(各組的總結行都是 ALL PASS，只有最後印總表的 `puts` 失敗)；網路上查不到 Vivado 的說明。
+    - `perl -CSD -pi -e 's/中文.../'` 對含中文的樣式比對不到(輸入照 UTF-8 解成字元，樣式本身沒解)，替換照樣成功結束、什麼都沒改；含中文的替換用 Python 寫，`assert` 舊字串出現次數。
     - 2026-10-27 `tb_salt_conv_net_ready_burst` 第一次 elaborate 報 `Spawn failed: %1 不是有效的 Win32 應用程式`(vivado-usage skill 8.7)，單獨重跑就過。
 
 ## SaltFC
@@ -72,7 +76,7 @@
 | 4 | 權重 BRAM：4a conv 權重 ROM 改用 lib 通用 ROM；4b 權重位址兩層共用 `lib/WeightMemory`、FC 權重查表 | 第 2 節「權重」 | 完成 |
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 完成 |
 | 6 | 膜電位更新：`NeuronUpdate` 拆成 lib `DecayLookup` + `NeuronUpdate`，加 spike 開關 | 第 3 節 | 完成 |
-| 7 | spike 選擇：`fc/FCSpikeSelect`、conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8 | 第 4 節 ②③ | 做完，等使用者確認 |
+| 7 | spike 選擇：`fc/FCSpikeSelect`、conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8 | 第 4 節 ②③ | 完成 |
 | 8 | pipeline 整合 | 第 5 節 | 未開始 |
 | 9 | 膜電位輸出 | 第 6 節 | 未開始 |
 | 10 | conv → FC 轉接模組 | 第 1 節 | 未開始 |
@@ -351,6 +355,7 @@ ceil$。
             - 「直接接位元」那支不接 $x$(低位給 0):只有走這支的 (10,4)、(20,8) FAIL;(3,4)、(2,8) 走「只有一列」那支，PASS。
             - 還原後跟測過的版本逐 byte 相同。
 - 不做：合成量測。`FCSpikeSelect` 要等 Part 8 接進 SaltFC 才有實際電路，Part 12 一起量。
+- 2026-10-29 補：`scripts/conv/gen_spike_select_ref.py` 的送出順序原本是腳本自己照 $o_y\cdot W+o_x$ 排，改成呼叫訓練端 `salt_core.stream.extract_output_events_conv`(只開 1 個 $o_c$,每批 256 個 case 當不同輸入事件一次算),編號用 `salt_core.connectivity.conv.unravel_conv_source` 換回座標。重新產生的 8 個答案檔跟原本逐 byte 相同，所以 testbench 沒重跑。
 
 ### Part 11 串接比對
 

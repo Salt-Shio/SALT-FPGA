@@ -2,8 +2,11 @@
 
 候選照訓練端 salt_core.connectivity.conv._axis_candidates(gen_candidate_grid_ref.py 的 axis_candidate_lists)
 算每個事件座標 (in_y, in_x) 每個 bank 的候選 (o_y, o_x),bank 是 (o_y mod M, o_x mod M)。
-合法 bank 的子集合當 pending,送出順序照 model_operation_quant.md 第 5 節的神經元編號由小到大:
-同一個 o_c 內就是 o_y * OUT_COLS + o_x 由小到大(訓練端 salt_core/stream.py 用同一個編號 lexsort)。
+合法 bank 的子集合當 pending,送出順序用訓練端 salt_core.stream.extract_output_events_conv 算:它是 conv 層
+forward 把這一層的 spike 排成下一層事件流的函式,同一筆事件讓幾顆神經元同時 fire 時,照神經元編號由小到大。
+每個 case 當成一筆輸入事件,只開 1 個 o_c,pending 的候選設成 fire;排出來的神經元編號用
+salt_core.connectivity.conv.unravel_conv_source(下一層把編號拆回座標的函式)換回 (o_y, o_x),再換回 bank。
+case 很多(一組參數最多 5 萬多個),每 ORDER_BATCH_CASES 個 case 當成同一批的不同輸入事件,一次呼叫。
 
 pending 怎麼取:
   - ConvSpikeSelect 的行為只由 (top_row_bank, left_col_bank, 合法 bank 的位置) 決定,同一種組合第一次出現時,
@@ -56,6 +59,7 @@ EXHAUSTIVE_BANKS = 9      # 合法 bank 數不超過這個就窮舉子集合(2^9
 SAMPLED_SUBSETS = 512     # 超過時第一次出現抽幾個
 REPEAT_SUBSETS = 8        # 同一種組合再出現時抽幾個
 GARBAGE_ZERO_PROB = 0.5   # 不合法 bank 的座標填 0 的機率
+ORDER_BATCH_CASES = 256   # 訓練端排順序時,一次呼叫放幾個 case
 
 
 def ref_file_name(kernel_size: int, stride: int, padding: int, out_rows: int, out_cols: int,
@@ -88,7 +92,51 @@ def pick_subsets(valid_banks: list[int], first_occurrence: bool,
     return random_subsets(valid_banks, SAMPLED_SUBSETS, rng) + [(), full] + singles
 
 
-def build_reference_rows(axis_candidates, kernel_size: int, stride: int, padding: int,
+def training_orders(extract_output_events_conv, unravel_conv_source, fired_per_case: list[list[tuple[int, int]]],
+                    out_rows: int, out_cols: int) -> list[list[tuple[int, int]]]:
+    """每個 case fire 的 (o_y, o_x) -> 訓練端排出來的送出順序 (o_y, o_x)。
+
+    只開 1 個 o_c,訓練端 conv 神經元(也是 spike_mask 的第一維)的編號就是空間位置 o_y * OUT_COLS + o_x。
+    每批 ORDER_BATCH_CASES 個 case,第 j 個 case 是第 j 筆輸入事件(時間 j,佇列第 j 欄就是全域事件 j)。
+    """
+    import jax.numpy as jnp
+
+    spatial_count = out_rows * out_cols
+    orders = []
+    for batch_start in range(0, len(fired_per_case), ORDER_BATCH_CASES):
+        batch = fired_per_case[batch_start:batch_start + ORDER_BATCH_CASES]
+        batch_size = len(batch)
+        fire_count = sum(len(fired) for fired in batch)
+        batch_orders: list[list[tuple[int, int]]] = [[] for _ in batch]
+        if fire_count > 0:
+            spike_mask = np.zeros((spatial_count, batch_size), dtype=bool)
+            for case_col, fired in enumerate(batch):
+                for out_y, out_x in fired:
+                    spike_mask[out_y * out_cols + out_x, case_col] = True
+            case_cols = jnp.broadcast_to(jnp.arange(batch_size, dtype=jnp.int32), (spatial_count, batch_size))
+            stream = extract_output_events_conv(jnp.asarray(spike_mask), case_cols,
+                                                jnp.ones((spatial_count, batch_size), dtype=jnp.float32),
+                                                jnp.arange(batch_size, dtype=jnp.float32), case_cols,
+                                                max_total_spikes=fire_count)
+            real_count = int(stream.n_real_events)
+            if real_count != fire_count:
+                raise RuntimeError(f"訓練端排出 {real_count} 筆,應該是 {fire_count} 筆")
+            spike_cases = np.asarray(stream.event_times)[:real_count].astype(np.int64)
+            spike_x, spike_y, spike_c = (np.asarray(coord) for coord in
+                                         unravel_conv_source(stream.event_source_idx[:real_count], out_rows, out_cols))
+            if np.any(spike_c != 0) or np.any(np.diff(spike_cases) < 0):
+                raise RuntimeError("訓練端排出的事件 o_c 不是 0,或沒有照事件先後排")
+            for case_col, out_y, out_x in zip(spike_cases, spike_y, spike_x):
+                batch_orders[int(case_col)].append((int(out_y), int(out_x)))
+            for fired, order in zip(batch, batch_orders):
+                if sorted(order) != sorted(fired):
+                    raise RuntimeError(f"訓練端排出 {order},跟 fire 的 {fired} 不是同一批神經元")
+        orders += batch_orders
+    return orders
+
+
+def build_reference_rows(axis_candidates, extract_output_events_conv, unravel_conv_source,
+                         kernel_size: int, stride: int, padding: int,
                          out_rows: int, out_cols: int, y_width: int, x_width: int,
                          rng: np.random.Generator) -> list[str]:
     bank_count = (kernel_size + stride - 1) // stride
@@ -103,8 +151,10 @@ def build_reference_rows(axis_candidates, kernel_size: int, stride: int, padding
     col_candidates = axis_candidate_lists(axis_candidates, x_width, kernel_size, stride, padding,
                                           candidate_count, out_cols)
 
-    rows = []
-    step_count = 0
+    # 先排出全部 case(亂數照原本的順序取),送出順序最後一次交給訓練端算
+    case_fields = []    # 每個 case 送出順序之前的欄位
+    case_coords = []    # 每個 case 合法 bank 的座標
+    fired_per_case = [] # 每個 case pending 的 (o_y, o_x)
     seen_patterns = set()
     for in_y, y_candidates in enumerate(row_candidates):
         top_row = axis_min_bank(in_y, stride, padding, bank_count)
@@ -136,11 +186,18 @@ def build_reference_rows(axis_candidates, kernel_size: int, stride: int, padding
                         out_y = 0 if rng.random() < GARBAGE_ZERO_PROB else int(rng.integers(0, 1 << out_y_width))
                         out_x = 0 if rng.random() < GARBAGE_ZERO_PROB else int(rng.integers(0, 1 << out_x_width))
                     bank_fields += [int(bank in coords), int(bank in subset), out_y, out_x]
-                # 神經元編號由小到大;同一個 o_c,編號差只在 o_y * OUT_COLS + o_x
-                order = sorted(subset, key=lambda bank: coords[bank][0] * out_cols + coords[bank][1])
-                fields = ["case", in_y, in_x, top_row, left_col] + bank_fields + [len(order)] + order
-                rows.append(" ".join(str(field) for field in fields))
-                step_count += len(order)
+                case_fields.append(["case", in_y, in_x, top_row, left_col] + bank_fields)
+                case_coords.append(coords)
+                fired_per_case.append([coords[bank] for bank in subset])
+
+    orders = training_orders(extract_output_events_conv, unravel_conv_source, fired_per_case, out_rows, out_cols)
+    rows = []
+    step_count = 0
+    for fields, coords, order in zip(case_fields, case_coords, orders):
+        bank_of = {coord: bank for bank, coord in coords.items()}
+        order_banks = [bank_of[coord] for coord in order]
+        rows.append(" ".join(str(field) for field in fields + [len(order_banks)] + order_banks))
+        step_count += len(order_banks)
 
     rows.append(f"end {len(rows)} {step_count}")
     return rows
@@ -159,12 +216,13 @@ def main() -> None:
     jax.config.update("jax_platforms", "cpu")
 
     sys.path.insert(0, str(args.training_repo.resolve()))
-    from salt_core.connectivity.conv import _axis_candidates
+    from salt_core.connectivity.conv import _axis_candidates, unravel_conv_source
+    from salt_core.stream import extract_output_events_conv
 
     rng = np.random.default_rng(SEED)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     for params in PARAM_SETS:
-        rows = build_reference_rows(_axis_candidates, *params, rng)
+        rows = build_reference_rows(_axis_candidates, extract_output_events_conv, unravel_conv_source, *params, rng)
         out_path = args.out_dir / ref_file_name(*params)
         out_path.write_text("\n".join(rows) + "\n", encoding="ascii")
         print(f"{out_path.name}: {rows[-1]}, {out_path.stat().st_size / 1e6:.1f} MB")
