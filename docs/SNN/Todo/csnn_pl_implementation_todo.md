@@ -29,7 +29,7 @@
 ## 交接(2026-11-04)
 
 - 進行中：SaltFC Part 8(pipeline 整合)，照段落分步驟寫，進度見下面「Part 8」。
-    - 步驟 1~5 寫完，`SPIKE_OUTPUT = 0` 的整層模擬 63 組 ALL PASS；步驟 5 還沒經使用者確認完成。
+    - 步驟 1~5 完成，`SPIKE_OUTPUT = 0` 的整層模擬 63 組 ALL PASS。
     - 下一步是步驟 6(fire)：bitmask、`FCSpikeSelect`、送出交握、停住。`SPIKE_OUTPUT = 1` 現在 `stall` 跟 spike 輸出埠沒有驅動，還不能用。
 - SaltFC Part 0~3 完成。
 - SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
@@ -37,7 +37,7 @@
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
 - SaltFC Part 7 完成(細節見下面「Part 7」)：FC 挑選模組 `fc/FCSpikeSelect`，conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8。
 - 2026-10-29 盤點「答案用訓練端 salt_core 的函式產生」這條規則：訓練端有對應函式卻沒用的只有 `tb_spike_select` 的送出順序，已改(見下面「Part 7」最後)。bank 排列、記憶體讀寫清除、FIFO、拍數、寬字切段這些訓練端沒有對應函式，使用者決定不處理。
-- 分支 `test`，最新 commit 是 SaltFC Part 8 步驟 1~5，比 `origin/test` 多 16 個 commit，要不要 push 等使用者決定；工作目錄乾淨。
+- 分支 `test`，已推到 `origin/test`；`origin/main` 還停在 `5507967`；工作目錄乾淨。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
     - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
@@ -373,7 +373,7 @@ ceil$。
 | 2 | 2 | 列計數 $y$、$y\cdot n_{col}$ 累加、下一列從 FIFO 還是事件暫存器拿、BRAM 讀取 enable | 做完 |
 | 3 | 3 | 管線位置 1..L 帶 $y$、$y\cdot n_{col}$、$t$、$t_{last}$、valid；算的那一拍 | 做完 |
 | 4 | 4 | 三顆記憶體、1 份 `DecayLookup`、每行的 generate 區塊(切段、`NeuronUpdate`、最後一列空位置的遮罩) | 做完 |
-| 5 | 5(不 fire) | 不重疊時等前一列、讀寫衝突、`read_next_row`；`SPIKE_OUTPUT = 0` 那一支停住固定 0；整層模擬比最後的 $\hat V$ | 進行中 |
+| 5 | 5(不 fire) | 不重疊時等前一列、讀寫衝突、`read_next_row`；`SPIKE_OUTPUT = 0` 那一支停住固定 0；整層模擬比最後的 $\hat V$ | 做完 |
 | 6 | 5(fire) | bitmask、`FCSpikeSelect`、送出交握、停住；整層模擬再加比 spike 輸出 | 未開始 |
 
 - 已定(2026-10-29)門檻兩種並存：SaltFC 加參數選「每顆一個門檻」(per-channel，門檻 BRAM)或「整層一個門檻」(per-tensor，編譯期常數，不用 BRAM、沒有讀取延遲要對齊)，在步驟 4 一起做。
@@ -385,7 +385,7 @@ ceil$。
     - 比過的：A 跟 $\hat V$ 同一拍讀、讀取延遲設 $L$(多一級讀出暫存器，$R=2$ 時多 $n_{col}\cdot w$ 個 FF)；B 讀取延遲 $R$、SaltFC 另寫一級暫存器(FF 同 A，多一段要對齊停住)。三個都不影響管線延遲；選 C 是因為不多暫存器，代價只有門檻 BRAM 的讀位址、開關跟另外兩顆不同。
     - 步驟 6 做完後 A、C 各合成一次($R=2,C=2$，4.8 ns 布局繞線)比資源、最長路徑，C 比 A 差再換。
     - FC.md 第 2 節「門檻：跟 $\hat V$ 同一個讀取延遲」要改，Part 8 做完一起更新文件。
-- 還沒定：FC 要不要留不重疊模式(`OVERLAP = 0`)。現在照 SaltConv 兩種並存；不留的話第 5 段 `wait_previous_row` 整段不用寫，讀寫衝突一定要留。
+- 已定(2026-11-04)FC 留不重疊模式(`OVERLAP = 0`)，照 SaltConv 兩種並存，第 5 段 `wait_previous_row` 保留。
 - Part 9 要回來改的：第 5 段 `no_spike_output` 那一支 `stall` 固定 0，只到 Part 9 為止；膜電位輸出沒被收走也要停住，`stall` 要拿出來併兩個輸出的條件。
 - 已定(2026-10-29)步驟 4 的另外兩個設計：
     - 最後一列空位置的遮罩 `column_valid[x]`：前 `LAST_ROW_COLUMNS` 行是常數 1，後面的行是 `pipe_row[L]` 不是最後一列；跟 FC.md 的 $y\cdot n_{col}+x<n_{out}$ 等價，各行共用一個比較，整除時沒有邏輯。跟 `spike` 做 AND 放在第 5 段挑 fire 的地方(同 conv 的 `pipe_candidate_valid`)。
