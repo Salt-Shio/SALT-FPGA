@@ -30,7 +30,13 @@
 
 - 進行中：SaltFC Part 8(pipeline 整合)，照段落分步驟寫，進度見下面「Part 8」。
     - 步驟 1~5 完成，`SPIKE_OUTPUT = 0` 的整層模擬 63 組 ALL PASS。
-    - 下一步是步驟 6(fire)：bitmask、`FCSpikeSelect`、送出交握、停住。`SPIKE_OUTPUT = 1` 現在 `stall` 跟 spike 輸出埠沒有驅動，還不能用。
+    - 步驟 6(fire)RTL、答案、四支 testbench 做完，196 組 ALL PASS、反向測試三項都抓到(見下面「步驟 6」);功能使用者確認過(2026-11-05)。
+    - 步驟 6 還剩：門檻讀法 A、C 各合成一次比(下面「做法 C」那條)，FC.md 第 2 節門檻讀法、第 4、5 節跟著更新。
+- 訓練端 2026-11-04 `per-layer-quant` 分支改了 API(`round_mode` 搬進每層 `QuantizedLayerParams`，`QuantBackend()` 不帶參數，`load_quantized` 回傳沒有 `round_mode`)：`gen_salt_conv_ref.py`、`gen_salt_fc_ref.py` 跟著改，重產的 conv 30 個、FC 不 fire 27 個答案檔跟 HEAD 逐 byte 相同。
+- 輸出層 per-tensor(訓練端實驗 E,pc/pc/pt,繞回版)給 FPGA:匯出在 `sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1_out-pt/`(`cdc6315`,$n_{col}=4$),conv1、conv2 的 6 個檔跟 per-channel 版相同，只有 `out_weight.mem` 不同。
+    - 測試用哪個量化資料夾只寫在 `SaltNET/scripts/quant_versions.txt`(`wrap`、`saturate` 兩行),答案腳本(`scripts/quant_versions.py`)跟 `run_tb_*.tcl`、`synth_salt_conv_net.tcl`(`scripts/quant_versions.tcl`)都讀它；換權重只改這個檔。原本 9 支腳本各自寫死。
+    - `wrap` 設成這個資料夾：FC 的訓練端參數組換成 per-tensor 的權重(重產後只有繞回版那 6 個檔變了，`tb_fc_weight_lookup` 6 組、`tb_salt_fc_no_spike` 63 組 ALL PASS);$n_{col}=4$ 時腳本寫的權重檔、衰減表檔要跟匯出的 `out_*.mem` 相同。conv 的資料一樣，conv、lib、net 的答案重產跟 HEAD 逐 byte 相同，`run_tb_weight_lookup` 9 組、`run_tb_neuron_update` 48 組、`tb_salt_conv_ready_high` 訓練端 4 組、`tb_salt_conv_net_ready_high` 2 組 ALL PASS。
+    - `saturate` 還沒有 per-tensor 的匯出，維持 per-channel(`..._saturate_iv9-11-11`)。
 - SaltFC Part 0~3 完成。
 - SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
 - SaltFC Part 5 完成(細節見下面「Part 5」)：conv 展開 `WeightTapSelect`、`NeuronMemory` 搬到 lib、FC $\hat V$ 跟門檻的 testbench。
@@ -374,7 +380,7 @@ ceil$。
 | 3 | 3 | 管線位置 1..L 帶 $y$、$y\cdot n_{col}$、$t$、$t_{last}$、valid；算的那一拍 | 做完 |
 | 4 | 4 | 三顆記憶體、1 份 `DecayLookup`、每行的 generate 區塊(切段、`NeuronUpdate`、最後一列空位置的遮罩) | 做完 |
 | 5 | 5(不 fire) | 不重疊時等前一列、讀寫衝突、`read_next_row`；`SPIKE_OUTPUT = 0` 那一支停住固定 0；整層模擬比最後的 $\hat V$ | 做完 |
-| 6 | 5(fire) | bitmask、`FCSpikeSelect`、送出交握、停住；整層模擬再加比 spike 輸出 | 未開始 |
+| 6 | 5(fire) | bitmask、`FCSpikeSelect`、送出交握、停住；整層模擬再加比 spike 輸出 | 進行中 |
 
 - 已定(2026-10-29)門檻兩種並存：SaltFC 加參數選「每顆一個門檻」(per-channel，門檻 BRAM)或「整層一個門檻」(per-tensor，編譯期常數，不用 BRAM、沒有讀取延遲要對齊)，在步驟 4 一起做。
     - 起因：訓練端中間層固定 per-channel，FC 的 channel 就是輸出神經元，每顆的步長 $s_i$ 不同，整數門檻 $\hat v_{th}[i]=\operatorname{round}(v_{th}/s_i\cdot2^{f_V})$ 每顆不同；per-tensor 整層一個 $s$，整數門檻只有一個(浮點 $v_{th}$ 每層一個純量)。`LayerQuantSpec.per_channel` 本來就逐層，只有 `example/quant_run.py` 的 `quant_layer_specs`、config 只開放輸出層選。
@@ -406,6 +412,18 @@ ceil$。
     - 反向測試一：讀寫衝突永遠不擋。$n_{row}=1$ 的三組 7 種設定全部 FAIL；$n_{row}=3$ 的兩組只有 $R=2,C=2$ 重疊($L=3$)FAIL；$n_{row}=4$、$5$ 全部 PASS。跟 FC.md 第 5 節 ⑧ 的表一致。
     - 反向測試二：`DecayLookup` 改接時間暫存器(不用位置 R 帶的 $t$、$t_{last}$)。只有 $R=2$ 重疊的組 FAIL($n_{row}=1$ 跟 $R=2,C=2$ 重疊的 $n_{row}=3$ 被讀寫衝突隔開，換事件時舊事件的列已經過了位置 R，PASS)。
     - 兩次都還原，跟改之前逐 byte 相同。第一次跑反向測試一時第 3 組 elaborate 碰到 `Spawn failed: %1 不是有效的 Win32 應用程式`(vivado-usage skill 8.7)，原封不動重跑就過。
+- 步驟 6(2026-11-04)RTL：第 5 段 `spike_output` 那一支照 SaltConv 第 6 段，`pending`(算的那一拍是 `spike && column_valid`，之後是 bitmask)→ `FCSpikeSelect` → 送出交握 → `pending_left` 存回 bitmask;`stall` 只看個數(`pending_any`、`pending_multiple`)。
+    - 驗證到哪：non-project `synth_design -rtl` 8 組(訓練端形狀 $n_{col}=4$ 每顆一個、整層一個門檻各配 $(R,C,\text{OVERLAP})$=(1,1,0)、(2,2,1);$n_{col}=3$ 兩種門檻;$n_{out}=n_{col}=1$;`SPIKE_OUTPUT = 0`)、`-lint` 2 組都過，沒有新的 lint 訊息(膜電位輸出埠沒驅動是 Part 9)。門檻檔是只給 elaborate 讀的暫存檔。
+    - `SPIKE_OUTPUT = 0` 那一支沒改，`tb_salt_fc_no_spike` 沒重跑。
+- 步驟 6(2026-11-04)答案跟 testbench:
+    - `gen_salt_fc_ref.py` 加 7 組會 fire 的人工參數組(排在 `SYNTHETIC_SETS` 最後，不 fire 那幾組抽到的亂數不變)：每顆一個門檻 4 組、整層一個 3 組，涵蓋 $n_{col}$=1、3、4、8(2 的次方接位元)、$n_{row}$=1、最後一列不滿、$f_V>0$、truncate、飽和。門檻大多壓低，最後一列權重取絕對值、用低門檻(換事件那一拍被擋才碰得到);$n_{row}=1$ 照 conv OC = 1 的做法累積幾筆才 fire。檔名多 `_SH<0|1>`，門檻檔用訓練端 `fc_threshold_lines` / `threshold_lines` + `layer_threshold` 寫；答案檔第一行 coverage 同 conv(`stall_last_of_oc` 換成 `stall_last_of_row`)。
+    - `tb_salt_fc_common.svh` + `tb_salt_fc_ready_{high,random,burst,alternate}.sv`，照 conv 四支；FC 另外比 `event_time`、每顆一個門檻時算的那一拍門檻讀出值等於門檻 ROM。`scripts/fc/run_tb_salt_fc.tcl` 7 組 × 7 種 $(R,C,\text{OVERLAP})$。
+    - 驗證：四支各 49 組 ALL PASS，要求的涵蓋項目都碰到。
+    - 反向測試(`tb_salt_fc_ready_random` 的 $n_{out}=10$ 兩組 × 7 種，各 14 組;做完還原，跟改之前逐 byte 相同)：
+        - `compute_cycle` 不看 `pipe_held`(停住的拍子再寫回一次):14 組全部 FAIL。
+        - `pending_left` 不看 `spike_sent`(沒送成也清掉):14 組全部 FAIL。
+        - BRAM 輸出暫存器停住時照樣推進(`read_shift_enable = 1`):只有 $R=2,C=2$ 重疊的 2 組 FAIL。$C=1$ 時停住的列已經算完、用不到；不重疊時後面沒有列，推進來的還是同一列；只有重疊 + $C=2$ 時位置 R 那一列正在算第 1 級，資料被換掉。
+- 工具問題(2026-11-04):試跑 `run_tb_salt_fc.tcl` 單組時，總表 `puts` 的 `can not find channel named "stdout"` 連續 2 次(輸出導到 `/dev/null`、導到檔案都一樣);之後四支完整跑(輸出導到 `/dev/null`)都正常。Vivado 的 xsim Tcl 原始碼沒有碰 `stdout`，原因還是查不到。每組的總結行在 Vivado log 裡，出事時從 log 數。
 - 步驟 1~4 只確認 elaborate(non-project `synth_design -rtl`，不碰 `.xpr`)：控制訊號到步驟 5 才驅動，模擬沒有意義。整層的答案腳本、testbench 到步驟 5 前再討論。
 - 步驟 1(2026-10-29)：`event_time`、`event_last_time` 換事件時一起往後推一格，要 reset：conv 的 $t_{last}$ 存在神經元記憶體裡跟著清除歸 0，FC 的存在暫存器。
 - 步驟 2(2026-10-29)：`last_read_row`、`last_read_row_base` 一起更新；下一列是新事件時 $t_{last}$ 取 `event_time`(時間暫存器這拍結束才推進)。
@@ -444,6 +462,7 @@ ceil$。
 - D7：要先解決 `MEMORY_INIT_FILE` 只能給檔名、不能帶路徑的問題(權重檔改成不重複的檔名、加進專案，訓練端匯出的命名可能也要改)；XPM 也要求記憶體至少 2 個字。
 - D10：URAM 不能帶初始值，權重要在執行時寫入。
 - D11：只開參數不夠，SaltConv 不 fire 就沒有任何輸出，要跟 FC 一樣加膜電位輸出埠才有用；`NeuronUpdate` 在 Part 6 已經支援。
+- 額外補充：為了分析運作的狀況與能力，後續我希望補上一個視覺化的分析，輸入事件在時間軸上的分布，layer 之間的事件在時間軸上的分布，輸出在時間軸上的分布，用來看出延遲狀況，細節之後再討論。
 
 ## 待決事項
 

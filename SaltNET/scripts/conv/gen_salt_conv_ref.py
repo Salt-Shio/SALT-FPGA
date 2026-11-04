@@ -76,9 +76,8 @@ from pathlib import Path
 
 import numpy as np
 
-QUANT_RUN_DIR = Path("experiments/scale_10k_20260919_050446/quant")
-WRAP_VERSION = "best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1"
-SATURATE_VERSION = "best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # scripts/:quant_versions.py
+from quant_versions import QUANT_RUN_DIR, SATURATE_VERSION, WRAP_VERSION  # noqa: E402  量化資料夾,換權重改 quant_versions.txt
 SAMPLE_COUNT = 10
 TRAINED_TIME_WIDTH = 16
 TRAINED_WEIGHT_WIDTH = 7
@@ -225,11 +224,11 @@ class LayerModel:
             q=jnp.asarray(self.q, dtype=jnp.int32), decay_table_int=jnp.asarray(self.decay_table, dtype=jnp.int32),
             v_th_int=jnp.asarray(v_th, dtype=jnp.int32), scale=jnp.ones(n_neurons, dtype=jnp.float32),
             f_a=p.decay_frac_width, f_V=p.membrane_frac_width, i_V=p.membrane_int_width,
-            overflow_mode=self.overflow_mode)
+            overflow_mode=self.overflow_mode, round_mode=self.round_mode)
 
     def official_forward(self, in_stream, max_queue_len: int, max_out_spikes: int):
         """訓練端整層 forward;容量不夠就放大到 diag.needed 再跑。回傳 LayerOutput。"""
-        backend = self.training["QuantBackend"](round_mode=self.round_mode)
+        backend = self.training["QuantBackend"]()   # 捨入、溢位規則照 quantized_params
         layer = self.layer(max_queue_len, max_out_spikes)
         output = layer.forward(self.quantized_params(), in_stream, backend=backend)
         if not bool(layer.capacity.fits(output.diag)):
@@ -438,8 +437,6 @@ def build_trained_references(training: dict, training_repo: Path, mem_dir: Path,
             seed=evaluation["seed"], n_samples=SAMPLE_COUNT, which="test")
         raw = training["split_input_events"](split, model_file.network.input_shape)
         layer_names = [layer.name for layer in model_file.network.layers]
-        if model_file.round_mode.value != "round":
-            raise RuntimeError(f"{version} 的捨入規則是 {model_file.round_mode},參數組寫的是 round")
 
         version_sets = [(layer_name, params) for v, layer_name, params in TRAINED_SETS if v == version]
         layer_models = {}
@@ -456,6 +453,8 @@ def build_trained_references(training: dict, training_repo: Path, mem_dir: Path,
                 raise RuntimeError(f"{version} {layer_name} 的 i_V、f_V、f_a 跟參數組不同")
             if layer_params.overflow_mode.value != ("saturate" if params.saturate_enabled else "wrap"):
                 raise RuntimeError(f"{version} {layer_name} 的溢位處理跟參數組不同")
+            if layer_params.round_mode.value != ("round" if params.round_enabled else "truncate"):
+                raise RuntimeError(f"{version} {layer_name} 的捨入規則跟參數組不同")
             q = np.asarray(layer_params.q)
             decay_table = np.asarray(layer_params.decay_table_int)
             if decay_table.shape[0] != params.decay_table_depth:

@@ -27,11 +27,11 @@ import numpy as np
 
 from gen_candidate_grid_ref import axis_candidate_lists
 
-QUANT_RUN_DIR = Path("experiments/scale_10k_20260919_050446/quant")
-QUANT_VERSIONS = [
-    "best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1",
-    "best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11",
-]
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # scripts/:quant_versions.py
+from quant_versions import QUANT_RUN_DIR, SATURATE_VERSION, WRAP_VERSION  # noqa: E402
+
+# 量化資料夾,換權重改 quant_versions.txt
+QUANT_VERSIONS = [WRAP_VERSION, SATURATE_VERSION]
 
 # 參數組:(KERNEL_SIZE, STRIDE, PADDING, OUT_ROWS, OUT_COLS, IN_CHANNELS, OUT_CHANNELS, Y_WIDTH, X_WIDTH,
 #          WEIGHT_WIDTH),跟 run_tb_weight_lookup.tcl 的清單一致

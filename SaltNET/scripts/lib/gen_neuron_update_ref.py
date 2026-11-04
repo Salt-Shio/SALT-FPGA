@@ -43,13 +43,15 @@ from pathlib import Path
 
 import numpy as np
 
-QUANT_RUN_DIR = Path("experiments/scale_10k_20260919_050446/quant")
-# (量化資料夾, 層名):衰減表檔在 SaltNET.srcs/sources_1/mem/<量化資料夾>/<層名>_decay.mem
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # scripts/:quant_versions.py
+from quant_versions import QUANT_RUN_DIR, SATURATE_VERSION, WRAP_VERSION  # noqa: E402
+
+# (量化資料夾, 層名):衰減表檔在 SaltNET.srcs/sources_1/mem/<量化資料夾>/<層名>_decay.mem;量化資料夾換權重改 quant_versions.txt
 TRAINED_LAYERS = [
-    ("best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1", "conv1"),
-    ("best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1", "conv2"),
-    ("best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11", "conv1"),
-    ("best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11", "conv2"),
+    (WRAP_VERSION, "conv1"),
+    (WRAP_VERSION, "conv2"),
+    (SATURATE_VERSION, "conv1"),
+    (SATURATE_VERSION, "conv2"),
 ]
 TRAINED_TIME_WIDTH = 16
 TRAINED_WEIGHT_WIDTH = 7

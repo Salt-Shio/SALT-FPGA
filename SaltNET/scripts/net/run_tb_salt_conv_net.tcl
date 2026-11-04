@@ -36,8 +36,9 @@ if {[llength $testbenches] > 1} {
     return
 }
 
-set wrap_dir sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1
-set saturate_dir sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11
+# Exported .mem directories of the trained models, chosen in quant_versions.txt
+set wrap_dir [quant_mem_dir wrap]
+set saturate_dir [quant_mem_dir saturate]
 
 # IN_CHANNELS IN_ROWS IN_COLS
 # CONV1_OUT_CHANNELS CONV1_KERNEL_SIZE CONV1_STRIDE CONV1_PADDING CONV1_MEMBRANE_INT_WIDTH CONV1_DECAY_TABLE_DEPTH

@@ -5,6 +5,9 @@
 # SaltNET project directory: this file sits in SaltNET/scripts
 set ::saltnet_project_dir [file normalize [file join [file dirname [info script]] ..]]
 
+# quant_version / quant_mem_dir: which quantized model the tests use (quant_versions.txt)
+source [file join [file dirname [info script]] quant_versions.tcl]
+
 # Folders under sources_1/new and sim_1/new: lib (modules not tied to a layer type), one per layer type, net (multi-layer tops)
 set ::saltnet_rtl_folders {lib conv fc net}
 

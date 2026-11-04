@@ -1,6 +1,7 @@
 # Run tb_salt_fc_no_spike once per parameter set, using simulation set sim_salt_fc_no_spike of the SaltNET project.
 # Generate the reference files first (WSL): gen_salt_fc_ref.py (also writes the weight and decay files next to them).
-# The parameter list below must match TRAINED_SETS and SYNTHETIC_SETS in that script.
+# The parameter list below must match TRAINED_SETS and the SPIKE_OUTPUT = 0 entries of SYNTHETIC_SETS in that script.
+# The layer with spikes (SPIKE_OUTPUT = 1) is run by run_tb_salt_fc.tcl.
 # The first run creates the simulation set (sim_common.tcl registers all RTL in sources_1); later runs skip that.
 # Compile runs once; each parameter set changes the simset generic, then elaborates and simulates.
 # Usage:

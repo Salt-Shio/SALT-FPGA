@@ -17,16 +17,17 @@ set part xck26-sfvc784-2LV-c
 
 set scripts_dir [file dirname [file normalize [info script]]]
 set srcs_dir [file normalize [file join $scripts_dir .. .. SaltNET.srcs]]
-set mem_root [file join $srcs_dir sources_1 mem]
+# quant_mem_dir: exported .mem directory of the trained model, chosen in quant_versions.txt
+source [file join $scripts_dir .. quant_versions.tcl]
 
 # Per-version parameters (same values as run_tb_salt_conv_net.tcl); the rest are SaltConvNet defaults or below
 switch -- $version {
     wrap {
-        set data_dir [file join $mem_root best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1]
+        set data_dir [file join $srcs_dir [quant_mem_dir wrap]]
         set version_generics {CONV1_MEMBRANE_INT_WIDTH=12 CONV2_MEMBRANE_INT_WIDTH=14 SATURATE=0}
     }
     saturate {
-        set data_dir [file join $mem_root best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11]
+        set data_dir [file join $srcs_dir [quant_mem_dir saturate]]
         set version_generics {CONV1_MEMBRANE_INT_WIDTH=9 CONV2_MEMBRANE_INT_WIDTH=11 SATURATE=1}
     }
     default {

@@ -1,0 +1,11 @@
+# Which quantized model the tests use. Change the weights here only: every reference script (Python) and every
+# run_tb_*.tcl / synth_*.tcl reads this file.
+#   quant_run_dir : directory of the quantized models, relative to the training repo (Spiking-Affine-Lazy-Training)
+#   wrap          : model with wrap-around registers; its .mem files are in SaltNET.srcs/sources_1/mem/<wrap>/
+#   saturate      : model with saturating registers; its .mem files are in SaltNET.srcs/sources_1/mem/<saturate>/
+# One "name value" pair per line; '#' starts a comment. ASCII only (Vivado reads Tcl input in the system code page).
+quant_run_dir experiments/scale_10k_20260919_050446/quant
+# conv per-channel, out per-tensor (training repo configs/quant/b7_fa6_fv0_outpt.yaml)
+wrap best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1_out-pt
+# all layers per-channel; no per-tensor export of the saturating model yet
+saturate best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11

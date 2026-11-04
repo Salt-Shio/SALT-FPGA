@@ -24,8 +24,9 @@ source [file join $scripts_dir .. sim_common.tcl]
 
 set simset_name sim_neuron_update
 
-set wrap_dir sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1
-set saturate_dir sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_saturate_iv9-11-11
+# Exported .mem directories of the trained models, chosen in quant_versions.txt
+set wrap_dir [quant_mem_dir wrap]
+set saturate_dir [quant_mem_dir saturate]
 
 # TIME_WIDTH WEIGHT_WIDTH MEMBRANE_INT_WIDTH MEMBRANE_FRAC_WIDTH DECAY_FRAC_WIDTH DECAY_TABLE_DEPTH
 # decay file (relative to SaltNET.srcs)

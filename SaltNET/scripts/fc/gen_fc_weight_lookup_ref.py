@@ -2,11 +2,12 @@
 
 每個位址 y*n_in + src 一行,答案是第 y 列 n_col 顆神經元的 q[y*n_col + x, src],最後一列空的位置是 0。
 答案直接從 q 算,不經過權重檔的打包,所以也驗證了匯出格式跟 RTL 的切法一致。
-- 訓練端的 FC 層:q 從量化資料夾的 model.npz 讀,繞回版、飽和版的 q 要相同(兩版只差暫存器寬度),不同就報錯。
-  權重檔照 n_col 打包,n_col 選定之前不放 SaltNET.srcs/sources_1/mem/,跟答案一起寫在這裡。
+- 訓練端的 FC 層:q 從繞回版量化資料夾(quant_versions.txt 的 wrap)的 model.npz 讀。
+  n_col 跟匯出時相同(EXPORTED_FC_COLS)的參數組,寫的權重檔要跟 SaltNET.srcs/sources_1/mem/ 裡匯出的
+  out_weight.mem 相同,不同就報錯;其他 n_col 的權重檔只寫在這裡。
 - 人工參數組:隨機產生 q,前兩個碼固定成 b 位元二補數的上下界。
 權重檔都用訓練端 salt_core.fpga_export.fc_weight_lines 寫,跟答案放在同一個目錄。
-讀量化資料夾、產生隨機 q 跟 conv 共用 scripts/conv/gen_weight_lookup_ref.py 的 trained_q、synthetic_q。
+產生隨機 q 跟 conv 共用 scripts/conv/gen_weight_lookup_ref.py 的 synthetic_q。
 
 答案檔一行一個位址,y、src 由外到內窮舉,欄位以空白分隔:
     y src weight_0 weight_1 ... weight_{n_col-1}
@@ -23,7 +24,16 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "conv"))
-from gen_weight_lookup_ref import synthetic_q, trained_q, write_lines  # noqa: E402
+from gen_weight_lookup_ref import synthetic_q, write_lines  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # scripts/:quant_versions.py
+from quant_versions import QUANT_RUN_DIR, WRAP_VERSION  # noqa: E402
+
+# 訓練端 FC 層的 q 從繞回版的量化資料夾讀(quant_versions.txt;權重跟暫存器寬度無關,飽和版的 out 層可能是
+# 不同的量化方式,不拿來比)。匯出的 SaltNET.srcs/sources_1/mem/<量化資料夾>/out_weight.mem 是
+# n_col = EXPORTED_FC_COLS 打包的
+FC_QUANT_VERSION = WRAP_VERSION
+EXPORTED_FC_COLS = 4
+MEM_DIR = Path(__file__).resolve().parents[2] / "SaltNET.srcs" / "sources_1" / "mem"
 
 # 參數組:(IN_NEURONS, OUT_NEURONS, NEURONS_PER_ROW, WEIGHT_WIDTH),跟 run_tb_fc_weight_lookup.tcl 的清單一致;
 # READ_LATENCY 不影響答案,在 run_tb_fc_weight_lookup.tcl 另外組
@@ -63,6 +73,27 @@ def reference_rows(q: np.ndarray, neurons_per_row: int) -> list[str]:
     return rows
 
 
+def trained_fc_q(load_quantized, training_repo: Path, layer_name: str, shape: tuple[int, ...]) -> np.ndarray:
+    """FC_QUANT_VERSION 裡這層的 q,確認形狀對後回傳。"""
+    model = load_quantized(training_repo / QUANT_RUN_DIR / FC_QUANT_VERSION / "model.npz")
+    layer_index = [layer.name for layer in model.network.layers].index(layer_name)
+    q = np.asarray(model.params[layer_index].q)
+    if q.shape != shape:
+        raise RuntimeError(f"{FC_QUANT_VERSION} 的 {layer_name} q 形狀 {q.shape},參數組要 {shape}")
+    return q
+
+
+def check_exported_weight(layer_name: str, params: tuple[int, ...], q: np.ndarray, fc_weight_lines) -> None:
+    """n_col 跟匯出時相同的參數組:寫的權重檔要跟 sources_1/mem 裡匯出的 <層名>_weight.mem 相同。"""
+    _, _, neurons_per_row, weight_width = params
+    if neurons_per_row != EXPORTED_FC_COLS:
+        return
+    exported_path = MEM_DIR / FC_QUANT_VERSION / f"{layer_name}_weight.mem"
+    if exported_path.read_text(encoding="ascii").split() != fc_weight_lines(q, weight_width, neurons_per_row):
+        raise RuntimeError(f"{exported_path} 的內容跟 model.npz 匯出的不同")
+    print(f"{layer_name}: 權重檔跟 {exported_path.name}({FC_QUANT_VERSION})相同")
+
+
 def write_reference(out_dir: Path, params: tuple[int, ...], q: np.ndarray, fc_weight_lines) -> Path:
     """一組參數的答案檔、權重檔寫進 out_dir,回傳答案檔路徑。"""
     _, _, neurons_per_row, weight_width = params
@@ -98,7 +129,8 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     for layer_name, params in TRAINED_LAYERS:
         in_neurons, out_neurons, _, _ = params
-        q = trained_q(load_quantized, training_repo, layer_name, (out_neurons, in_neurons))
+        q = trained_fc_q(load_quantized, training_repo, layer_name, (out_neurons, in_neurons))
+        check_exported_weight(layer_name, params, q, fc_weight_lines)
         ref_path = write_reference(args.out_dir, params, q, fc_weight_lines)
         print(f"{ref_path.name}: {layer_name}")
 

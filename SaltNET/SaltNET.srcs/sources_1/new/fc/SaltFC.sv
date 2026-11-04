@@ -4,7 +4,7 @@
 // Description:
 //   事件驅動 FC 層。設計依據見 docs/SNN/Concept/Layer-RTL/FC.md(管線:第 5 節)。
 //   名稱用描述性完整拼字,行尾註解標 FC.md 的數學符號。
-//   SaltFC Part 8 進行中:目前寫到第 5 段不 fire 的部分(SPIKE_OUTPUT = 1 的送出、停住還沒寫)。
+//   SaltFC Part 8 進行中:第 5 段 fire 的送出、停住寫完,還沒有整層模擬;膜電位輸出還沒寫(Part 9)。
 //
 //   n_out 顆神經元照編號逐列排,每列 n_col 顆,一拍處理一列;一筆事件從第 0 列做到第 n_row-1 列。
 //   SystemVerilog 不能照 parameter 拿掉 port:SPIKE_OUTPUT = 0 時 spike 輸出埠的 out_valid 固定 0,
@@ -430,6 +430,73 @@ module SaltFC #(
 		assign out_valid  = 1'b0;
 		assign out_neuron = '0;
 		assign out_time   = '0;
+	end else begin : spike_output
+		// fire:這一拍要挑的、挑完剩下的、剩下的存起來下一拍再挑(FC.md 第 4 節 ①、第 5 節 ③④)
+		logic [NEURONS_PER_ROW-1:0] pending;        // 這一拍還沒送出的 fire
+		logic [NEURONS_PER_ROW-1:0] pending_left;   // 這一拍做完剩下的
+		logic [NEURONS_PER_ROW-1:0] bitmask;        // 位置 L 的列之前的拍子沒送出的 fire
+
+		// 算的那一拍挑 s && 真的神經元,之後挑 bitmask
+		always_comb begin
+			for (int unsigned column = 0; column < NEURONS_PER_ROW; column++) begin
+				// 最後一列空的位置也算出 spike,要先排除
+				pending[column] = compute_cycle ? (spike[column] && column_valid[column]) : bitmask[column];
+			end
+		end
+
+		// 挑編號最小的
+		logic                        found;
+		logic [NEURONS_PER_ROW-1:0]  selected;
+		logic [OUT_NEURON_WIDTH-1:0] selected_neuron;
+
+		FCSpikeSelect #(
+			.OUT_NEURONS    (OUT_NEURONS),
+			.NEURONS_PER_ROW(NEURONS_PER_ROW)
+		) spike_select (
+			.pending        (pending),
+			.row_base       (pipe_row_base[PIPELINE_DEPTH]),   // y*n_col
+			.found          (found),
+			.selected       (selected),
+			.selected_neuron(selected_neuron)
+		);
+
+		// 送出;out_valid 不看 out_ready
+		logic spike_sent;   // 這一拍有一個 fire 交出去
+
+		assign out_valid  = pipe_valid[PIPELINE_DEPTH] && found;
+		assign out_neuron = selected_neuron;
+		assign out_time   = pipe_time[PIPELINE_DEPTH];
+		assign spike_sent = out_valid && out_ready;
+
+		// 剩下哪些:挑出的那個沒送出去(out_ready=0)就不清,留著;算的那一拍 out_ready=0,整份 s && valid 留下
+		assign pending_left = pending & ~(selected & {NEURONS_PER_ROW{spike_sent}});
+
+		// 送完還有沒有剩:有 fire,而且下游不收或不只一個(一拍最多送一個)。
+		// 跟挑中哪一個無關,只看個數,不等 FCSpikeSelect,stall 不用跟著 pending_left 那條走
+		logic pending_any;        // 這一拍要送的 fire 至少一個
+		logic pending_multiple;   // 這一拍要送的 fire 至少兩個
+		logic fires_left;         // 這一拍做完還有沒送出的 fire
+
+		always_comb begin
+			pending_any      = 1'b0;
+			pending_multiple = 1'b0;
+			for (int unsigned column = 0; column < NEURONS_PER_ROW; column++) begin
+				if (pending[column]) begin
+					if (pending_any) begin
+						pending_multiple = 1'b1;
+					end
+					pending_any = 1'b1;
+				end
+			end
+		end
+
+		assign fires_left = pending_any && (!out_ready || pending_multiple);
+		assign stall      = pipe_valid[PIPELINE_DEPTH] && fires_left;
+
+		// 位置 L 沒有列時清成 0;reset 期間 pipe_valid=0,釋放後第一拍就是 0
+		always_ff @(posedge clk) begin
+			bitmask <= pending_left & {NEURONS_PER_ROW{pipe_valid[PIPELINE_DEPTH]}};
+		end
 	end
 
 	// 不重疊:前一列還在位置 1..L-1 就要等它到位置 L
