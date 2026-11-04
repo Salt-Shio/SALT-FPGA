@@ -37,7 +37,7 @@
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
 - SaltFC Part 7 完成(細節見下面「Part 7」)：FC 挑選模組 `fc/FCSpikeSelect`，conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8。
 - 2026-10-29 盤點「答案用訓練端 salt_core 的函式產生」這條規則：訓練端有對應函式卻沒用的只有 `tb_spike_select` 的送出順序，已改(見下面「Part 7」最後)。bank 排列、記憶體讀寫清除、FIFO、拍數、寬字切段這些訓練端沒有對應函式，使用者決定不處理。
-- 分支 `test`，最新 commit 是 SaltFC Part 8 步驟 1~5，還沒 push；工作目錄乾淨。
+- 分支 `test`，最新 commit 是 SaltFC Part 8 步驟 1~5，比 `origin/test` 多 16 個 commit，要不要 push 等使用者決定；工作目錄乾淨。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
     - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
@@ -385,6 +385,7 @@ ceil$。
     - 比過的：A 跟 $\hat V$ 同一拍讀、讀取延遲設 $L$(多一級讀出暫存器，$R=2$ 時多 $n_{col}\cdot w$ 個 FF)；B 讀取延遲 $R$、SaltFC 另寫一級暫存器(FF 同 A，多一段要對齊停住)。三個都不影響管線延遲；選 C 是因為不多暫存器，代價只有門檻 BRAM 的讀位址、開關跟另外兩顆不同。
     - 步驟 6 做完後 A、C 各合成一次($R=2,C=2$，4.8 ns 布局繞線)比資源、最長路徑，C 比 A 差再換。
     - FC.md 第 2 節「門檻：跟 $\hat V$ 同一個讀取延遲」要改，Part 8 做完一起更新文件。
+- 還沒定：FC 要不要留不重疊模式(`OVERLAP = 0`)。現在照 SaltConv 兩種並存；不留的話第 5 段 `wait_previous_row` 整段不用寫，讀寫衝突一定要留。
 - Part 9 要回來改的：第 5 段 `no_spike_output` 那一支 `stall` 固定 0，只到 Part 9 為止；膜電位輸出沒被收走也要停住，`stall` 要拿出來併兩個輸出的條件。
 - 已定(2026-10-29)步驟 4 的另外兩個設計：
     - 最後一列空位置的遮罩 `column_valid[x]`：前 `LAST_ROW_COLUMNS` 行是常數 1，後面的行是 `pipe_row[L]` 不是最後一列；跟 FC.md 的 $y\cdot n_{col}+x<n_{out}$ 等價，各行共用一個比較，整除時沒有邏輯。跟 `spike` 做 AND 放在第 5 段挑 fire 的地方(同 conv 的 `pipe_candidate_valid`)。
@@ -458,6 +459,12 @@ ceil$。
 - 時間戳記繞回：連續事件流的時間戳記到 $2^{\texttt{TIME\_WIDTH}}$ ms 會繞回，之後 $\Delta t=t-t_{last}$ 會算錯。
     - 怎麼處理還沒討論；跟神經元記憶體清除是兩件事。
     - `DecayLookup` 現在用 `TIME_WIDTH` 位元無號減法算 $\Delta t$，不替繞回做決定。
+- 輸出層改 per-tensor(`out_granularity: per_tensor`，10 顆共用一個 $s$，使用者考慮過，2026-10-29 還沒決定)：
+    - 好處：讀出 argmax 不用乘 $s_i$，直接比 $\hat V$，不需要乘法器。跟門檻無關：輸出層不 fire，本來就沒有門檻。
+    - 不變：conv1、conv2 的量化跟 `.mem`、SaltConv 串接、`out_decay.mem`、SaltFC RTL。
+    - 要重做：`out_weight.mem`；out 層 $i_V$ 可能變(繞回版重新校準，飽和版寫死 `out: 11` 要確認夠不夠)；`tb_fc_weight_lookup`、`tb_fc_neuron_memory`、`tb_salt_fc_no_spike` 的訓練端參數組；準確率、`reference.npz`。
+    - 7 bits 時 per-tensor 掉多少沒量過(訓練端只有 4 bits 的舊資料：per-channel 0.8985、per-tensor 0.8830)。
+    - 中間層要選 per-tensor 得改 `example/quant_run.py` 的 `quant_layer_specs` 跟 config，`salt_core` 的 `LayerQuantSpec.per_channel` 本來就逐層。
 - 輸出層乘 $s_i$：$\text{score}_i=\hat V[i]\cdot s_i$ 是整個推論唯一的浮點運算。
     - 2026-10-22 定：不放在 FC 層裡。FC 只提供膜電位輸出(FC.md 第 6 節)，乘 $s_i$、argmax 由層外另外寫的模組處理，那個模組還沒設計；放 FPGA 內還是外部還沒定。
 - 跟 `ps_host_if` 替換模組要不要融合：等兩邊資源用量(BRAM、LUT、功耗)出來再決定。
