@@ -35,7 +35,7 @@ module tb_fc_weight_lookup;
 
 	logic                              read_enable;
 	logic        [ROW_WIDTH-1:0]       read_row;      // y
-	logic        [IN_NEURON_WIDTH-1:0] read_neuron;   // src
+	logic        [IN_NEURON_WIDTH-1:0] read_src;      // src
 	logic        [ROW_WORD_WIDTH-1:0]  row_word;
 	logic signed [WEIGHT_WIDTH-1:0]    weight_code [0:NEURONS_PER_ROW-1];
 
@@ -51,7 +51,7 @@ module tb_fc_weight_lookup;
 		.read_enable (read_enable),
 		.shift_enable(1'b1),
 		.out_index   (read_row),
-		.in_index    (read_neuron),
+		.in_index    (read_src),
 		.read_word   (row_word)
 	);
 
@@ -97,7 +97,7 @@ module tb_fc_weight_lookup;
 				// negedge 送 (y, src);READ_LATENCY 個 posedge 後讀出,#1 後比對
 				@(negedge clk);
 				read_row    = ROW_WIDTH'(row);
-				read_neuron = IN_NEURON_WIDTH'(source);
+				read_src = IN_NEURON_WIDTH'(source);
 				repeat (READ_LATENCY) @(posedge clk);
 				#1;
 

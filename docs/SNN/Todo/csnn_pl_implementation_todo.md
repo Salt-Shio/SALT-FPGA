@@ -24,18 +24,20 @@
     - 逐拍例子、資料流程圖：[`Conv-image/SaltConvControl.md`](../Concept/Layer-RTL/Conv-image/SaltConvControl.md)、[`SaltConvDataflow.md`](../Concept/Layer-RTL/Conv-image/SaltConvDataflow.md)。
     - 設計推導：[`Conv.md`](../Concept/Layer-RTL/Conv.md) 5.5「實作」、5.8。
 - 分支：Part 8.2、8.x 都已經 fast-forward 併進 `test`，`test` 已推到遠端。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
-- FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完，第 6 節 ⑤ 留到寫 RTL 時定；RTL 還沒開始。
+- FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完，第 6 節 ⑤ 留到寫 RTL 時定；RTL 寫到 Part 8 步驟 5。
 
-## 交接(2026-10-29)
+## 交接(2026-11-04)
 
-- 下一步：SaltFC Part 8(pipeline 整合)，還沒開始討論。
+- 進行中：SaltFC Part 8(pipeline 整合)，照段落分步驟寫，進度見下面「Part 8」。
+    - 步驟 1~5 寫完，`SPIKE_OUTPUT = 0` 的整層模擬 63 組 ALL PASS；步驟 5 還沒經使用者確認完成。
+    - 下一步是步驟 6(fire)：bitmask、`FCSpikeSelect`、送出交握、停住。`SPIKE_OUTPUT = 1` 現在 `stall` 跟 spike 輸出埠沒有驅動，還不能用。
 - SaltFC Part 0~3 完成。
 - SaltFC Part 4 完成：4a conv 權重 ROM 改用 `lib/ReadOnlyMemory`；4b 權重位址兩層共用 `lib/WeightMemory`(細節見下面「Part 4 權重 BRAM」)。
 - SaltFC Part 5 完成(細節見下面「Part 5」)：conv 展開 `WeightTapSelect`、`NeuronMemory` 搬到 lib、FC $\hat V$ 跟門檻的 testbench。
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
 - SaltFC Part 7 完成(細節見下面「Part 7」)：FC 挑選模組 `fc/FCSpikeSelect`，conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8。
 - 2026-10-29 盤點「答案用訓練端 salt_core 的函式產生」這條規則：訓練端有對應函式卻沒用的只有 `tb_spike_select` 的送出順序，已改(見下面「Part 7」最後)。bank 排列、記憶體讀寫清除、FIFO、拍數、寬字切段這些訓練端沒有對應函式，使用者決定不處理。
-- 分支 `test`，最新 commit 是 `tb_spike_select` 答案腳本改用訓練端排順序，還沒 push；工作目錄乾淨。
+- 分支 `test`，最新 commit 是 SaltFC Part 8 步驟 1~5，還沒 push；工作目錄乾淨。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
     - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
@@ -77,13 +79,13 @@
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 完成 |
 | 6 | 膜電位更新：`NeuronUpdate` 拆成 lib `DecayLookup` + `NeuronUpdate`，加 spike 開關 | 第 3 節 | 完成 |
 | 7 | spike 選擇：`fc/FCSpikeSelect`、conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8 | 第 4 節 ②③ | 完成 |
-| 8 | pipeline 整合 | 第 5 節 | 未開始 |
+| 8 | pipeline 整合 | 第 5 節 | 進行中 |
 | 9 | 膜電位輸出 | 第 6 節 | 未開始 |
 | 10 | conv → FC 轉接模組 | 第 1 節 | 未開始 |
 | 11 | 串接 conv1 → conv2 → FC，跟訓練端比對 | — | 未開始 |
 | 12 | 合成量測(4.8 ns) | — | 未開始 |
 
-- 每個 Part 的細節到要做時才規劃；Part 8 要不要像 SaltConv 一樣從無腦版一步一步做，到時候再定。
+- 每個 Part 的細節到要做時才規劃。
 
 ### Part 0 專案結構
 
@@ -142,10 +144,10 @@
     - 輸入 port 叫 `in_neuron`(行尾註解標 $\text{src}$)，不叫 `in_src`：FC 接 FC 時上一層的 `out_neuron` 直接接同名的 `in_neuron`，跟 conv 接 conv 的同名規則一樣。
     - $\text{src}$ 位寬是 `localparam`，由 $n_{in}$ 推出，不另開 parameter(FC.md 第 1 節跟著改)：$\text{src}$ 一定落在 $0\sim n_{in}-1$；conv 的 `X_WIDTH` 開成 parameter 是因為輸入座標位寬由上游決定，FC 沒有這個情況。
     - 開關關掉時 port 還在(SystemVerilog 不能照 parameter 拿掉 port)，`valid` 固定 0，合成時修剪。
-    - 膜電位輸出埠：`membrane_valid`、`membrane_ready`、`membrane_row_start`($y\cdot n_{col}$)、`membrane_values`($n_{col}\cdot w$)、`membrane_time`(FC.md 第 6 節 ③)。
+    - 膜電位輸出埠：`membrane_valid`、`membrane_ready`、`membrane_row_base`($y\cdot n_{col}$)、`membrane_values`($n_{col}\cdot w$)、`membrane_time`(FC.md 第 6 節 ③)。
 - 驗證(2026-10-25)：本體是空的，只確認能 elaborate、port 位寬對。non-project `synth_design -rtl`(不碰 `.xpr`)，逐 port 數位元數：
 
-| 參數 | `in_neuron` | `out_neuron`、`membrane_row_start` | `membrane_values` |
+| 參數 | `in_neuron` | `out_neuron`、`membrane_row_base` | `membrane_values` |
 |---|---|---|---|
 | 預設($n_{in}=1296$、$n_{out}=10$、$n_{col}=4$、$w=14$) | 11 | 4 | 56 |
 | $n_{col}=1$ | 11 | 4 | 14 |
@@ -339,7 +341,7 @@ ceil$。
     - `FCSpikeSelect` 直接輸出 $i=y\cdot n_{col}+x$(輸入這一列帶的 $y\cdot n_{col}$)，跟 `ConvSpikeSelect` 直接輸出 $o_y$、$o_x$ 對稱，兩層 top 都只接線；$n_{col}$ 是 2 的次方就把 $x$ 接進低位，其他用加法，兩條分支都在 Part 7 的 testbench 測到。
 - 做法(2026-10-28)：
     - 第 1 步 conv 改名：`git mv conv/SpikeSelect.sv conv/ConvSpikeSelect.sv`，module 名、SaltConv 與 `tb_spike_select` 的例化、`CandidateAxis`/`CandidateGrid`/SaltConv 註解、`gen_candidate_axis_ref.py`/`gen_spike_select_ref.py` 說明、`SaltConvOverview.md`、`SaltConvControl.md`、`SaltConvDataflow.md`、`SaltConvSynthFlow.md`、架構總覽 drawio(命令列重新匯出 svg)跟著改；`.xpr` 用 batch `remove_files` 拿掉舊路徑。
-    - 第 2 步 `fc/FCSpikeSelect.sv`：參數 `OUT_NEURONS`、`NEURONS_PER_ROW`；輸入 `pending`($n_{col}$ 位元)、`row_start`($y\cdot n_{col}$)，輸出 `found`、`selected`(one-hot)、`selected_neuron`($i$)。generate 三支：2 的次方而且 $i$ 位寬比 $x$ 寬(接位元)、2 的次方只有一列($i$ 就是 $x$)、其他(加法，含 $n_{col}=1$)。
+    - 第 2 步 `fc/FCSpikeSelect.sv`：參數 `OUT_NEURONS`、`NEURONS_PER_ROW`；輸入 `pending`($n_{col}$ 位元)、`row_base`($y\cdot n_{col}$)，輸出 `found`、`selected`(one-hot)、`selected_neuron`($i$)。generate 三支：2 的次方而且 $i$ 位寬比 $x$ 寬(接位元)、2 的次方只有一列($i$ 就是 $x$)、其他(加法，含 $n_{col}=1$)。
     - `scripts/fc/gen_fc_spike_select_ref.py`：送出順序用訓練端 `salt_core.stream.extract_output_events_fc` 算(FC 層 forward 把 spike 排成下一層事件流的函式)；每列窮舉合法行的子集合，做只有一筆輸入事件的 `spike_mask` 丟進去，前 `n_real_events` 筆的 `event_source_idx` 就是預期的 $i$。
     - `sim_1/new/fc/tb_fc_spike_select.sv` + `scripts/fc/run_tb_fc_spike_select.tcl`：照預期順序一步一步比 `found`、`selected`、`selected_neuron`，每步用答案(不用 DUT 的 `selected`)清掉那一行；參數組 $(n_{out},n_{col})$ = (10,4)、(10,3)、(13,5)、(20,8)、(5,1)、(3,4)、(2,8)、(1,1)。
     - FC.md 第 4 節 ②③ 記上用 `FCSpikeSelect`、bitmask 跟交握在 SaltFC top。
@@ -356,6 +358,60 @@ ceil$。
             - 還原後跟測過的版本逐 byte 相同。
 - 不做：合成量測。`FCSpikeSelect` 要等 Part 8 接進 SaltFC 才有實際電路，Part 12 一起量。
 - 2026-10-29 補：`scripts/conv/gen_spike_select_ref.py` 的送出順序原本是腳本自己照 $o_y\cdot W+o_x$ 排，改成呼叫訓練端 `salt_core.stream.extract_output_events_conv`(只開 1 個 $o_c$,每批 256 個 case 當不同輸入事件一次算),編號用 `salt_core.connectivity.conv.unravel_conv_source` 換回座標。重新產生的 8 個答案檔跟原本逐 byte 相同，所以 testbench 沒重跑。
+
+### Part 8 pipeline 整合
+
+- 已定(2026-10-29)：
+    - 直接寫最終的管線($R$、$C$、`OVERLAP` 參數、讀寫衝突)，不像 SaltConv 從無腦版一步一步做：conv 那樣做是因為每一步都要量划不划算，這些 conv 已經量過，FC.md 第 5 節照 conv 的結論寫。
+    - 照 SaltFC 的段落分步驟寫，每一步寫完給使用者看內容跟設計想法，確認才進下一步；先做不 fire，再加 fire。
+    - SaltFC 段號是 0~5：SaltConv 的第 3 段(下一個 $o_c$ 碰到哪些神經元)FC 沒有，管線位置起比 SaltConv 少一。
+- 步驟：
+
+| 步驟 | 段 | 內容 | 狀態 |
+|---|---|---|---|
+| 1 | 0、1 | 共用控制宣告；清除、輸入 FIFO、事件暫存器 $\text{src}$、兩個時間暫存器 | 做完 |
+| 2 | 2 | 列計數 $y$、$y\cdot n_{col}$ 累加、下一列從 FIFO 還是事件暫存器拿、BRAM 讀取 enable | 做完 |
+| 3 | 3 | 管線位置 1..L 帶 $y$、$y\cdot n_{col}$、$t$、$t_{last}$、valid；算的那一拍 | 做完 |
+| 4 | 4 | 三顆記憶體、1 份 `DecayLookup`、每行的 generate 區塊(切段、`NeuronUpdate`、最後一列空位置的遮罩) | 做完 |
+| 5 | 5(不 fire) | 不重疊時等前一列、讀寫衝突、`read_next_row`；`SPIKE_OUTPUT = 0` 那一支停住固定 0；整層模擬比最後的 $\hat V$ | 進行中 |
+| 6 | 5(fire) | bitmask、`FCSpikeSelect`、送出交握、停住；整層模擬再加比 spike 輸出 | 未開始 |
+
+- 已定(2026-10-29)門檻兩種並存：SaltFC 加參數選「每顆一個門檻」(per-channel，門檻 BRAM)或「整層一個門檻」(per-tensor，編譯期常數，不用 BRAM、沒有讀取延遲要對齊)，在步驟 4 一起做。
+    - 起因：訓練端中間層固定 per-channel，FC 的 channel 就是輸出神經元，每顆的步長 $s_i$ 不同，整數門檻 $\hat v_{th}[i]=\operatorname{round}(v_{th}/s_i\cdot2^{f_V})$ 每顆不同；per-tensor 整層一個 $s$，整數門檻只有一個(浮點 $v_{th}$ 每層一個純量)。`LayerQuantSpec.per_channel` 本來就逐層，只有 `example/quant_run.py` 的 `quant_layer_specs`、config 只開放輸出層選。
+    - SaltConv 也要對稱(門檻陣列大小 1 或 $OC$)，FC 做完再處理，見 D12。
+    - 參數名 `SHARED_THRESHOLD`(1：整層一個)，放在量化行為那組；conv、FC 同名。
+    - 整層一個時門檻檔先自己假設(訓練端還沒改)：只有一行，$w$ 位元二補數，$\lceil w/4\rceil$ 個 hex 字元，跟 conv 門檻檔一行的格式相同；SaltFC 讀進大小 1 的陣列，複製 $n_{col}$ 份接到每一行。
+- 已定(2026-10-29)每顆一個門檻時門檻 BRAM 的讀法(做法 C)：門檻在計算第 2 級(位置 L)才比，$C=2$ 時比 $\hat V$ 晚一拍讀，位址用 `pipe_row[1]`、讀取開關 `pipe_valid[1] && !stall`，讀取延遲照 $R$；$C=1$ 時跟 $\hat V$ 同一拍讀。
+    - 比過的：A 跟 $\hat V$ 同一拍讀、讀取延遲設 $L$(多一級讀出暫存器，$R=2$ 時多 $n_{col}\cdot w$ 個 FF)；B 讀取延遲 $R$、SaltFC 另寫一級暫存器(FF 同 A，多一段要對齊停住)。三個都不影響管線延遲；選 C 是因為不多暫存器，代價只有門檻 BRAM 的讀位址、開關跟另外兩顆不同。
+    - 步驟 6 做完後 A、C 各合成一次($R=2,C=2$，4.8 ns 布局繞線)比資源、最長路徑，C 比 A 差再換。
+    - FC.md 第 2 節「門檻：跟 $\hat V$ 同一個讀取延遲」要改，Part 8 做完一起更新文件。
+- Part 9 要回來改的：第 5 段 `no_spike_output` 那一支 `stall` 固定 0，只到 Part 9 為止；膜電位輸出沒被收走也要停住，`stall` 要拿出來併兩個輸出的條件。
+- 已定(2026-10-29)步驟 4 的另外兩個設計：
+    - 最後一列空位置的遮罩 `column_valid[x]`：前 `LAST_ROW_COLUMNS` 行是常數 1，後面的行是 `pipe_row[L]` 不是最後一列；跟 FC.md 的 $y\cdot n_{col}+x<n_{out}$ 等價，各行共用一個比較，整除時沒有邏輯。跟 `spike` 做 AND 放在第 5 段挑 fire 的地方(同 conv 的 `pipe_candidate_valid`)。
+    - $\hat V$ 整列寫回，空位置算出來的值照寫，不另外寫 0：行跟行獨立，碰不到真的神經元；膜電位輸出照 FC.md 第 6 節空位置沒有意義。整層 testbench 只比 $n_{out}$ 顆。
+- 已定(2026-10-29)第 5 段不重疊等前一列(`wait_previous_row`)、讀寫衝突(`read_conflict`)維持分開、只比第 0 列，不改成通用寫法：通用規則跟為什麼不照它寫，記在 FC.md 第 5 節 ⑦⑧。
+- 已定(2026-10-29)步驟 5 整層模擬(`SPIKE_OUTPUT = 0`)：
+    - 答案照 SaltConv：訓練端 `FCLayer.forward` + `QuantBackend`(官方)跟逐筆迴圈(`apply_decay_table_int` + `process_event`)互相比對；官方 `v_final` 有 catch-up，逐筆迴圈補上同一步對上後，testbench 比 catch-up 之前的 $\hat V$。
+    - 訓練端 out 層：繞回($w=14$)、飽和($w=11$)× $n_{col}=4$、$10$($n_{row}=3$、$1$)，輸入是 test 前 10 筆經訓練端 conv1 → conv2 的輸出，換成 $\text{src}=o_c\cdot H_{out}W_{out}+o_y\cdot W_{out}+o_x$。
+    - 人工參數 $(n_{in},n_{out},n_{col})$：(7,10,3)、(7,10,4)、(5,3,4)、(7,5,1)、(1,1,1)；量化行為變化 `ROUND`、`SATURATE`、小 $w$、一組 $f_V>0$；事件時間含第一筆 $t=0$、同一毫秒、間隔超過 $\Delta t_{\max}$。
+    - 每組跑 7 種 $(R,C,\text{OVERLAP})$：$(1,1)$ 加 $(1,2)$、$(2,1)$、$(2,2)$ 各配重疊、不重疊。
+    - 比：$n_{out}$ 顆最後的 $\hat V$(階層路徑讀 BRAM)、最後的 `event_time`、輸入一直有時的拍數。
+- 步驟 5 做法(2026-10-29)：
+    - `scripts/fc/gen_salt_fc_ref.py`：拍數、檔名常數、`signed_range`、`write_lines` import `scripts/conv/gen_salt_conv_ref.py`(拍數算法跟 conv 相同，$o_c$ 換成列)；權重檔、衰減表檔用訓練端 `fc_weight_lines`、`decay_lines` 寫，跟答案一起放 `sim_1/new/fc/ref/`；印出每組碰到暫存器範圍的次數(out 層繞回 0、飽和 2865，人工 2~158)。
+    - `sim_1/new/fc/tb_salt_fc_no_spike.sv`：單一 `initial`，上游一直有事件；樣本結束比 $n_{out}$ 顆 $\hat V$、`event_time`、拍數；每拍比讀出的 $\hat V$、權重寬字等於記憶體內容(讀到還沒寫回的舊值當拍抓到)。沒有涵蓋統計。
+    - `scripts/fc/run_tb_salt_fc_no_spike.tcl`：9 組 × 7 種 $(R,C,\text{OVERLAP})$ = 63 組。
+- 步驟 5 驗證(2026-10-29)：
+    - 63 組 ALL PASS。
+    - 反向測試一：讀寫衝突永遠不擋。$n_{row}=1$ 的三組 7 種設定全部 FAIL；$n_{row}=3$ 的兩組只有 $R=2,C=2$ 重疊($L=3$)FAIL；$n_{row}=4$、$5$ 全部 PASS。跟 FC.md 第 5 節 ⑧ 的表一致。
+    - 反向測試二：`DecayLookup` 改接時間暫存器(不用位置 R 帶的 $t$、$t_{last}$)。只有 $R=2$ 重疊的組 FAIL($n_{row}=1$ 跟 $R=2,C=2$ 重疊的 $n_{row}=3$ 被讀寫衝突隔開，換事件時舊事件的列已經過了位置 R，PASS)。
+    - 兩次都還原，跟改之前逐 byte 相同。第一次跑反向測試一時第 3 組 elaborate 碰到 `Spawn failed: %1 不是有效的 Win32 應用程式`(vivado-usage skill 8.7)，原封不動重跑就過。
+- 步驟 1~4 只確認 elaborate(non-project `synth_design -rtl`，不碰 `.xpr`)：控制訊號到步驟 5 才驅動，模擬沒有意義。整層的答案腳本、testbench 到步驟 5 前再討論。
+- 步驟 1(2026-10-29)：`event_time`、`event_last_time` 換事件時一起往後推一格，要 reset：conv 的 $t_{last}$ 存在神經元記憶體裡跟著清除歸 0，FC 的存在暫存器。
+- 步驟 2(2026-10-29)：`last_read_row`、`last_read_row_base` 一起更新；下一列是新事件時 $t_{last}$ 取 `event_time`(時間暫存器這拍結束才推進)。
+- 命名(2026-10-29)：
+    - $y\cdot n_{col}$ 叫 `row_base`(`start` 範圍太廣)：SaltFC 的 `last_read_row_base`、`read_row_base`，port `membrane_row_base`，`FCSpikeSelect` 的輸入 `row_base`。
+    - SaltFC 內部的 $\text{src}$ 叫 `src`(`fifo_src`、`event_src`、`read_src`)，`neuron` 只指這一層的神經元；port `in_neuron` 不改(Part 2)。`tb_fc_weight_lookup` 的 `read_neuron` 也改成 `read_src`。
+    - 驗證：`tb_fc_spike_select` 答案重產跟 HEAD 逐 byte 相同、8 組 ALL PASS；`tb_fc_weight_lookup` 6 組 ALL PASS；SaltFC 四組參數 elaborate。
 
 ### Part 11 串接比對
 
@@ -376,6 +432,7 @@ ceil$。
 | D9 | `CandidateAxis` 的除法、`CandidateGrid` 的乘常數用 LUT 還是 DSP | 合成後看 utilization，必要時加 `USE_DSP="no"` |
 | D10 | FC 權重放 URAM | 延後，這一版用 BRAM |
 | D11 | SaltConv 開 `SPIKE_OUTPUT` 參數(conv 當不 fire 的層) | 有網路要用到時 |
+| D12 | SaltConv 門檻也加「整層一個」參數，跟 SaltFC 對稱：門檻陣列大小 1 或 $OC$，選的索引是 0 或 `pipe_channel[L]`；Conv.md 的不重疊、讀寫衝突照 FC.md 第 5 節 ⑦⑧ 補例子跟通用規則 | SaltFC Part 8 做完後 |
 
 - D4：
     - 每拍都開：讀取開關不用等推進的判斷，量起來稍快(時脈多 0.5~4 MHz，接近布局繞線的變動範圍)；卡住的拍子($k\ge2$、`out_ready=0`)、$R=2$ 等資料的拍子會白讀記憶體，多耗電。

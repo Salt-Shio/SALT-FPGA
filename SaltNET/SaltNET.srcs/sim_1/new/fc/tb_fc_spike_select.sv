@@ -4,8 +4,8 @@
 // Description:
 //   FCSpikeSelect 比對(FC.md 第 4 節 ②③),答案由 scripts/fc/gen_fc_spike_select_ref.py 用訓練端
 //   salt_core.stream.extract_output_events_fc 排出的送出順序產生。
-//   每個 case 是第 y 列(row_start = y*n_col)、這一列還沒送的 bitmask,照預期順序一步一步比:
-//     還有要送的:found=1,selected 只有預期那一行(i - row_start)是 1,selected_neuron = 預期的 i;
+//   每個 case 是第 y 列(row_base = y*n_col)、這一列還沒送的 bitmask,照預期順序一步一步比:
+//     還有要送的:found=1,selected 只有預期那一行(i - row_base)是 1,selected_neuron = 預期的 i;
 //     比完把預期那一行的 pending 清掉(不用 DUT 的 selected 清,錯誤不會一路傳下去)。
 //     全部送完:found=0,selected 全 0。
 //   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入,
@@ -23,7 +23,7 @@ module tb_fc_spike_select;
 	localparam integer OUT_NEURON_WIDTH = (OUT_NEURONS > 1) ? $clog2(OUT_NEURONS) : 1;
 
 	logic [NEURONS_PER_ROW-1:0]  pending;
-	logic [OUT_NEURON_WIDTH-1:0] row_start;
+	logic [OUT_NEURON_WIDTH-1:0] row_base;
 	logic                        found;
 	logic [NEURONS_PER_ROW-1:0]  selected;
 	logic [OUT_NEURON_WIDTH-1:0] selected_neuron;
@@ -33,7 +33,7 @@ module tb_fc_spike_select;
 		.NEURONS_PER_ROW(NEURONS_PER_ROW)
 	) dut (
 		.pending        (pending),
-		.row_start      (row_start),
+		.row_base       (row_base),
 		.found          (found),
 		.selected       (selected),
 		.selected_neuron(selected_neuron)
@@ -47,20 +47,20 @@ module tb_fc_spike_select;
 	int    check_count;
 	int    error_count;
 
-	// 比對一個欄位,不一致就印出 case 的 row_start、bitmask、第幾步、欄位名稱、預期值、實際值
-	task automatic check_field(input int case_row_start, input int case_pending, input int step,
+	// 比對一個欄位,不一致就印出 case 的 row_base、bitmask、第幾步、欄位名稱、預期值、實際值
+	task automatic check_field(input int case_row_base, input int case_pending, input int step,
 	                           input string field_name, input int expected, input int actual);
 		check_count++;
 		if (expected != actual) begin
 			error_count++;
-			$display("MISMATCH row_start=%0d pending=%b step=%0d %s: expected=%0d actual=%0d",
-			         case_row_start, case_pending[NEURONS_PER_ROW-1:0], step, field_name, expected, actual);
+			$display("MISMATCH row_base=%0d pending=%b step=%0d %s: expected=%0d actual=%0d",
+			         case_row_base, case_pending[NEURONS_PER_ROW-1:0], step, field_name, expected, actual);
 		end
 	endtask
 
 	initial begin
 		string kind;
-		int    case_row_start;
+		int    case_row_base;
 		int    case_pending;
 		int    order_count;
 		int    order [0:NEURONS_PER_ROW-1];
@@ -97,31 +97,31 @@ module tb_fc_spike_select;
 					       expected_case_count, expected_step_count, case_count, step_count);
 				reached_end = 1;
 			end else if (kind == "case") begin
-				scan_count = $fscanf(ref_fd, "%d %d %d", case_row_start, case_pending, order_count);
+				scan_count = $fscanf(ref_fd, "%d %d %d", case_row_base, case_pending, order_count);
 				if (scan_count != 3)
 					$fatal(1, "答案檔第 %0d 個 case 開頭欄位不足", case_count);
 				if (case_pending < 0 || case_pending >= (1 << NEURONS_PER_ROW) || order_count < 0 || order_count > NEURONS_PER_ROW)
-					$fatal(1, "答案檔 row_start=%0d 的 pending 或送出筆數超出範圍", case_row_start);
+					$fatal(1, "答案檔 row_base=%0d 的 pending 或送出筆數超出範圍", case_row_base);
 				for (int step = 0; step < order_count; step++) begin
 					scan_count = $fscanf(ref_fd, "%d", order[step]);
-					if (scan_count != 1 || order[step] < case_row_start || order[step] >= case_row_start + NEURONS_PER_ROW)
-						$fatal(1, "答案檔 row_start=%0d 第 %0d 個送出的神經元不在這一列", case_row_start, step);
+					if (scan_count != 1 || order[step] < case_row_base || order[step] >= case_row_base + NEURONS_PER_ROW)
+						$fatal(1, "答案檔 row_base=%0d 第 %0d 個送出的神經元不在這一列", case_row_base, step);
 				end
-				row_start = OUT_NEURON_WIDTH'(case_row_start);
+				row_base = OUT_NEURON_WIDTH'(case_row_base);
 				pending   = NEURONS_PER_ROW'(case_pending);
 
 				for (int step = 0; step <= order_count; step++) begin
 					#1;
 					if (step < order_count) begin
-						expected_column = order[step] - case_row_start;
-						check_field(case_row_start, case_pending, step, "found", 1, int'(found));
-						check_field(case_row_start, case_pending, step, "selected_neuron", order[step], int'(selected_neuron));
+						expected_column = order[step] - case_row_base;
+						check_field(case_row_base, case_pending, step, "found", 1, int'(found));
+						check_field(case_row_base, case_pending, step, "selected_neuron", order[step], int'(selected_neuron));
 					end else begin
 						expected_column = -1;
-						check_field(case_row_start, case_pending, step, "found", 0, int'(found));
+						check_field(case_row_base, case_pending, step, "found", 0, int'(found));
 					end
 					for (int column = 0; column < NEURONS_PER_ROW; column++) begin
-						check_field(case_row_start, case_pending, step, $sformatf("selected[%0d]", column),
+						check_field(case_row_base, case_pending, step, $sformatf("selected[%0d]", column),
 						            int'(column == expected_column), int'(selected[column]));
 					end
 					if (step < order_count) begin

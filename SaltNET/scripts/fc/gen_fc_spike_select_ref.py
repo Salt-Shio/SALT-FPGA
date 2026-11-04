@@ -8,8 +8,8 @@
 每一列窮舉這一列合法行的全部子集合。
 
 答案檔一行一個指令,第一個欄位是種類,欄位以空白分隔:
-    case <row_start> <pending> <count> <neuron_1> ... <neuron_count>
-        row_start = y*n_col;pending 是 n_col 位元的 bitmask(第 x 位元 = 第 x 行),寫成十進位整數;
+    case <row_base> <pending> <count> <neuron_1> ... <neuron_count>
+        row_base = y*n_col;pending 是 n_col 位元的 bitmask(第 x 位元 = 第 x 行),寫成十進位整數;
         neuron 是預期送出的 i,依送出順序;count = pending 亮的個數。
     end <case_count> <step_count>
         case 行數、預期送出的總筆數,testbench 用來確認沒有漏掉。
@@ -64,14 +64,14 @@ def build_reference_rows(extract_output_events_fc, out_neurons: int, neurons_per
     rows = []
     step_count = 0
     for row in range(row_count):
-        row_start = row * neurons_per_row
-        valid_columns = [column for column in range(neurons_per_row) if row_start + column < out_neurons]
+        row_base = row * neurons_per_row
+        valid_columns = [column for column in range(neurons_per_row) if row_base + column < out_neurons]
         for subset in range(1 << len(valid_columns)):
             columns = [column for bit, column in enumerate(valid_columns) if (subset >> bit) & 1]
             pending = sum(1 << column for column in columns)
-            order = emitted_neurons(extract_output_events_fc, [row_start + column for column in columns],
+            order = emitted_neurons(extract_output_events_fc, [row_base + column for column in columns],
                                     out_neurons)
-            fields = ["case", row_start, pending, len(order)] + order
+            fields = ["case", row_base, pending, len(order)] + order
             rows.append(" ".join(str(field) for field in fields))
             step_count += len(order)
     rows.append(f"end {len(rows)} {step_count}")
