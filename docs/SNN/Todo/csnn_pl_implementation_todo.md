@@ -23,15 +23,18 @@
     - 控制總覽：[`SaltConvOverview.md`](../Concept/Layer-RTL/SaltConvOverview.md)。
     - 逐拍例子、資料流程圖：[`Conv-image/SaltConvControl.md`](../Concept/Layer-RTL/Conv-image/SaltConvControl.md)、[`SaltConvDataflow.md`](../Concept/Layer-RTL/Conv-image/SaltConvDataflow.md)。
     - 設計推導：[`Conv.md`](../Concept/Layer-RTL/Conv.md) 5.5「實作」、5.8。
-- 分支：Part 8.2、8.x 都已經 fast-forward 併進 `test`，`test` 已推到遠端。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
-- FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完，第 6 節 ⑤ 留到寫 RTL 時定；RTL 寫到 Part 8 步驟 5。
+- 分支：工作在 `test`，`main` 停在 `5507967`。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
+- FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完，第 6 節 ⑤ 留到寫 RTL 時定；RTL 做完 Part 8(整層管線，含 fire)。
 
-## 交接(2026-11-04)
+## 交接(2026-11-05)
 
-- 進行中：SaltFC Part 8(pipeline 整合)，照段落分步驟寫，進度見下面「Part 8」。
-    - 步驟 1~5 完成，`SPIKE_OUTPUT = 0` 的整層模擬 63 組 ALL PASS。
-    - 步驟 6(fire)RTL、答案、四支 testbench 做完，196 組 ALL PASS、反向測試三項都抓到(見下面「步驟 6」);功能使用者確認過(2026-11-05)。
-    - 步驟 6 還剩：門檻讀法 A、C 各合成一次比(下面「做法 C」那條)，FC.md 第 2 節門檻讀法、第 4、5 節跟著更新。
+- SaltFC Part 8(pipeline 整合)完成，使用者確認(2026-11-05)，細節見下面「Part 8」。
+    - 步驟 1~5:不 fire(`SPIKE_OUTPUT = 0`)整層模擬 63 組 ALL PASS。
+    - 步驟 6:fire 的送出、停住，四支 `out_ready` testbench 196 組 ALL PASS、反向測試三項都抓到。
+    - 門檻讀法維持做法 C(比 $\hat V$ 晚一拍讀);跟 A 的合成比較寫在 FC.md 第 2 節「門檻」。選 A 多的 FF 是 $(C-1)\cdot n_{col}\cdot w$(上限，ROM 內容化簡後會更少)。
+- 下一步：Part 9 膜電位輸出(FC.md 第 6 節，⑤ 輸出暫存器還沒定)。開始前先列這次做什麼、怎麼量、怎麼驗證給使用者確認。
+    - 要回來改的：第 5 段 `stall` 現在只看 spike 輸出還有沒有剩(`spike_output` 那一支)、不 fire 時固定 0;膜電位輸出沒被收走也要停住，`stall` 要拿出來併兩個輸出的條件(見「Part 8」那條「Part 9 要回來改的」)。
+    - 膜電位輸出埠(`membrane_*`)現在沒有驅動，合成會報 `Synth 8-3848`。
 - 訓練端 2026-11-04 `per-layer-quant` 分支改了 API(`round_mode` 搬進每層 `QuantizedLayerParams`，`QuantBackend()` 不帶參數，`load_quantized` 回傳沒有 `round_mode`)：`gen_salt_conv_ref.py`、`gen_salt_fc_ref.py` 跟著改，重產的 conv 30 個、FC 不 fire 27 個答案檔跟 HEAD 逐 byte 相同。
 - 輸出層 per-tensor(訓練端實驗 E,pc/pc/pt,繞回版)給 FPGA:匯出在 `sources_1/mem/best_val50_b7_fa6_fv0_round_pc_clip100_wrap_g1_out-pt/`(`cdc6315`,$n_{col}=4$),conv1、conv2 的 6 個檔跟 per-channel 版相同，只有 `out_weight.mem` 不同。
     - 測試用哪個量化資料夾只寫在 `SaltNET/scripts/quant_versions.txt`(`wrap`、`saturate` 兩行),答案腳本(`scripts/quant_versions.py`)跟 `run_tb_*.tcl`、`synth_salt_conv_net.tcl`(`scripts/quant_versions.tcl`)都讀它；換權重只改這個檔。原本 9 支腳本各自寫死。
@@ -43,7 +46,7 @@
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
 - SaltFC Part 7 完成(細節見下面「Part 7」)：FC 挑選模組 `fc/FCSpikeSelect`，conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8。
 - 2026-10-29 盤點「答案用訓練端 salt_core 的函式產生」這條規則：訓練端有對應函式卻沒用的只有 `tb_spike_select` 的送出順序，已改(見下面「Part 7」最後)。bank 排列、記憶體讀寫清除、FIFO、拍數、寬字切段這些訓練端沒有對應函式，使用者決定不處理。
-- 分支 `test`，已推到 `origin/test`；`origin/main` 還停在 `5507967`；工作目錄乾淨。
+- 分支 `test`，比 `origin/test` 多 3 個 commit(`cdc6315` 起)還沒 push:agent 這邊 push 時 Git Credential Manager 存不了認證(`wincredman`)，要使用者在自己的終端機 `git push origin test`。`origin/main` 停在 `5507967`。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
     - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
@@ -55,6 +58,8 @@
     - `SaltNET.xpr` 有改動就跟著 commit，不還原、不拿出來討論(見「作法 → 驗證」)。
     - 答案一律用訓練端 salt_core 的函式產生，testbench 拿來比對；訓練端有對應函式就要叫，不在腳本、testbench 裡自己重寫一份。只有硬體才有的東西(bank 排列、記憶體、FIFO、拍數、寬字切段)沒有對應函式，才自己算(2026-10-29)。
     - 命名有一個明顯改動少、又符合既有命名習慣的選項時，直接提名字跟一句理由，不列選項表。
+    - 使用者說「用訓練端匯出的那組 .mem 測」:先看 `sources_1/mem/` 有沒有已經匯出(commit)的資料夾，改 `scripts/quant_versions.txt` 指過去重產答案、重跑，不要另外提方案、問範圍(2026-11-05)。
+    - 使用者問「跟什麼成倍率」是要公式(例：多的 FF $=(C-1)\cdot n_{col}\cdot w$)，直接給公式跟無關的參數，不要講實測數字的來龍去脈(2026-11-05)。
 - 留著沒查的：Part 5 第 1 步(選 tap 展開)合成後 LUT 少 42，原因沒查出來；功能、4.8 ns 都確認過。
 - 這次碰到的工具問題：
     - 這台 git 設 `core.autocrlf=true`，有些答案檔在工作目錄是 CRLF(反向測試 `git checkout` 還原時轉的)。比對重產的答案檔要跟 `git show HEAD:<路徑>` 比，不要跟工作目錄的檔案直接比。
@@ -85,7 +90,7 @@
 | 5 | 神經元 BRAM、門檻 BRAM、清除 | 第 2 節「神經元」「門檻」 | 完成 |
 | 6 | 膜電位更新：`NeuronUpdate` 拆成 lib `DecayLookup` + `NeuronUpdate`，加 spike 開關 | 第 3 節 | 完成 |
 | 7 | spike 選擇：`fc/FCSpikeSelect`、conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8 | 第 4 節 ②③ | 完成 |
-| 8 | pipeline 整合 | 第 5 節 | 進行中 |
+| 8 | pipeline 整合 | 第 5 節 | 完成 |
 | 9 | 膜電位輸出 | 第 6 節 | 未開始 |
 | 10 | conv → FC 轉接模組 | 第 1 節 | 未開始 |
 | 11 | 串接 conv1 → conv2 → FC，跟訓練端比對 | — | 未開始 |
@@ -380,7 +385,7 @@ ceil$。
 | 3 | 3 | 管線位置 1..L 帶 $y$、$y\cdot n_{col}$、$t$、$t_{last}$、valid；算的那一拍 | 做完 |
 | 4 | 4 | 三顆記憶體、1 份 `DecayLookup`、每行的 generate 區塊(切段、`NeuronUpdate`、最後一列空位置的遮罩) | 做完 |
 | 5 | 5(不 fire) | 不重疊時等前一列、讀寫衝突、`read_next_row`；`SPIKE_OUTPUT = 0` 那一支停住固定 0；整層模擬比最後的 $\hat V$ | 做完 |
-| 6 | 5(fire) | bitmask、`FCSpikeSelect`、送出交握、停住；整層模擬再加比 spike 輸出 | 進行中 |
+| 6 | 5(fire) | bitmask、`FCSpikeSelect`、送出交握、停住；整層模擬再加比 spike 輸出 | 做完 |
 
 - 已定(2026-10-29)門檻兩種並存：SaltFC 加參數選「每顆一個門檻」(per-channel，門檻 BRAM)或「整層一個門檻」(per-tensor，編譯期常數，不用 BRAM、沒有讀取延遲要對齊)，在步驟 4 一起做。
     - 起因：訓練端中間層固定 per-channel，FC 的 channel 就是輸出神經元，每顆的步長 $s_i$ 不同，整數門檻 $\hat v_{th}[i]=\operatorname{round}(v_{th}/s_i\cdot2^{f_V})$ 每顆不同；per-tensor 整層一個 $s$，整數門檻只有一個(浮點 $v_{th}$ 每層一個純量)。`LayerQuantSpec.per_channel` 本來就逐層，只有 `example/quant_run.py` 的 `quant_layer_specs`、config 只開放輸出層選。
@@ -389,8 +394,7 @@ ceil$。
     - 整層一個時門檻檔先自己假設(訓練端還沒改)：只有一行，$w$ 位元二補數，$\lceil w/4\rceil$ 個 hex 字元，跟 conv 門檻檔一行的格式相同；SaltFC 讀進大小 1 的陣列，複製 $n_{col}$ 份接到每一行。
 - 已定(2026-10-29)每顆一個門檻時門檻 BRAM 的讀法(做法 C)：門檻在計算第 2 級(位置 L)才比，$C=2$ 時比 $\hat V$ 晚一拍讀，位址用 `pipe_row[1]`、讀取開關 `pipe_valid[1] && !stall`，讀取延遲照 $R$；$C=1$ 時跟 $\hat V$ 同一拍讀。
     - 比過的：A 跟 $\hat V$ 同一拍讀、讀取延遲設 $L$(多一級讀出暫存器，$R=2$ 時多 $n_{col}\cdot w$ 個 FF)；B 讀取延遲 $R$、SaltFC 另寫一級暫存器(FF 同 A，多一段要對齊停住)。三個都不影響管線延遲；選 C 是因為不多暫存器，代價只有門檻 BRAM 的讀位址、開關跟另外兩顆不同。
-    - 步驟 6 做完後 A、C 各合成一次($R=2,C=2$，4.8 ns 布局繞線)比資源、最長路徑，C 比 A 差再換。
-    - FC.md 第 2 節「門檻：跟 $\hat V$ 同一個讀取延遲」要改，Part 8 做完一起更新文件。
+    - 步驟 6 做完後 A、C 各合成一次($R=2,C=2$，4.8 ns 布局繞線，2026-11-05)：WNS 繞回 C +0.368、A +0.502，飽和 C +0.453、A +0.473(最長路徑都不經過門檻，差在單次布局的變動範圍內);合成後 LUT 幾乎相同、A 多 8 個 FF(多的那一級只留 8 位元，門檻 BRAM 合成後也只接 8 根輸出腳，跟門檻內容、列數有關，上限 $n_{col}ot w$);C 不比 A 差，不換。數字跟比較方式寫在 FC.md 第 2 節「門檻」。
 - 已定(2026-11-04)FC 留不重疊模式(`OVERLAP = 0`)，照 SaltConv 兩種並存，第 5 段 `wait_previous_row` 保留。
 - Part 9 要回來改的：第 5 段 `no_spike_output` 那一支 `stall` 固定 0，只到 Part 9 為止；膜電位輸出沒被收走也要停住，`stall` 要拿出來併兩個輸出的條件。
 - 已定(2026-10-29)步驟 4 的另外兩個設計：

@@ -4,7 +4,7 @@
 // Description:
 //   事件驅動 FC 層。設計依據見 docs/SNN/Concept/Layer-RTL/FC.md(管線:第 5 節)。
 //   名稱用描述性完整拼字,行尾註解標 FC.md 的數學符號。
-//   SaltFC Part 8 進行中:第 5 段 fire 的送出、停住寫完,還沒有整層模擬;膜電位輸出還沒寫(Part 9)。
+//   SaltFC Part 8 完成(管線、fire 的送出與停住);膜電位輸出還沒寫(Part 9),membrane_* 埠目前沒有驅動。
 //
 //   n_out 顆神經元照編號逐列排,每列 n_col 顆,一拍處理一列;一筆事件從第 0 列做到第 n_row-1 列。
 //   SystemVerilog 不能照 parameter 拿掉 port:SPIKE_OUTPUT = 0 時 spike 輸出埠的 out_valid 固定 0,
