@@ -55,10 +55,11 @@ if {[llength $testbenches] > 1} {
 }
 
 set ref_dir sim_1/new/fc/ref
+set tb_name [lindex $testbenches 0]
 
 # IN_NEURONS OUT_NEURONS NEURONS_PER_ROW TIME_WIDTH WEIGHT_WIDTH MEMBRANE_INT_WIDTH MEMBRANE_FRAC_WIDTH
 # DECAY_FRAC_WIDTH DECAY_TABLE_DEPTH ROUND SATURATE SHARED_THRESHOLD FIFO_DEPTH.
-# READ_LATENCY, COMPUTE_LATENCY, OVERLAP are added below.
+# READ_LATENCY, COMPUTE_LATENCY, OVERLAP, MEMBRANE_OUTPUT are added below.
 set base_param_sets {
     {7 10 3 11 5 6 0 4 10 1 0 0 4}
     {7 10 4 12 6 7 2 5 20 0 1 1 16}
@@ -72,11 +73,19 @@ set base_param_sets {
 # Each set above runs once per {READ_LATENCY COMPUTE_LATENCY OVERLAP} below. They only change the cycle count;
 # the reference files list the cycle count for every entry of CYCLE_CONFIGS in gen_salt_conv_ref.py (R, C in 1..2).
 # OVERLAP only matters when R + C > 2, so {1 1 1} is not listed.
+# MEMBRANE_OUTPUT = 1 for all of them (the membrane output never stalls the layer, so the other checks still hold).
+# tb_salt_fc_ready_random (the downstream stalls at random) also runs every set once more with MEMBRANE_OUTPUT = 0
+# and {2 2 1}: membrane_valid must stay 0 and nothing else changes.
 set pipeline_configs {{1 1 0} {2 1 0} {2 1 1} {1 2 0} {1 2 1} {2 2 0} {2 2 1}}
 set param_sets {}
 foreach base_set $base_param_sets {
     foreach pipeline_config $pipeline_configs {
-        lappend param_sets [concat $base_set $pipeline_config]
+        lappend param_sets [concat $base_set $pipeline_config 1]
+    }
+}
+if {$tb_name eq "tb_salt_fc_ready_random"} {
+    foreach base_set $base_param_sets {
+        lappend param_sets [concat $base_set {2 2 1} 0]
     }
 }
 
@@ -84,8 +93,8 @@ foreach base_set $base_param_sets {
 proc salt_fc_integer_params {param_set} {
     lassign $param_set in_neurons out_neurons neurons_per_row time_width weight_width membrane_int_width \
         membrane_frac_width decay_frac_width decay_table_depth round saturate shared_threshold fifo_depth \
-        read_latency compute_latency overlap
-    return "IN_NEURONS=$in_neurons OUT_NEURONS=$out_neurons NEURONS_PER_ROW=$neurons_per_row TIME_WIDTH=$time_width WEIGHT_WIDTH=$weight_width MEMBRANE_INT_WIDTH=$membrane_int_width MEMBRANE_FRAC_WIDTH=$membrane_frac_width DECAY_FRAC_WIDTH=$decay_frac_width DECAY_TABLE_DEPTH=$decay_table_depth ROUND=$round SATURATE=$saturate SHARED_THRESHOLD=$shared_threshold FIFO_DEPTH=$fifo_depth READ_LATENCY=$read_latency COMPUTE_LATENCY=$compute_latency OVERLAP=$overlap"
+        read_latency compute_latency overlap membrane_output
+    return "IN_NEURONS=$in_neurons OUT_NEURONS=$out_neurons NEURONS_PER_ROW=$neurons_per_row TIME_WIDTH=$time_width WEIGHT_WIDTH=$weight_width MEMBRANE_INT_WIDTH=$membrane_int_width MEMBRANE_FRAC_WIDTH=$membrane_frac_width DECAY_FRAC_WIDTH=$decay_frac_width DECAY_TABLE_DEPTH=$decay_table_depth ROUND=$round SATURATE=$saturate SHARED_THRESHOLD=$shared_threshold FIFO_DEPTH=$fifo_depth READ_LATENCY=$read_latency COMPUTE_LATENCY=$compute_latency OVERLAP=$overlap MEMBRANE_OUTPUT=$membrane_output"
 }
 
 # Data file name rule: same as ParamSet.stem in gen_salt_fc_ref.py (SPIKE_OUTPUT = 1)
@@ -134,7 +143,7 @@ if {[llength $set_conditions] > 0} {
 open_saltnet_project
 
 # One testbench in this session
-set tb_name [lindex $testbenches 0]
 set simset_name [string map {tb_ sim_} $tb_name]
-create_simset_if_missing $simset_name $tb_name [list fc/$tb_name.sv fc/tb_salt_fc_common.svh]
+create_simset_if_missing $simset_name $tb_name [list fc/$tb_name.sv fc/tb_salt_fc_common.svh \
+    fc/tb_salt_fc_update_lines.svh fc/tb_salt_fc_membrane_check.svh]
 run_param_sets $simset_name $tb_name $ref_dir $param_sets salt_fc_generic salt_fc_prefix

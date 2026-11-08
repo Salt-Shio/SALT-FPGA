@@ -2,15 +2,18 @@
 - 不 fire 的層(SPIKE_OUTPUT = 0):tb_salt_fc_no_spike.sv,清單見 run_tb_salt_fc_no_spike.tcl。
 - 會 fire 的層(SPIKE_OUTPUT = 1):tb_salt_fc_ready_*.sv 四支共用,清單見 run_tb_salt_fc.tcl。
 
-整層 SaltFC 的答案:每筆樣本餵進一串輸入事件 (src, t),比對輸出事件 (i, t) 的順序、樣本結束時每顆神經元的 V̂、
-out_ready 一直是 1、輸入一直有時的拍數。
+整層 SaltFC 的答案:每筆樣本餵進一串輸入事件 (src, t),比對輸出事件 (i, t) 的順序、每筆事件之後全部神經元的 V̂
+(膜電位輸出,也給 tb_fc_membrane_register_*.sv 用)、樣本結束時每顆神經元的 V̂、out_ready 一直是 1、輸入一直有時的拍數。
 
 答案有兩份,互相比對,一致才寫答案檔(同 scripts/conv/gen_salt_conv_ref.py):
-- 官方:訓練端 FCLayer.forward + QuantBackend(整層的整數掃描,輸出事件流照 salt_core/stream.py 排序)。
+- 官方:訓練端 FCLayer.forward + QuantBackend(整層的整數掃描,輸出事件流照 salt_core/stream.py 排序),trace=True。
   容量不夠時把容量放大到 diag.needed 再跑一次。
+  trace.v_steps 是每一步寫回之後的暫存器值(fire 的已經歸 0),整數掃描一步一筆事件,前 n_real 欄就是
+  每筆真事件之後的 V̂;後面補齊的欄 Δt = 0、權重 0,值不變。
 - 逐筆迴圈:照硬體的做法一筆事件一筆事件算,t_last 整層一份(上一筆事件的 t),
   更新用訓練端 apply_decay_table_int + process_event。官方答案沒有的兩樣東西從這裡來:
     每筆事件每列 fire 的個數 k(算拍數)、做完最後一筆事件時的 V̂。
+  每筆事件之後的 V̂ 要跟官方 trace.v_steps 的前 n_real 欄逐筆、逐顆相同。
   官方的 v_final 多做了一步 catch-up:每顆神經元再衰減到樣本最後一筆事件的時間(權重 0)。
   FC 每筆事件都更新全部神經元,catch-up 的 Δt 一律是 0;逐筆迴圈照樣補上同一步之後要等於官方的 v_final,
   輸出事件序列也要完全相同。
@@ -46,6 +49,7 @@ out_ready 一直是 1、輸入一直有時的拍數。
     sample <in_count> <out_count> <state_count> <cycle_count> ...   每組 (R, C, OVERLAP) 一個,照 CYCLE_CONFIGS 的順序
     in <src> <t>                × in_count,照輸入順序
     out <i> <t>                 × out_count,照送出順序(不 fire 時沒有)
+    update <t> <V̂_0> ... <V̂_{n_out-1}>   × in_count,照輸入順序:處理完這筆事件之後全部神經元的 V̂(fire 的是歸 0 之後)
     state <neuron> <membrane>   × state_count(= n_out),神經元編號 i 的 V̂
     end <sample_count>
 
@@ -182,17 +186,18 @@ class LayerModel:
             overflow_mode=self.overflow_mode, round_mode=self.round_mode)
 
     def official_forward(self, layer, in_stream):
-        """訓練端整層 forward。回傳 LayerOutput。"""
+        """訓練端整層 forward,帶逐步軌跡(每筆事件之後的 V̂)。回傳 LayerOutput。"""
         backend = self.training["QuantBackend"]()   # 捨入、溢位規則照 quantized_params
-        return fitted_forward(layer, self.quantized_params(), in_stream, backend)
+        return fitted_forward(layer, self.quantized_params(), in_stream, backend, trace=True)
 
     def run_events(self, events: np.ndarray) -> dict:
-        """逐筆迴圈。events: (n, 2) 的 (src, t)。回傳輸出事件、每 (事件, 列) 的 k、拍數、最後的 V̂。"""
+        """逐筆迴圈。events: (n, 2) 的 (src, t)。回傳輸出事件、每 (事件, 列) 的 k、拍數、每筆事件之後的 V̂、最後的 V̂。"""
         p = self.params
         membrane = np.zeros(p.out_neurons, dtype=np.int32)
         last_time = 0   # t_last 整層一份,基準是樣本開始
         overflow_count = 0   # 寫回前的真實值超出暫存器範圍的 (事件, 神經元) 數
         outputs = []
+        updates = np.zeros((len(events), p.out_neurons), dtype=np.int64)   # 每筆事件之後的 V̂
         fire_counts = np.zeros((len(events), p.row_count), dtype=np.int64)
         for event_index, (src, t) in enumerate(events):
             if t < last_time:
@@ -201,6 +206,7 @@ class LayerModel:
             v_final, is_spiked, overflowed = self.update(membrane, delta_t, self.q[:, src].astype(np.int32),
                                                          self.threshold_codes)
             membrane = np.asarray(v_final)
+            updates[event_index] = membrane
             last_time = int(t)
             overflow_count += int(np.sum(np.asarray(overflowed)))
             # 同一筆事件照神經元編號由小到大送(FC.md 第 4 節 ②)
@@ -209,8 +215,8 @@ class LayerModel:
                 fire_counts[event_index, neuron // p.neurons_per_row] += 1
         cycle_counts = [cycle_count(fire_counts, read_latency, compute_latency, overlap)
                         for read_latency, compute_latency, overlap in CYCLE_CONFIGS]
-        return {"outputs": outputs, "fire_counts": fire_counts, "cycle_counts": cycle_counts, "membrane": membrane,
-                "last_time": last_time, "overflow_count": overflow_count}
+        return {"outputs": outputs, "fire_counts": fire_counts, "cycle_counts": cycle_counts, "updates": updates,
+                "membrane": membrane, "last_time": last_time, "overflow_count": overflow_count}
 
     def catch_up(self, membrane: np.ndarray, last_time: int, end_time: int) -> np.ndarray:
         """官方 v_final 的最後一步:每顆神經元衰減到 end_time,權重 0。"""
@@ -222,21 +228,21 @@ class LayerModel:
         return np.asarray(v_final)
 
 
-def fitted_forward(layer, params, in_stream, backend):
+def fitted_forward(layer, params, in_stream, backend, trace=False):
     """layer.forward;容量不夠就放大到 diag.needed 再跑一次。"""
-    output = layer.forward(params, in_stream, backend=backend)
+    output = layer.forward(params, in_stream, backend=backend, trace=trace)
     if not bool(layer.capacity.fits(output.diag)):
         needed = output.diag.needed
         layer = layer.with_capacity(layer.capacity.replace(
             **{knob: max(layer.capacity[knob], int(needed[knob])) for knob in layer.capacity}))
-        output = layer.forward(params, in_stream, backend=backend)
+        output = layer.forward(params, in_stream, backend=backend, trace=trace)
         if not bool(layer.capacity.fits(output.diag)):
             raise RuntimeError(f"{layer.name} 放大容量之後還是放不下")
     return output
 
 
 def check_against_official(model: LayerModel, events: np.ndarray, loop_result: dict, output) -> None:
-    """逐筆迴圈跟官方整層 forward 比:輸出事件序列、catch-up 之後的 V̂。不一致就 raise。"""
+    """逐筆迴圈跟官方整層 forward 比:輸出事件序列、每筆事件之後的 V̂、catch-up 之後的 V̂。不一致就 raise。"""
     n_out = int(output.stream.n_real_events)
     official_idx = np.asarray(output.stream.event_source_idx)[:n_out]
     official_time = np.asarray(output.stream.event_times)[:n_out]
@@ -245,6 +251,14 @@ def check_against_official(model: LayerModel, events: np.ndarray, loop_result: d
     if len(loop_idx) != n_out or not np.array_equal(loop_idx, official_idx) or \
             not np.array_equal(loop_time, official_time):
         raise RuntimeError(f"輸出事件序列不一致:逐筆迴圈 {len(loop_idx)} 筆,官方 {n_out} 筆")
+    official_updates = np.asarray(output.trace.v_steps)[:, :len(events)].T   # (事件, 神經元)
+    if official_updates.shape != loop_result["updates"].shape:
+        raise RuntimeError(f"每筆事件之後的 V̂:官方 trace.v_steps 取出 {official_updates.shape},"
+                           f"逐筆迴圈 {loop_result['updates'].shape}")
+    if not np.array_equal(official_updates, loop_result["updates"]):
+        bad = np.argwhere(official_updates != loop_result["updates"])
+        raise RuntimeError(f"每筆事件之後的 V̂ 有 {len(bad)} 個跟官方 trace.v_steps 不同,"
+                           f"例如 (事件, 神經元) {[tuple(int(x) for x in pair) for pair in bad[:5]]}")
     end_time = int(events[-1, 1]) if len(events) else 0   # 沒有輸入事件時 V̂ 全 0,衰減到哪裡都一樣
     caught_up = model.catch_up(loop_result["membrane"], loop_result["last_time"], end_time)
     official_v = np.asarray(output.result.v_final)
@@ -258,6 +272,8 @@ def sample_lines(params: ParamSet, events: np.ndarray, loop_result: dict) -> lis
     lines = [f"sample {len(events)} {len(loop_result['outputs'])} {params.out_neurons} {cycle_text}"]
     lines += [f"in {src} {t}" for src, t in events]
     lines += [f"out {neuron} {t}" for neuron, t in loop_result["outputs"]]
+    lines += [f"update {t} " + " ".join(str(membrane) for membrane in update)
+              for (_, t), update in zip(events, loop_result["updates"])]
     lines += [f"state {neuron} {membrane}" for neuron, membrane in enumerate(loop_result["membrane"])]
     return lines
 

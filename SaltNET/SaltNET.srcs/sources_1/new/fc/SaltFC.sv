@@ -4,7 +4,9 @@
 // Description:
 //   事件驅動 FC 層。設計依據見 docs/SNN/Concept/Layer-RTL/FC.md(管線:第 5 節)。
 //   名稱用描述性完整拼字,行尾註解標 FC.md 的數學符號。
-//   SaltFC Part 8 完成(管線、fire 的送出與停住);膜電位輸出還沒寫(Part 9),membrane_* 埠目前沒有驅動。
+//   SaltFC Part 9 完成(管線、fire 的送出與停住、膜電位輸出)。
+//   膜電位輸出只有 valid、沒有 ready(FC.md 第 6 節 ④):每寫回一列送一筆,這一層不因為它停住;
+//   存每顆最新值、標出一筆更新完的那一拍在層外的 FCMembraneRegister。
 //
 //   n_out 顆神經元照編號逐列排,每列 n_col 顆,一拍處理一列;一筆事件從第 0 列做到第 n_row-1 列。
 //   SystemVerilog 不能照 parameter 拿掉 port:SPIKE_OUTPUT = 0 時 spike 輸出埠的 out_valid 固定 0,
@@ -88,9 +90,8 @@ module SaltFC #(
 	output logic [OUT_NEURON_WIDTH-1:0] out_neuron,   // i = y*n_col + x
 	output logic [TIME_WIDTH-1:0]       out_time,     // 觸發這次 fire 的輸入事件時間
 
-	// 膜電位輸出(valid/ready 握手),每寫回一列送出一筆;MEMBRANE_OUTPUT = 0 時 membrane_valid 固定 0
+	// 膜電位輸出(只有 valid,沒有 ready),每寫回一列的下一拍送出一筆;MEMBRANE_OUTPUT = 0 時 membrane_valid 固定 0
 	output logic                                       membrane_valid,
-	input  logic                                       membrane_ready,
 	output logic [OUT_NEURON_WIDTH-1:0]                membrane_row_base,    // y*n_col,這一列第 0 行的神經元編號
 	output logic [NEURONS_PER_ROW*MEMBRANE_WIDTH-1:0]  membrane_values,      // 第 x 行的 V̂_new 在第 x*w 到 (x+1)*w-1 位元;最後一列空的位置沒有意義
 	output logic [TIME_WIDTH-1:0]                      membrane_time         // 觸發這次更新的輸入事件時間
@@ -424,6 +425,32 @@ module SaltFC #(
 	// ===============================================================
 	// 5 送出、做完沒、換不換
 	// ===============================================================
+	// 膜電位輸出(FC.md 第 6 節 ③~⑤):算的那一拍(寫回那一拍)把這一列存進一級輸出暫存器,下一拍送出。
+	// 沒有 ready,不併進 stall;停住的拍子不寫回,也不再送
+	if (!MEMBRANE_OUTPUT) begin : no_membrane_output
+		assign membrane_valid    = 1'b0;
+		assign membrane_row_base = '0;
+		assign membrane_values   = '0;
+		assign membrane_time     = '0;
+	end else begin : membrane_output
+		always_ff @(posedge clk or negedge rst_n) begin
+			if (!rst_n) begin
+				membrane_valid <= 1'b0;
+			end else begin
+				membrane_valid <= compute_cycle;
+			end
+		end
+
+		// 值只在算的那一拍更新,其他拍保持,少翻轉
+		always_ff @(posedge clk) begin
+			if (compute_cycle) begin
+				membrane_row_base <= pipe_row_base[PIPELINE_DEPTH];   // y*n_col
+				membrane_values   <= new_membrane_word;               // V̂_new
+				membrane_time     <= pipe_time[PIPELINE_DEPTH];       // t
+			end
+		end
+	end
+
 	// spike 關掉時不 fire,位置 L 那一列一定一拍送完,管線不會停;spike 輸出埠固定不送
 	if (!SPIKE_OUTPUT) begin : no_spike_output
 		assign stall      = 1'b0;

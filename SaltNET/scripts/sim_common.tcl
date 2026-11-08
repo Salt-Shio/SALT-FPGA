@@ -47,18 +47,33 @@ proc add_design_sources {} {
     }
 }
 
-# Create a simulation set on the first run; later runs keep the existing one.
+# Create a simulation set on the first run; later runs keep the existing one and only add the files of tb_files
+# it does not hold yet (e.g. a header added to the testbench later).
 #   simset_name : simulation set to create
 #   top_name    : testbench top module
 #   tb_files    : testbench files relative to sim_1/new, e.g. {conv/tb_salt_conv_ready_high.sv conv/tb_salt_conv_common.svh}
 proc create_simset_if_missing {simset_name top_name tb_files} {
-    if {[llength [get_filesets -quiet $simset_name]] > 0} {
-        return
-    }
     set tb_dir [file join [project_srcs_dir] sim_1 new]
     set tb_paths {}
     foreach tb_file $tb_files {
-        lappend tb_paths [file join $tb_dir $tb_file]
+        lappend tb_paths [file normalize [file join $tb_dir $tb_file]]
+    }
+    if {[llength [get_filesets -quiet $simset_name]] > 0} {
+        set registered {}
+        foreach registered_file [get_files -quiet -of_objects [get_filesets $simset_name]] {
+            lappend registered [file normalize $registered_file]
+        }
+        set missing {}
+        foreach tb_path $tb_paths {
+            if {[lsearch -exact $registered $tb_path] < 0} {
+                lappend missing $tb_path
+            }
+        }
+        if {[llength $missing] > 0} {
+            add_files -fileset $simset_name -norecurse $missing
+            update_compile_order -fileset $simset_name
+        }
+        return
     }
     create_fileset -simset $simset_name
     set simset [get_filesets $simset_name]

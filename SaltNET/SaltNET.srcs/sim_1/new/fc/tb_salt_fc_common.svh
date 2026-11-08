@@ -4,6 +4,7 @@
 //   每支 testbench 只測一種下游/上游的驅動方式,共用的檢查都在這裡:
 //     輸出事件 (i, t) 逐筆照順序比;樣本結束時 n_out 顆神經元的 V̂ 直接從 NeuronMemory 的記憶體內容讀出來比
 //     (最後一列空的位置不比),時間暫存器 event_time 等於最後一筆事件的 t。答案由 scripts/fc/gen_salt_fc_ref.py 產生。
+//     膜電位輸出(MEMBRANE_OUTPUT = 1)逐筆照「事件、列」的順序比,MEMBRANE_OUTPUT = 0 時一直不送,見 tb_salt_fc_membrane_check.svh。
 //     每一拍檢查的協定規則:
 //       上一拍 out_valid=1、out_ready=0,這一拍 out_valid 要還是 1,(i, t) 不變。
 //       同一拍裡改 out_ready,out_valid 不能跟著變(out_valid 不能用到 out_ready)。
@@ -58,6 +59,7 @@
 	parameter integer READ_LATENCY        = 1;
 	parameter integer COMPUTE_LATENCY     = 1;
 	parameter bit     OVERLAP             = 0;
+	parameter bit     MEMBRANE_OUTPUT     = 1;
 	parameter WEIGHT_FILE    = "../../../../SaltNET.srcs/sim_1/new/fc/ref/salt_fc_IN7_OUT10_COL3_IV6_FV0_RD1_SAT0_SPK1_SH0_weight.mem";
 	parameter THRESHOLD_FILE = "../../../../SaltNET.srcs/sim_1/new/fc/ref/salt_fc_IN7_OUT10_COL3_IV6_FV0_RD1_SAT0_SPK1_SH0_threshold.mem";
 	parameter DECAY_FILE     = "../../../../SaltNET.srcs/sim_1/new/fc/ref/salt_fc_IN7_OUT10_COL3_IV6_FV0_RD1_SAT0_SPK1_SH0_decay.mem";
@@ -107,7 +109,6 @@
 	logic [OUT_NEURON_WIDTH-1:0]               out_neuron;
 	logic [TIME_WIDTH-1:0]                     out_time;
 	logic                                      membrane_valid;
-	logic                                      membrane_ready;
 	logic [OUT_NEURON_WIDTH-1:0]               membrane_row_base;
 	logic [NEURONS_PER_ROW*MEMBRANE_WIDTH-1:0] membrane_values;
 	logic [TIME_WIDTH-1:0]                     membrane_time;
@@ -126,7 +127,7 @@
 		.SATURATE           (SATURATE),
 		.SHARED_THRESHOLD   (SHARED_THRESHOLD),
 		.SPIKE_OUTPUT       (1'b1),
-		.MEMBRANE_OUTPUT    (1'b0),
+		.MEMBRANE_OUTPUT    (MEMBRANE_OUTPUT),
 		.WEIGHT_FILE        (WEIGHT_FILE),
 		.THRESHOLD_FILE     (THRESHOLD_FILE),
 		.DECAY_FILE         (DECAY_FILE),
@@ -175,10 +176,10 @@
 		return $sformatf({"IN_NEURONS=%0d OUT_NEURONS=%0d NEURONS_PER_ROW=%0d TIME_WIDTH=%0d WEIGHT_WIDTH=%0d ",
 		                  "MEMBRANE_INT_WIDTH=%0d MEMBRANE_FRAC_WIDTH=%0d DECAY_FRAC_WIDTH=%0d DECAY_TABLE_DEPTH=%0d ",
 		                  "ROUND=%0d SATURATE=%0d SHARED_THRESHOLD=%0d FIFO_DEPTH=%0d READ_LATENCY=%0d ",
-		                  "COMPUTE_LATENCY=%0d OVERLAP=%0d"},
+		                  "COMPUTE_LATENCY=%0d OVERLAP=%0d MEMBRANE_OUTPUT=%0d"},
 		                 IN_NEURONS, OUT_NEURONS, NEURONS_PER_ROW, TIME_WIDTH, WEIGHT_WIDTH, MEMBRANE_INT_WIDTH,
 		                 MEMBRANE_FRAC_WIDTH, DECAY_FRAC_WIDTH, DECAY_TABLE_DEPTH, ROUND, SATURATE, SHARED_THRESHOLD,
-		                 FIFO_DEPTH, READ_LATENCY, COMPUTE_LATENCY, OVERLAP);
+		                 FIFO_DEPTH, READ_LATENCY, COMPUTE_LATENCY, OVERLAP, MEMBRANE_OUTPUT);
 	endfunction
 
 	function automatic void report_error(string message);
@@ -187,6 +188,9 @@
 		end
 		error_count++;
 	endfunction
+
+	`include "tb_salt_fc_update_lines.svh"
+	`include "tb_salt_fc_membrane_check.svh"
 
 	// 讀一筆樣本;讀到 end 回傳 0
 	function automatic bit read_sample(int fd, int sample_index);
@@ -232,6 +236,7 @@
 			if (scan_count != 3 || kind != "out") $fatal(1, "樣本 %0d 第 %0d 個 out 行格式不對", sample_index, i);
 			expected_out_neuron.push_back(a); expected_out_t.push_back(b);
 		end
+		read_update_lines(fd, sample_index, in_count);
 		state_neuron.delete(); state_membrane.delete();
 		for (int i = 0; i < state_count; i++) begin
 			scan_count = $fscanf(fd, "%s %d %d", kind, a, b);
@@ -329,6 +334,7 @@
 		max_cycles = 20 * (expected_cycle_count + in_count) + ROW_COUNT + 10000;
 		sent_row.delete();
 		sent_src.delete();
+		start_membrane_check();
 		reset_driver();
 		apply_reset();
 
@@ -415,6 +421,7 @@
 			end
 			if (read_data_arrived()) check_read_data(where);
 			if (dut.compute_cycle) check_threshold(where);
+			check_membrane_output(where);
 
 			// ---------------- posedge ----------------
 			@(posedge clk);
@@ -426,7 +433,8 @@
 				input_taken();
 			end
 
-			if (in_index == in_count && !presenting && dut_idle()) break;
+			// 膜電位輸出暫存器晚 1 拍:最後一列寫回之後,下一拍才送出
+			if (in_index == in_count && !presenting && dut_idle() && !membrane_valid) break;
 			if (cycle > max_cycles) begin
 				report_error($sformatf("%s 跑了 %0d 拍還沒結束:in %0d/%0d out %0d/%0d", where, cycle, in_index,
 				                       in_count, out_index, out_count));
@@ -438,6 +446,7 @@
 		if (out_index != out_count) begin
 			report_error($sformatf("sample=%0d 輸出 %0d 筆,答案 %0d 筆", sample_index, out_index, out_count));
 		end
+		check_membrane_count(sample_index);
 		// 拍數:第一列算的那一拍到最後一列送完那一拍;中途空下來多一拍也會被抓到
 		if (CHECK_CYCLE_COUNT) begin
 			int measured = (first_compute_cycle < 0) ? 0 : last_done_cycle - first_compute_cycle + 1;
@@ -485,10 +494,9 @@
 		string verdict;
 
 		// 亂數不另外設種子:xsim 不支援 $urandom(seed),用預設的 -sv_seed,每次跑都是同一串
-		rst_n          = 1'b0;
-		in_valid       = 1'b0;
-		out_ready      = 1'b0;
-		membrane_ready = 1'b1;
+		rst_n     = 1'b0;
+		in_valid  = 1'b0;
+		out_ready = 1'b0;
 		in_neuron = '0; in_time = '0;
 
 		if (!$value$plusargs("REF_DIR=%s", ref_dir))
@@ -532,8 +540,8 @@
 		else coverage_text = "missing";
 		if (error_count == 0 && coverage_ok && run_count > 0) verdict = "ALL PASS";
 		else verdict = "FAIL";
-		$display("%s: sample_count=%0d run_count=%0d out_check_count=%0d state_check_count=%0d cycle_check_count=%0d read_check_count=%0d threshold_check_count=%0d error_count=%0d coverage=%s %s",
-		         parameter_text(), sample_index, run_count, out_check_count, state_check_count, cycle_check_count,
-		         read_check_count, threshold_check_count, error_count, coverage_text, verdict);
+		$display("%s: sample_count=%0d run_count=%0d out_check_count=%0d membrane_check_count=%0d state_check_count=%0d cycle_check_count=%0d read_check_count=%0d threshold_check_count=%0d error_count=%0d coverage=%s %s",
+		         parameter_text(), sample_index, run_count, out_check_count, membrane_check_count, state_check_count,
+		         cycle_check_count, read_check_count, threshold_check_count, error_count, coverage_text, verdict);
 		$finish;
 	end

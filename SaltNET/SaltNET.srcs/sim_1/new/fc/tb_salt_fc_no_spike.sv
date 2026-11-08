@@ -6,6 +6,7 @@
 //   比對:
 //     樣本結束時 n_out 顆神經元的 V̂,直接從 NeuronMemory 的記憶體內容讀出來比(最後一列空的位置不比);
 //     時間暫存器 event_time 等於最後一筆事件的 t;
+//     膜電位輸出(MEMBRANE_OUTPUT = 1)逐筆照「事件、列」的順序比,MEMBRANE_OUTPUT = 0 時一直不送,見 tb_salt_fc_membrane_check.svh;
 //     拍數:第一列算的那一拍到最後一列送完那一拍,要等於答案(FC.md 第 5 節 ⑦⑧,中途多等、少等都會被抓到)。
 //   每一拍檢查:
 //     in_ready、out_valid 不是 X;out_valid 一直是 0(不 fire);清除期間 in_ready=0,FIFO 也沒有收進任何事件。
@@ -39,6 +40,7 @@ module tb_salt_fc_no_spike;
 	parameter integer READ_LATENCY        = 1;
 	parameter integer COMPUTE_LATENCY     = 1;
 	parameter bit     OVERLAP             = 0;
+	parameter bit     MEMBRANE_OUTPUT     = 1;
 	parameter WEIGHT_FILE = "../../../../SaltNET.srcs/sim_1/new/fc/ref/salt_fc_IN1296_OUT10_COL4_IV14_FV0_RD1_SAT0_SPK0_weight.mem";
 	parameter DECAY_FILE  = "../../../../SaltNET.srcs/sim_1/new/fc/ref/salt_fc_IN1296_OUT10_COL4_IV14_FV0_RD1_SAT0_SPK0_decay.mem";
 
@@ -69,7 +71,6 @@ module tb_salt_fc_no_spike;
 	logic [OUT_NEURON_WIDTH-1:0]               out_neuron;
 	logic [TIME_WIDTH-1:0]                     out_time;
 	logic                                      membrane_valid;
-	logic                                      membrane_ready;
 	logic [OUT_NEURON_WIDTH-1:0]               membrane_row_base;
 	logic [NEURONS_PER_ROW*MEMBRANE_WIDTH-1:0] membrane_values;
 	logic [TIME_WIDTH-1:0]                     membrane_time;
@@ -87,7 +88,7 @@ module tb_salt_fc_no_spike;
 		.ROUND              (ROUND),
 		.SATURATE           (SATURATE),
 		.SPIKE_OUTPUT       (1'b0),
-		.MEMBRANE_OUTPUT    (1'b0),
+		.MEMBRANE_OUTPUT    (MEMBRANE_OUTPUT),
 		.WEIGHT_FILE        (WEIGHT_FILE),
 		.DECAY_FILE         (DECAY_FILE),
 		.FIFO_DEPTH         (FIFO_DEPTH),
@@ -117,10 +118,11 @@ module tb_salt_fc_no_spike;
 	function automatic string parameter_text();
 		return $sformatf({"IN_NEURONS=%0d OUT_NEURONS=%0d NEURONS_PER_ROW=%0d TIME_WIDTH=%0d WEIGHT_WIDTH=%0d ",
 		                  "MEMBRANE_INT_WIDTH=%0d MEMBRANE_FRAC_WIDTH=%0d DECAY_FRAC_WIDTH=%0d DECAY_TABLE_DEPTH=%0d ",
-		                  "ROUND=%0d SATURATE=%0d FIFO_DEPTH=%0d READ_LATENCY=%0d COMPUTE_LATENCY=%0d OVERLAP=%0d"},
+		                  "ROUND=%0d SATURATE=%0d FIFO_DEPTH=%0d READ_LATENCY=%0d COMPUTE_LATENCY=%0d OVERLAP=%0d ",
+		                  "MEMBRANE_OUTPUT=%0d"},
 		                 IN_NEURONS, OUT_NEURONS, NEURONS_PER_ROW, TIME_WIDTH, WEIGHT_WIDTH, MEMBRANE_INT_WIDTH,
 		                 MEMBRANE_FRAC_WIDTH, DECAY_FRAC_WIDTH, DECAY_TABLE_DEPTH, ROUND, SATURATE, FIFO_DEPTH,
-		                 READ_LATENCY, COMPUTE_LATENCY, OVERLAP);
+		                 READ_LATENCY, COMPUTE_LATENCY, OVERLAP, MEMBRANE_OUTPUT);
 	endfunction
 
 	function automatic void report_error(string message);
@@ -129,6 +131,9 @@ module tb_salt_fc_no_spike;
 		end
 		error_count++;
 	endfunction
+
+	`include "tb_salt_fc_update_lines.svh"
+	`include "tb_salt_fc_membrane_check.svh"
 
 	// 讀一筆樣本;讀到 end 回傳 0
 	function automatic bit read_sample(int fd, int sample_index);
@@ -169,6 +174,7 @@ module tb_salt_fc_no_spike;
 			if (scan_count != 3 || kind != "in") $fatal(1, "樣本 %0d 第 %0d 個 in 行格式不對", sample_index, i);
 			expected_in_src.push_back(a); expected_in_t.push_back(b);
 		end
+		read_update_lines(fd, sample_index, in_count);
 		state_neuron.delete(); state_membrane.delete();
 		for (int i = 0; i < state_count; i++) begin
 			scan_count = $fscanf(fd, "%s %d %d", kind, a, b);
@@ -244,6 +250,7 @@ module tb_salt_fc_no_spike;
 		max_cycles = 4 * (expected_cycle_count + in_count) + ROW_COUNT + 1000;
 		sent_row.delete();
 		sent_src.delete();
+		start_membrane_check();
 		apply_reset();
 
 		forever begin
@@ -278,6 +285,7 @@ module tb_salt_fc_no_spike;
 				sent_src.push_back(dut.read_src);
 			end
 			if (read_data_arrived()) check_read_data(where);
+			check_membrane_output(where);
 
 			// ---------------- posedge ----------------
 			@(posedge clk);
@@ -288,13 +296,16 @@ module tb_salt_fc_no_spike;
 				in_index++;
 			end
 
-			if (in_index == in_count && !presenting && dut_idle()) break;
+			// 膜電位輸出暫存器晚 1 拍:最後一列寫回之後,下一拍才送出
+			if (in_index == in_count && !presenting && dut_idle() && !membrane_valid) break;
 			if (cycle > max_cycles) begin
 				report_error($sformatf("%s 跑了 %0d 拍還沒結束:in %0d/%0d", where, cycle, in_index, in_count));
 				break;
 			end
 			@(negedge clk);
 		end
+
+		check_membrane_count(sample_index);
 
 		// 拍數:第一列算的那一拍到最後一列送完那一拍;中途多等、少等都會被抓到
 		begin
@@ -337,10 +348,9 @@ module tb_salt_fc_no_spike;
 		int    sample_index;
 		string verdict;
 
-		rst_n          = 1'b0;
-		in_valid       = 1'b0;
-		out_ready      = 1'b1;
-		membrane_ready = 1'b1;
+		rst_n     = 1'b0;
+		in_valid  = 1'b0;
+		out_ready = 1'b1;
 		in_neuron = '0; in_time = '0;
 
 		if (!$value$plusargs("REF_DIR=%s", ref_dir))
@@ -360,9 +370,9 @@ module tb_salt_fc_no_spike;
 
 		if (error_count == 0 && run_count > 0) verdict = "ALL PASS";
 		else verdict = "FAIL";
-		$display("%s: sample_count=%0d run_count=%0d state_check_count=%0d cycle_check_count=%0d read_check_count=%0d error_count=%0d %s",
-		         parameter_text(), sample_index, run_count, state_check_count, cycle_check_count, read_check_count,
-		         error_count, verdict);
+		$display("%s: sample_count=%0d run_count=%0d membrane_check_count=%0d state_check_count=%0d cycle_check_count=%0d read_check_count=%0d error_count=%0d %s",
+		         parameter_text(), sample_index, run_count, membrane_check_count, state_check_count, cycle_check_count,
+		         read_check_count, error_count, verdict);
 		$finish;
 	end
 
