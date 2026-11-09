@@ -26,14 +26,14 @@
 - 分支：工作在 `test`，`main` 停在 `5507967`。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
 - FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完(第 6 節 2026-11-07 改成膜電位輸出不握手、加層外的暫存器模組與 PS 轉接)；RTL 做完 Part 9(整層管線含 fire、膜電位輸出、層外的 `fc/FCMembraneRegister`)。
 
-## 交接(2026-11-08)
+## 交接(2026-11-09)
 
 - SaltFC Part 9(膜電位輸出)完成，使用者確認(2026-11-08)，細節見下面「Part 9」。
     - SaltFC 膜電位輸出只有 valid(`membrane_ready` 拿掉)，寫回那一拍存一級輸出暫存器、下一拍送；`stall` 不動。
     - 層外的 `fc/FCMembraneRegister`：存每顆最新值，收到最後一列的下一拍拉 `update_done`、送 `update_time`。
     - 整層模擬 72 + 203 組、FCMembraneRegister 32 組 ALL PASS；反向測試四項都抓到；4.8 ns 布局繞線繞回 +0.760、飽和 +0.622。
     - 答案檔加 update 行(每筆事件之後全部神經元的 V̂)，用訓練端 `FCLayer.forward(trace=True)` 的 `v_steps` 跟逐筆迴圈互相比對；訓練端在 `per-layer-quant` 的 `7a6a863`，只讀不改。
-- 下一步：Part 10 conv → FC 轉接模組(FC.md 第 1 節)。開始前先列這次做什麼、怎麼量、怎麼驗證給使用者確認。
+- 下一步：Part 10 conv → FC 轉接模組(FC.md 第 1 節)，起點資訊見下面「Part 10」。開始前先列這次做什麼、怎麼量、怎麼驗證給使用者確認；第一個要定的是模組名字跟放哪個資料夾。
 - conv1 → conv2 → FC → FCMembraneRegister 整條跟訓練端比對還沒做，使用者決定(2026-11-08)等 Part 10 做完、到 Part 11 再測，見下面「Part 11」。
 - SaltFC Part 8(pipeline 整合)完成，使用者確認(2026-11-05)，細節見下面「Part 8」。
     - 步驟 1~5:不 fire(`SPIKE_OUTPUT = 0`)整層模擬 63 組 ALL PASS。
@@ -50,7 +50,8 @@
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
 - SaltFC Part 7 完成(細節見下面「Part 7」)：FC 挑選模組 `fc/FCSpikeSelect`，conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8。
 - 2026-10-29 盤點「答案用訓練端 salt_core 的函式產生」這條規則：訓練端有對應函式卻沒用的只有 `tb_spike_select` 的送出順序，已改(見下面「Part 7」最後)。bank 排列、記憶體讀寫清除、FIFO、拍數、寬字切段這些訓練端沒有對應函式，使用者決定不處理。
-- 分支 `test`，比 `origin/test` 多 3 個 commit(`cdc6315` 起)還沒 push:agent 這邊 push 時 Git Credential Manager 存不了認證(`wincredman`)，要使用者在自己的終端機 `git push origin test`。`origin/main` 停在 `5507967`。
+- 分支 `test`，比 `origin/test` 多 4 個 commit(`cdc6315` 起，最新是 Part 9 的 `fa39c2e`)還沒 push：agent 這邊 push 時 Git Credential Manager 存不了認證(`wincredman`)，要使用者在自己的終端機 `git push origin test`。`origin/main` 停在 `5507967`。
+- 訓練端(2026-11-09 確認)：重構改在新專案 `D:\Project\Spiking-Affine-Lazy-Training-refactor` 從頭寫，目前只有 `CLAUDE.md`、`docs/`，還沒有程式碼。答案腳本(`gen_salt_conv_ref.py`、`gen_salt_fc_ref.py` 等)照舊 import 原本的 `D:\Project\Spiking-Affine-Lazy-Training`(`per-layer-quant` 的 `7a6a863`)，只讀不改；之後要換到新專案，等使用者說再改，換了要重產答案、跟 HEAD 比。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
     - 驗證範圍(「作法 → 驗證」)：搬位置、改名、展開這類行為不變的整理只做合成比對 + 改到的 testbench + 一支整層 testbench 的部分參數組。
@@ -495,6 +496,14 @@ ceil$。
     - testbench 變數取名 `cell`：是 SystemVerilog 保留字(config 用)，xvlog 報 `syntax error near 'cell'`，改名 `membrane`。
     - 反向測試一第一次跑，第 1 組模擬跑完讀 `simulate.log` 的 `open` 失敗、訊息空白(同 vivado-usage skill 8.7)，原封不動重跑就過。
     - agent 的 Bash 工具用 heredoc 餵 Python 時，`\` 照樣會被吃掉一個(之前記過)；連 `<<'EOF'` 也一樣，含反斜線、跨行字串的替換腳本改用 Write 寫檔再跑。
+
+### Part 10 conv → FC 轉接模組
+
+- 還沒開始規劃(2026-11-09)。起點資訊：
+    - 要解決的：conv2(`SaltConv`)送出 `out_channel`($o_c$)、`out_y`($o_y$)、`out_x`($o_x$)、`out_time`($t$)，SaltFC 收 `in_neuron`($\text{src}$)、`in_time`($t$)；轉接模組換成 $\text{src}=o_c\cdot H_{out}W_{out}+o_y\cdot W_{out}+o_x$，$t$ 原封不動。
+    - 訓練端形狀：conv2 輸出 16 channel、$9\times9$，$n_{in}=1296$；例 $(2,3,4)\to193$，最大 $(15,8,8)\to1295$。乘的是常數(81、9)，合成成加法。
+    - 已定(2026-10-22，FC.md 第 1 節、「已定案設計 → 層間事件格式」)：conv2 輸出 → 一級暫存器 → 換算 → SaltFC 輸入 FIFO；給 conv2 的 `out_ready` 是「暫存器空的，或 SaltFC 收得下」，每拍收一筆、晚 1 拍；由上層 top 例化，SaltConv、SaltFC 都不改。
+    - 要先定的：模組名字、放 `net/`、`fc/` 還是 `lib/`(用 Part 5「有邏輯才包模組、兩層相同的放 lib」那條檢查)；參數怎麼給($OC$、$H_{out}$、$W_{out}$，位寬推出來要跟 SaltConv 的輸出位寬對上)；答案用訓練端的函式(conv2 輸出流的 `event_source_idx` 就是 $\text{src}$，Part 8 答案腳本已確認攤平順序)；testbench 比 $\text{src}$、$t$、順序、不掉資料、下游不收時的反壓；要不要單獨量時序或留到 Part 12。
 
 ### Part 11 串接比對
 
