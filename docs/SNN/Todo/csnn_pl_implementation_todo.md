@@ -24,17 +24,25 @@
     - 逐拍例子、資料流程圖：[`Conv-image/SaltConvControl.md`](../Concept/Layer-RTL/Conv-image/SaltConvControl.md)、[`SaltConvDataflow.md`](../Concept/Layer-RTL/Conv-image/SaltConvDataflow.md)。
     - 設計推導：[`Conv.md`](../Concept/Layer-RTL/Conv.md) 5.5「實作」、5.8。
 - 分支：工作在 `test`，`main` 停在 `5507967`。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
-- FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完(第 6 節 2026-11-07 改成膜電位輸出不握手、加層外的暫存器模組與 PS 轉接)；RTL 做完 Part 9(整層管線含 fire、膜電位輸出、層外的 `fc/FCMembraneRegister`)。
+- FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完(第 6 節 2026-11-07 改成膜電位輸出不握手、加層外的暫存器模組與 PS 轉接)；RTL 做完 Part 10(整層管線含 fire、膜電位輸出、層外的 `fc/FCMembraneRegister`、conv → FC 轉接模組 `fc/ConvToFCAdapter`)。
 
-## 交接(2026-11-09)
+## 交接(2026-11-11)
 
+- SaltFC Part 10(conv → FC 轉接模組)完成，使用者確認(2026-11-11)，細節見下面「Part 10」。
+    - `fc/ConvToFCAdapter`：conv 輸出存一級事件暫存器，下一拍換成 $\text{src}$；給 conv 的 ready 是「暫存器空的，或下游這拍收」。跟純組合邏輯版量過，只做暫存器版。
+    - 單獨模擬兩支各 7 組 ALL PASS，反向測試三項都抓到；4.8 ns 布局繞線(conv2 → 轉接模組 → SaltFC)繞回 +0.333、飽和 +0.379。
+    - 只單獨測過轉接模組，接上 conv2、SaltFC 跑資料在 Part 11。
+- 下一步：Part 11 串接比對，起點資訊見下面「Part 11」。開始前先列這次做什麼、怎麼量、怎麼驗證給使用者確認。要先定的：
+    - 頂層模組名字(Part 0 定了放 `net/`、不叫 `SaltNET`)。
+    - 最後膜電位比哪份答案：`reference.npz` 是 val 前 2000 筆，這台只有 N-MNIST 的 Test，各層單獨測時用 test 前 10 筆。
+    - catch-up 的差異：先確認 FC 的 `v_final` 是不是等於最後一次更新後的值。
+    - testbench 怎麼拆(一支只測一種情況，例如最後的輸出一直收、隨機收各一支)。
 - SaltFC Part 9(膜電位輸出)完成，使用者確認(2026-11-08)，細節見下面「Part 9」。
     - SaltFC 膜電位輸出只有 valid(`membrane_ready` 拿掉)，寫回那一拍存一級輸出暫存器、下一拍送；`stall` 不動。
     - 層外的 `fc/FCMembraneRegister`：存每顆最新值，收到最後一列的下一拍拉 `update_done`、送 `update_time`。
     - 整層模擬 72 + 203 組、FCMembraneRegister 32 組 ALL PASS；反向測試四項都抓到；4.8 ns 布局繞線繞回 +0.760、飽和 +0.622。
     - 答案檔加 update 行(每筆事件之後全部神經元的 V̂)，用訓練端 `FCLayer.forward(trace=True)` 的 `v_steps` 跟逐筆迴圈互相比對；訓練端在 `per-layer-quant` 的 `7a6a863`，只讀不改。
-- 下一步：Part 10 conv → FC 轉接模組(FC.md 第 1 節)，起點資訊見下面「Part 10」。開始前先列這次做什麼、怎麼量、怎麼驗證給使用者確認；第一個要定的是模組名字跟放哪個資料夾。
-- conv1 → conv2 → FC → FCMembraneRegister 整條跟訓練端比對還沒做，使用者決定(2026-11-08)等 Part 10 做完、到 Part 11 再測，見下面「Part 11」。
+- conv1 → conv2 → 轉接模組 → FC → FCMembraneRegister 整條跟訓練端比對還沒做，使用者決定(2026-11-08)等 Part 10 做完、到 Part 11 再測，見下面「Part 11」。
 - SaltFC Part 8(pipeline 整合)完成，使用者確認(2026-11-05)，細節見下面「Part 8」。
     - 步驟 1~5:不 fire(`SPIKE_OUTPUT = 0`)整層模擬 63 組 ALL PASS。
     - 步驟 6:fire 的送出、停住，四支 `out_ready` testbench 196 組 ALL PASS、反向測試三項都抓到。
@@ -50,7 +58,7 @@
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
 - SaltFC Part 7 完成(細節見下面「Part 7」)：FC 挑選模組 `fc/FCSpikeSelect`，conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8。
 - 2026-10-29 盤點「答案用訓練端 salt_core 的函式產生」這條規則：訓練端有對應函式卻沒用的只有 `tb_spike_select` 的送出順序，已改(見下面「Part 7」最後)。bank 排列、記憶體讀寫清除、FIFO、拍數、寬字切段這些訓練端沒有對應函式，使用者決定不處理。
-- 分支 `test`，比 `origin/test` 多 4 個 commit(`cdc6315` 起，最新是 Part 9 的 `fa39c2e`)還沒 push：agent 這邊 push 時 Git Credential Manager 存不了認證(`wincredman`)，要使用者在自己的終端機 `git push origin test`。`origin/main` 停在 `5507967`。
+- 分支 `test`，比 `origin/test` 多 7 個 commit(`cdc6315` 起，最新是 Part 10 的文件)還沒 push：agent 這邊 push 時 Git Credential Manager 存不了認證(`wincredman`)，要使用者在自己的終端機 `git push origin test`。`origin/main` 停在 `5507967`。
 - 訓練端(2026-11-09 確認)：重構改在新專案 `D:\Project\Spiking-Affine-Lazy-Training-refactor` 從頭寫，目前只有 `CLAUDE.md`、`docs/`，還沒有程式碼。答案腳本(`gen_salt_conv_ref.py`、`gen_salt_fc_ref.py` 等)照舊 import 原本的 `D:\Project\Spiking-Affine-Lazy-Training`(`per-layer-quant` 的 `7a6a863`)，只讀不改；之後要換到新專案，等使用者說再改，換了要重產答案、跟 HEAD 比。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
@@ -97,7 +105,7 @@
 | 7 | spike 選擇：`fc/FCSpikeSelect`、conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8 | 第 4 節 ②③ | 完成 |
 | 8 | pipeline 整合 | 第 5 節 | 完成 |
 | 9 | 膜電位輸出：SaltFC 送出、層外暫存器模組 `fc/FCMembraneRegister` | 第 6 節 | 完成 |
-| 10 | conv → FC 轉接模組 | 第 1 節 | 未開始 |
+| 10 | conv → FC 轉接模組 `fc/ConvToFCAdapter`(暫存器版) | 第 1 節 | 完成 |
 | 11 | 串接 conv1 → conv2 → FC，跟訓練端比對 | — | 未開始 |
 | 12 | 合成量測(4.8 ns) | — | 未開始 |
 
@@ -499,11 +507,36 @@ ceil$。
 
 ### Part 10 conv → FC 轉接模組
 
-- 還沒開始規劃(2026-11-09)。起點資訊：
-    - 要解決的：conv2(`SaltConv`)送出 `out_channel`($o_c$)、`out_y`($o_y$)、`out_x`($o_x$)、`out_time`($t$)，SaltFC 收 `in_neuron`($\text{src}$)、`in_time`($t$)；轉接模組換成 $\text{src}=o_c\cdot H_{out}W_{out}+o_y\cdot W_{out}+o_x$，$t$ 原封不動。
-    - 訓練端形狀：conv2 輸出 16 channel、$9\times9$，$n_{in}=1296$；例 $(2,3,4)\to193$，最大 $(15,8,8)\to1295$。乘的是常數(81、9)，合成成加法。
-    - 已定(2026-10-22，FC.md 第 1 節、「已定案設計 → 層間事件格式」)：conv2 輸出 → 一級暫存器 → 換算 → SaltFC 輸入 FIFO；給 conv2 的 `out_ready` 是「暫存器空的，或 SaltFC 收得下」，每拍收一筆、晚 1 拍；由上層 top 例化，SaltConv、SaltFC 都不改。
-    - 要先定的：模組名字、放 `net/`、`fc/` 還是 `lib/`(用 Part 5「有邏輯才包模組、兩層相同的放 lib」那條檢查)；參數怎麼給($OC$、$H_{out}$、$W_{out}$，位寬推出來要跟 SaltConv 的輸出位寬對上)；答案用訓練端的函式(conv2 輸出流的 `event_source_idx` 就是 $\text{src}$，Part 8 答案腳本已確認攤平順序)；testbench 比 $\text{src}$、$t$、順序、不掉資料、下游不收時的反壓；要不要單獨量時序或留到 Part 12。
+- 要解決的：conv2(`SaltConv`)送出 `out_channel`($o_c$)、`out_y`($o_y$)、`out_x`($o_x$)、`out_time`($t$)，SaltFC 收 `in_neuron`($\text{src}$)、`in_time`($t$)；轉接模組換成 $\text{src}=o_c\cdot H_{out}W_{out}+o_y\cdot W_{out}+o_x$，$t$ 原封不動。訓練端形狀 conv2 輸出 16 channel、$9\times9$，$n_{in}=1296$。
+- 事件 queue 在哪(2026-11-09 跟使用者釐清)：queue 就是 `lib/EventFIFO`，每一層在自己的輸入端例化一份，不是放在兩層中間的獨立模組，也不分 conv 版、FC 版。三種連接都在寫進下一層的 queue 之前換好格式：conv → conv、FC → FC 直接接線，conv → FC 經過轉接模組。轉接模組放在 queue 前面，理由同 FC.md 第 1 節(換算接在 FIFO 讀出端會拉長讀位址那條路徑，而且 SaltFC 就要知道上一層是 conv)。
+- 已定(2026-11-09，設計寫在 FC.md 第 1 節「$\text{src}$ 從哪裡來」)：
+    - 名字 `ConvToFCAdapter`，放 `fc/`：輸出的 $\text{src}$ 是 FC 的輸入格式，同 `FCMembraneRegister`。之後 `EvtDecoder → conv1` 的轉接模組套同一條規則(放下游那一層的資料夾)就放 `conv/`，取名照同一個格式。
+    - 參數只給 conv 的輸出形狀 `IN_CHANNELS`、`IN_ROWS`、`IN_COLS` 跟 `TIME_WIDTH`；座標位寬、`OUT_NEURONS`($n_{in}$)、`OUT_NEURON_WIDTH` 是 `localparam`，跟 SaltConv、SaltFC 同一套公式(數量大於 1 才取 $\lceil\log_2\rceil$，否則 1)。上層把同一組形狀傳給三個模組，位寬就對得上；代價是公式在三個模組各寫一份。位寬也開成 parameter 的做法沒採用：上游一定是 SaltConv，多開只多了寫錯的機會。
+    - port 同名直接接：輸入用 conv 輸入的名字(`in_x`、`in_y`、`in_channel`、`in_time`)，輸出用 FC 輸出的名字(`out_neuron`、`out_time`)。
+    - 只做暫存器版，不做成參數：跟純組合邏輯版量過(下面「量測」)，照之前層外小電路只選一種的慣例(最接近的是 Part 9 的膜電位輸出暫存器)。純組合邏輯省下的 29 個 FF、1 拍用不到，飽和版的跨層路徑還會變成整個設計最緊的地方。
+    - 座標、$t$ 的寫入開關維持「conv 有送而且 ready 是 1」：改成只看 ready 時序只多約 0.1~0.2 ns(跟布局變動差不多)，沒資料的拍子 28 個 FF 會跟著翻轉。
+    - 不加 skid buffer：給 conv 的 ready 同一拍看 SaltFC 的 `in_ready`，這條反壓路徑餘裕 +1.674、+2.367，不是最長路徑。
+    - 乘加不用 DSP：常數乘法合成成 LUT 加進位鏈。「乘加放進 DSP」的版本沒有量。
+- RTL(2026-11-09)：`fc/ConvToFCAdapter.sv` 照事件流程分兩段(1 事件進來：事件暫存器、給 conv 的 ready；2 換算、送出)。`in_ready = !event_valid || out_ready`；`event_valid` 在 `in_ready` 時更新成 `in_valid`，要 reset；座標、$t$ 在 `in_valid && in_ready` 時寫，沒有 reset；`out_valid` 就是 `event_valid`，`out_neuron` 從存的座標算。
+    - elaborate(non-project `synth_design -rtl`)7 組形狀都展開、port 位寬正確(例：$16\times9\times9$ 座標各 4 位元、$\text{src}$ 11 位元；全部是 1 時 $\text{src}$ 1 位元)；`-lint` 2 組都是 0 則訊息。
+- 答案(2026-11-09)：`scripts/fc/gen_conv_to_fc_adapter_ref.py`，用訓練端 `salt_core.connectivity.conv.unravel_conv_source` 把 $0\sim n_{in}-1$ 每個 $\text{src}$ 拆成座標(conv 層讀輸入事件就是用它，也就是訓練端攤平順序的定義)，每個 $\text{src}$ 放兩次、順序打亂；另外用 numpy `ravel_multi_index` 攤平回去，跟 $\text{src}$ 相同才寫檔。$t$ 不遞減、可以重複，含 0 跟 $2^{16}-1$。
+    - 腳本也確認繞回、飽和兩個量化資料夾的 conv2 輸出都是 $16\times9\times9$、out 層 $n_{in}$ 都是 1296；跑完訓練端 `git status` 不變。
+    - 參數組 $(OC,H_{out},W_{out})$，`TIME_WIDTH` 都是 16：訓練端 (16,9,9)；(3,5,7) 都不是 2 的次方、列數跟行數不同；(4,4,8) 都是 2 的次方；(1,9,9) 只有一個 channel；(5,1,6) 只有一列；(6,5,1) 只有一行；(1,1,1)。
+- testbench(2026-11-09)：只例化轉接模組，上游(conv)、下游(SaltFC 的輸入)都是 testbench。
+    - `tb_conv_to_fc_adapter_common.svh`：照答案檔順序送座標，沒被收下就維持；記一份「收進來、還沒送出去」的清單，每拍比 `out_valid` 等於清單不空、`out_valid=1` 時 `out_neuron`、`out_time` 等於清單第一筆(下游不收的拍子也比)、`in_ready` 等於「清單空的或下游這拍收」；送完多跑 3 拍、比總筆數。
+    - `tb_conv_to_fc_adapter_ready_high.sv`(上游每拍送、下游一直收)、`_ready_random.sv`(兩邊各一半機率)。
+    - `scripts/fc/run_tb_conv_to_fc_adapter.tcl`：兩支各 7 組。
+- 驗證(2026-11-09)：
+    - 14 組 ALL PASS。`ready_high` 的拍數是「事件數 + 1 + 結尾 3 拍」，每拍過一筆、剛好晚 1 拍。
+    - 反向測試(做完還原，跟改之前逐 byte 相同)：
+        - 列、行的乘數對調：列數跟行數不同的 4 組裡 3 組 FAIL；(5,1,6) 只有一列，$o_y$ 一定是 0，照樣過。
+        - ready 只看「暫存器空的」：7 組全部 FAIL。原本預期是每兩拍才過一筆，實際是卡死：`event_valid` 也只在 ready 是 1 時更新，裝進一筆之後 ready 永遠是 0。
+        - ready 固定 1：7 組全部 FAIL，下游不收時暫存器被蓋掉。
+    - 沒有接上 conv2、SaltFC 跑資料：轉接模組單獨驗證過；硬體 conv2 → 轉接模組 → SaltFC 算得對是推論(三段各自跟訓練端比過)，資料驗證在 Part 11。量測用的外包頂層只合成、沒模擬過。
+- 量測(2026-11-09，conv2 → 轉接模組 → SaltFC，訓練端形狀，兩層 $R=2,C=2$ 重疊，乘法 DSP 套 `DONT_TOUCH`，4.8 ns 布局繞線，腳本、外包頂層在 session 暫存目錄)：暫存器版、純組合邏輯版 × 繞回、飽和，數字跟比較寫在 FC.md 第 1 節。
+    - 正式 RTL 重量一次(暫存器版)，數字跟量測版完全相同：WNS 繞回 +0.333、飽和 +0.379；conv2 → 轉接模組暫存器 +0.953、+0.848；暫存器 → SaltFC 的 FIFO +2.143、+2.171；反壓 +1.674、+2.367；DSP 8 顆(轉接模組沒用到)。
+    - conv2 → 暫存器這段 0.85~0.95 ns 的餘裕主要花在 conv2 自己的計算第 2 級(加權重、比門檻、挑選，到 `out_valid` 約 3.3 ns)，轉接模組只占最後的寫入開關約 0.5 ns；跟 conv1 接 conv2 量到的 +0.71~+0.89 同一個水準。
+- 工具問題(2026-11-09)：飽和版量測碰到一次平行合成的偶發錯誤 `Synth 20-411`(vivado-usage skill 第 11 節)，單獨重跑就過。
 
 ### Part 11 串接比對
 
@@ -690,7 +723,7 @@ ceil$。
 - 格式轉換由誰負責：
     - `EvtDecoder → conv1`：`EvtDecoder` 輸出打包的 `TDATA`，中間一個小型轉接模組做 unpack，由 top 例化，不算 `SaltConv` 或 `EvtDecoder` 內部。`EventProcessor.sv`(GENX320 範圍)不改。
     - `conv → conv`：欄位直接對應($o_c\to c$、$o_y\to y$、$o_x\to x$、$t\to t$)，直接接線。位寬一致是上下層參數配置的責任。
-    - `conv → FC`：換成 $\text{src}=o_c\cdot H_{out}W_{out}+o_y\cdot W_{out}+o_x$，中間一個轉接模組，放在 FC 輸入 FIFO 寫入端之前，先存一級暫存器再換算，由 top 例化，`SaltConv`、FC 層都不改(2026-10-22 定，FC.md 第 1 節)。
+    - `conv → FC`：換成 $\text{src}=o_c\cdot H_{out}W_{out}+o_y\cdot W_{out}+o_x$，中間一個轉接模組 `fc/ConvToFCAdapter`，放在 FC 輸入 FIFO 寫入端之前，先存一級暫存器再換算，由 top 例化，`SaltConv`、FC 層都不改(2026-10-22 定，FC.md 第 1 節；2026-11-09 跟純組合邏輯比過，維持暫存器版)。
     - `FC → FC`：輸出 $(i,t)$ 直接接下一層的 $(\text{src},t)$。
 
 ### 權重匯出格式
