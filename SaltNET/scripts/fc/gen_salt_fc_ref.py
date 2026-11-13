@@ -66,9 +66,10 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "conv"))
-from gen_salt_conv_ref import CYCLE_CONFIGS, SAMPLE_COUNT, cycle_count, signed_range, write_lines  # noqa: E402
+from gen_salt_conv_ref import (CYCLE_CONFIGS, SAMPLE_COUNT, cycle_count, load_trained_version,  # noqa: E402
+                               signed_range, write_lines)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # scripts/:quant_versions.py
-from quant_versions import QUANT_RUN_DIR, SATURATE_VERSION, WRAP_VERSION  # noqa: E402  量化資料夾,換權重改 quant_versions.txt
+from quant_versions import SATURATE_VERSION, WRAP_VERSION  # noqa: E402  量化資料夾,換權重改 quant_versions.txt
 
 TRAINED_LAYER = "out"
 SEED = 0
@@ -335,49 +336,46 @@ def check_exported_files(training: dict, version: str, params: ParamSet, out_dir
     print(f"{params.stem}:權重檔、衰減表檔跟 sources_1/mem/{version} 匯出的相同")
 
 
+def trained_layer_model(training: dict, model_file, version: str, params: ParamSet) -> tuple:
+    """訓練端的 out 層(最後一層,不 fire):確認形狀、量化參數跟參數組相同。回傳 (訓練端的層, LayerModel)。"""
+    layers = model_file.network.layers
+    if layers[-1].name != TRAINED_LAYER:
+        raise RuntimeError(f"{version} 的最後一層是 {layers[-1].name},不是 {TRAINED_LAYER}")
+    fc_layer = layers[-1]
+    fc_params = model_file.params[-1]
+    if fc_params.v_th_int is not None:
+        raise RuntimeError(f"{version} 的 {TRAINED_LAYER} 層會 fire,參數組寫的是不 fire")
+    q = np.asarray(fc_params.q)
+    decay_table = np.asarray(fc_params.decay_table_int)
+    if (fc_layer.n_in, fc_layer.n_out) != (params.in_neurons, params.out_neurons):
+        raise RuntimeError(f"{version} {TRAINED_LAYER} 的 n_in、n_out 跟參數組不同")
+    if (fc_params.i_V, fc_params.f_V, fc_params.f_a) != (
+            params.membrane_int_width, params.membrane_frac_width, params.decay_frac_width):
+        raise RuntimeError(f"{version} {TRAINED_LAYER} 的 i_V、f_V、f_a 跟參數組不同")
+    if fc_params.overflow_mode.value != ("saturate" if params.saturate_enabled else "wrap"):
+        raise RuntimeError(f"{version} {TRAINED_LAYER} 的溢位處理跟參數組不同")
+    if fc_params.round_mode.value != ("round" if params.round_enabled else "truncate"):
+        raise RuntimeError(f"{version} {TRAINED_LAYER} 的捨入規則跟參數組不同")
+    if decay_table.shape[0] != params.decay_table_depth:
+        raise RuntimeError(f"{version} {TRAINED_LAYER} 的衰減表深度跟參數組不同")
+    return fc_layer, LayerModel(training, params, q, decay_table, None)
+
+
 def build_trained_references(training: dict, training_repo: Path, out_dir: Path) -> None:
     """訓練端 out 層兩版:輸入取 test 評估取樣的前 SAMPLE_COUNT 筆,經訓練端 conv1 → conv2。"""
     for version in dict.fromkeys(version for version, _ in TRAINED_SETS):
-        quant_dir = training_repo / QUANT_RUN_DIR / version
-        model_file = training["load_quantized"](quant_dir / "model.npz")
-        evaluation = training["yaml"].safe_load((quant_dir / "eval" / "test.yaml").read_text(encoding="utf-8"))
-        if evaluation["which"] != "test" or evaluation["n_samples"] < SAMPLE_COUNT:
-            raise RuntimeError(f"{version} 的 eval/test.yaml 不是 test 的評估,或筆數不夠")
-        # 同一個 seed 抽 n 筆等於抽更多筆時的前 n 筆(訓練端 example/quantize.py _build_split),跟評估的前幾筆相同
-        split = training["NMNISTDataset"](training["DATASET_ROOT"],
-                                          max_events=model_file.metadata["data"]["max_events"]).build_split(
-            seed=evaluation["seed"], n_samples=SAMPLE_COUNT, which="test")
-        raw = training["split_input_events"](split, model_file.network.input_shape)
+        trained = load_trained_version(training, training_repo, version)
+        model_file, raw = trained["model_file"], trained["raw"]
         backend = training["QuantBackend"]()   # conv1、conv2 的捨入、溢位規則照 model.npz 每層的參數
-
         layers = model_file.network.layers
-        layer_names = [layer.name for layer in layers]
-        if layer_names[-1] != TRAINED_LAYER:
-            raise RuntimeError(f"{version} 的最後一層是 {layer_names[-1]},不是 {TRAINED_LAYER}")
-        fc_layer = layers[-1]
-        fc_params = model_file.params[-1]
-        if fc_params.v_th_int is not None:
-            raise RuntimeError(f"{version} 的 {TRAINED_LAYER} 層會 fire,參數組寫的是不 fire")
-        q = np.asarray(fc_params.q)
-        decay_table = np.asarray(fc_params.decay_table_int)
 
         version_sets = [params for v, params in TRAINED_SETS if v == version]
         models = []
         for params in version_sets:
-            if (fc_layer.n_in, fc_layer.n_out) != (params.in_neurons, params.out_neurons):
-                raise RuntimeError(f"{version} {TRAINED_LAYER} 的 n_in、n_out 跟參數組不同")
-            if (fc_params.i_V, fc_params.f_V, fc_params.f_a) != (
-                    params.membrane_int_width, params.membrane_frac_width, params.decay_frac_width):
-                raise RuntimeError(f"{version} {TRAINED_LAYER} 的 i_V、f_V、f_a 跟參數組不同")
-            if fc_params.overflow_mode.value != ("saturate" if params.saturate_enabled else "wrap"):
-                raise RuntimeError(f"{version} {TRAINED_LAYER} 的溢位處理跟參數組不同")
-            if fc_params.round_mode.value != ("round" if params.round_enabled else "truncate"):
-                raise RuntimeError(f"{version} {TRAINED_LAYER} 的捨入規則跟參數組不同")
-            if decay_table.shape[0] != params.decay_table_depth:
-                raise RuntimeError(f"{version} {TRAINED_LAYER} 的衰減表深度跟參數組不同")
-            write_data_files(training, out_dir, params, q, decay_table, None)
+            fc_layer, model = trained_layer_model(training, model_file, version, params)
+            write_data_files(training, out_dir, params, model.q, model.decay_table, None)
             check_exported_files(training, version, params, out_dir)
-            models.append(LayerModel(training, params, q, decay_table, None))
+            models.append(model)
 
         all_lines = [[] for _ in version_sets]
         all_overflow_counts = [0 for _ in version_sets]

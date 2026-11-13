@@ -70,3 +70,6 @@ __pycache__/
 # OS 產生的雜項檔案
 Thumbs.db
 .DS_Store
+
+# 整個網路 SaltConvFCNet 的參考答案(每個約 33 MB),由 SaltNET/scripts/net/gen_salt_conv_fc_net_ref.py 產生,不進版控
+SaltNET/SaltNET.srcs/sim_1/new/net/ref/salt_conv_fc_net_*.txt

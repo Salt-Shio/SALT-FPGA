@@ -226,22 +226,24 @@ class LayerModel:
             f_a=p.decay_frac_width, f_V=p.membrane_frac_width, i_V=p.membrane_int_width,
             overflow_mode=self.overflow_mode, round_mode=self.round_mode)
 
-    def official_forward(self, in_stream, max_queue_len: int, max_out_spikes: int):
-        """訓練端整層 forward;容量不夠就放大到 diag.needed 再跑。回傳 LayerOutput。"""
+    def official_forward(self, in_stream, max_queue_len: int, max_out_spikes: int, trace: bool = False):
+        """訓練端整層 forward;容量不夠就放大到 diag.needed 再跑。回傳 LayerOutput;trace=True 時帶逐步軌跡。"""
         backend = self.training["QuantBackend"]()   # 捨入、溢位規則照 quantized_params
         layer = self.layer(max_queue_len, max_out_spikes)
-        output = layer.forward(self.quantized_params(), in_stream, backend=backend)
+        output = layer.forward(self.quantized_params(), in_stream, backend=backend, trace=trace)
         if not bool(layer.capacity.fits(output.diag)):
             needed = output.diag.needed
             layer = self.layer(max(max_queue_len, int(needed["max_queue_len"])),
                                max(max_out_spikes, int(needed["max_out_spikes"])))
-            output = layer.forward(self.quantized_params(), in_stream, backend=backend)
+            output = layer.forward(self.quantized_params(), in_stream, backend=backend, trace=trace)
             if not bool(layer.capacity.fits(output.diag)):
                 raise RuntimeError("放大容量之後還是放不下")
         return output
 
     def run_events(self, events: np.ndarray) -> dict:
-        """逐筆迴圈。events: (n, 4) 的 (x, y, c, t)。回傳輸出事件、每 (事件, o_c) 的 k、拍數、最後的 V̂、t_last。"""
+        """逐筆迴圈。events: (n, 4) 的 (x, y, c, t)。回傳輸出事件、每 (事件, o_c) 的 k、拍數、最後的 V̂、t_last,
+        以及每一次更新(writes):(更新次數, 6) 的 (o_c, o_y, o_x, V̂_new, t, fire),照硬體寫回的順序
+        (事件 -> o_c -> 候選 (o_y, o_x) 由小到大;同一個 (事件, o_c) 的候選在硬體上是同一拍寫回)。"""
         p = self.params
         jnp = self.training["jnp"]
         bank_count = p.bank_count
@@ -262,6 +264,7 @@ class LayerModel:
         slot_count = p.out_channels * bank_count * bank_count
         outputs = []
         fire_counts = np.zeros((len(events), p.out_channels), dtype=np.int64)
+        event_writes = []   # 每筆事件一個 (這筆事件的更新次數, 6)
         for event_index, (x, y, c, t) in enumerate(events):
             # 兩軸都合法才是候選;候選照 (o_y, o_x) 由小到大排(_axis_candidates 的 o 隨 index 遞增)
             spatial = [(int(out_y[event_index, i]), int(tap_y[event_index, i]),
@@ -293,14 +296,17 @@ class LayerModel:
 
             membrane[oc_index, oy_index, ox_index] = v_final
             last_time[oc_index, oy_index, ox_index] = t
+            event_writes.append(np.stack([oc_index, oy_index, ox_index, v_final, np.full(used, t), is_spiked],
+                                         axis=1).astype(np.int64))
             for slot in np.flatnonzero(is_spiked):
                 outputs.append((int(oc_index[slot]), int(oy_index[slot]), int(ox_index[slot]), int(t)))
                 fire_counts[event_index, oc_index[slot]] += 1
 
         cycle_counts = [cycle_count(fire_counts, read_latency, compute_latency, overlap)
                         for read_latency, compute_latency, overlap in CYCLE_CONFIGS]
+        writes = np.concatenate(event_writes) if event_writes else np.zeros((0, 6), dtype=np.int64)
         return {"outputs": outputs, "fire_counts": fire_counts, "cycle_counts": cycle_counts,
-                "membrane": membrane, "last_time": last_time}
+                "membrane": membrane, "last_time": last_time, "writes": writes}
 
     def catch_up(self, membrane: np.ndarray, last_time: np.ndarray, end_time: int) -> np.ndarray:
         """官方 v_final 的最後一步:每顆神經元衰減到 end_time,權重 0。回傳攤平成神經元編號順序的 V̂。"""
@@ -333,18 +339,24 @@ def check_against_official(model: LayerModel, events: np.ndarray, loop_result: d
         raise RuntimeError(f"catch-up 之後的 V̂ 有 {bad.size} 顆跟官方不同,例如神經元 {bad[:5].tolist()}")
 
 
-def state_lines(params: ParamSet, loop_result: dict, kind: str) -> list[str]:
-    """每顆神經元最後的 (V̂, t_last),一行一顆,第一個欄位是 kind。"""
+def bank_location(params: ParamSet, oc, oy, ox):
+    """神經元 (o_c, o_y, o_x) 在哪個 bank、bank 內第幾格(Conv.md 第 2 節):
+    bank (o_y mod M, o_x mod M),位址 (o_c·G_y + ⌊o_y/M⌋)·G_x + ⌊o_x/M⌋。整數或 numpy 陣列都可以。"""
     bank_count = params.bank_count
     row_slots = -(-params.out_rows // bank_count)
     col_slots = -(-params.out_cols // bank_count)
+    return oy % bank_count, ox % bank_count, (oc * row_slots + oy // bank_count) * col_slots + ox // bank_count
+
+
+def state_lines(params: ParamSet, loop_result: dict, kind: str) -> list[str]:
+    """每顆神經元最後的 (V̂, t_last),一行一顆,第一個欄位是 kind。"""
     membrane, last_time = loop_result["membrane"], loop_result["last_time"]
     lines = []
     for oc in range(params.out_channels):
         for oy in range(params.out_rows):
             for ox in range(params.out_cols):
-                bank_addr = (oc * row_slots + oy // bank_count) * col_slots + ox // bank_count
-                lines.append(f"{kind} {oy % bank_count} {ox % bank_count} {bank_addr} "
+                row_bank, col_bank, bank_addr = bank_location(params, oc, oy, ox)
+                lines.append(f"{kind} {row_bank} {col_bank} {bank_addr} "
                              f"{membrane[oc, oy, ox]} {last_time[oc, oy, ox]}")
     return lines
 
@@ -419,55 +431,77 @@ def check_mem_file(path: Path, expected_lines: list[str]) -> None:
         raise RuntimeError(f"{path} 的內容跟 model.npz 匯出的不同")
 
 
+def load_trained_version(training: dict, training_repo: Path, version: str) -> dict:
+    """一個量化資料夾:model.npz、test 評估取樣的前 SAMPLE_COUNT 筆輸入、eval/test_outputs.npz 的逐筆結果。
+    FC、整個網路的答案腳本也用這個函式,training 只要有這裡用到的幾個 key。"""
+    quant_dir = training_repo / QUANT_RUN_DIR / version
+    model_file = training["load_quantized"](quant_dir / "model.npz")
+    evaluation = training["yaml"].safe_load((quant_dir / "eval" / "test.yaml").read_text(encoding="utf-8"))
+    if evaluation["which"] != "test" or evaluation["n_samples"] < SAMPLE_COUNT:
+        raise RuntimeError(f"{version} 的 eval/test.yaml 不是 test 的評估,或筆數不夠")
+    with np.load(quant_dir / "eval" / "test_outputs.npz") as npz:
+        test_outputs = {key: npz[key] for key in npz.files}
+    # 同一個 seed 抽 n 筆等於抽更多筆時的前 n 筆(訓練端 example/quantize.py _build_split),跟評估的前幾筆相同
+    split = training["NMNISTDataset"](training["DATASET_ROOT"],
+                                      max_events=model_file.metadata["data"]["max_events"]).build_split(
+        seed=evaluation["seed"], n_samples=SAMPLE_COUNT, which="test")
+    raw = training["split_input_events"](split, model_file.network.input_shape)
+    return {"model_file": model_file, "raw": raw, "test_outputs": test_outputs}
+
+
+def trained_layer_model(training: dict, model_file, version: str, layer_name: str, params: ParamSet,
+                        mem_dir: Path) -> tuple:
+    """訓練端的一層 conv:確認幾何、量化參數跟參數組相同,sources_1/mem 匯出的三個檔跟 model.npz 相同。
+    回傳 (層的位置, 訓練端的層, LayerModel)。"""
+    layer_index = [layer.name for layer in model_file.network.layers].index(layer_name)
+    layer = model_file.network.layers[layer_index]
+    layer_params = model_file.params[layer_index]
+    if (layer.ic, layer.h_in, layer.w_in, layer.oc, layer.k, layer.s, layer.p) != (
+            params.in_channels, params.in_rows, params.in_cols, params.out_channels, params.kernel_size,
+            params.stride, params.padding):
+        raise RuntimeError(f"{version} {layer_name} 的幾何跟參數組不同")
+    if (layer_params.i_V, layer_params.f_V, layer_params.f_a) != (
+            params.membrane_int_width, params.membrane_frac_width, params.decay_frac_width):
+        raise RuntimeError(f"{version} {layer_name} 的 i_V、f_V、f_a 跟參數組不同")
+    if layer_params.overflow_mode.value != ("saturate" if params.saturate_enabled else "wrap"):
+        raise RuntimeError(f"{version} {layer_name} 的溢位處理跟參數組不同")
+    if layer_params.round_mode.value != ("round" if params.round_enabled else "truncate"):
+        raise RuntimeError(f"{version} {layer_name} 的捨入規則跟參數組不同")
+    q = np.asarray(layer_params.q)
+    decay_table = np.asarray(layer_params.decay_table_int)
+    if decay_table.shape[0] != params.decay_table_depth:
+        raise RuntimeError(f"{version} {layer_name} 的衰減表深度跟參數組不同")
+    thresholds = training["channel_thresholds"](np.asarray(layer_params.v_th_int), layer.oc)
+    export = training["fpga_export"]
+    check_mem_file(mem_dir / version / f"{layer_name}_weight.mem",
+                   export.conv_weight_lines(q, TRAINED_WEIGHT_WIDTH))
+    check_mem_file(mem_dir / version / f"{layer_name}_threshold.mem",
+                   export.threshold_lines(thresholds, params.membrane_width))
+    check_mem_file(mem_dir / version / f"{layer_name}_decay.mem",
+                   export.decay_lines(decay_table, params.decay_frac_width))
+    return layer_index, layer, LayerModel(training, params, q, thresholds, decay_table)
+
+
+def check_spike_count(version: str, layer_name: str, sample_index: int, layer_index: int, spike_count: int,
+                      test_outputs: dict) -> None:
+    """這一層這筆樣本的 spike 數跟 eval/test_outputs.npz 比(那一筆沒被截斷時)。"""
+    if test_outputs["truncated"][sample_index, layer_index]:
+        return
+    if spike_count != test_outputs["spike_count"][sample_index, layer_index]:
+        raise RuntimeError(f"{version} {layer_name} 第 {sample_index} 筆 spike 數 {spike_count},"
+                           f"test_outputs.npz 是 {test_outputs['spike_count'][sample_index, layer_index]}")
+
+
 def build_trained_references(training: dict, training_repo: Path, mem_dir: Path, out_dir: Path,
                              net_out_dir: Path) -> None:
     """訓練端 conv1、conv2 兩版:輸入取 test 評估取樣的前 SAMPLE_COUNT 筆,conv2 的輸入是訓練端 conv1 的輸出。"""
     for version in (WRAP_VERSION, SATURATE_VERSION):
-        quant_dir = training_repo / QUANT_RUN_DIR / version
-        model_file = training["load_quantized"](quant_dir / "model.npz")
-        evaluation = training["yaml"].safe_load((quant_dir / "eval" / "test.yaml").read_text(encoding="utf-8"))
-        if evaluation["which"] != "test" or evaluation["n_samples"] < SAMPLE_COUNT:
-            raise RuntimeError(f"{version} 的 eval/test.yaml 不是 test 的評估,或筆數不夠")
-        with np.load(quant_dir / "eval" / "test_outputs.npz") as npz:
-            reference_spike_count = npz["spike_count"]
-            reference_truncated = npz["truncated"]
-        # 同一個 seed 抽 n 筆等於抽更多筆時的前 n 筆(訓練端 example/quantize.py _build_split),跟評估的前幾筆相同
-        split = training["NMNISTDataset"](training["DATASET_ROOT"],
-                                          max_events=model_file.metadata["data"]["max_events"]).build_split(
-            seed=evaluation["seed"], n_samples=SAMPLE_COUNT, which="test")
-        raw = training["split_input_events"](split, model_file.network.input_shape)
-        layer_names = [layer.name for layer in model_file.network.layers]
+        trained = load_trained_version(training, training_repo, version)
+        model_file, raw, test_outputs = trained["model_file"], trained["raw"], trained["test_outputs"]
 
         version_sets = [(layer_name, params) for v, layer_name, params in TRAINED_SETS if v == version]
-        layer_models = {}
-        for layer_name, params in version_sets:
-            layer_index = layer_names.index(layer_name)
-            layer = model_file.network.layers[layer_index]
-            layer_params = model_file.params[layer_index]
-            if (layer.ic, layer.h_in, layer.w_in, layer.oc, layer.k, layer.s, layer.p) != (
-                    params.in_channels, params.in_rows, params.in_cols, params.out_channels, params.kernel_size,
-                    params.stride, params.padding):
-                raise RuntimeError(f"{version} {layer_name} 的幾何跟參數組不同")
-            if (layer_params.i_V, layer_params.f_V, layer_params.f_a) != (
-                    params.membrane_int_width, params.membrane_frac_width, params.decay_frac_width):
-                raise RuntimeError(f"{version} {layer_name} 的 i_V、f_V、f_a 跟參數組不同")
-            if layer_params.overflow_mode.value != ("saturate" if params.saturate_enabled else "wrap"):
-                raise RuntimeError(f"{version} {layer_name} 的溢位處理跟參數組不同")
-            if layer_params.round_mode.value != ("round" if params.round_enabled else "truncate"):
-                raise RuntimeError(f"{version} {layer_name} 的捨入規則跟參數組不同")
-            q = np.asarray(layer_params.q)
-            decay_table = np.asarray(layer_params.decay_table_int)
-            if decay_table.shape[0] != params.decay_table_depth:
-                raise RuntimeError(f"{version} {layer_name} 的衰減表深度跟參數組不同")
-            thresholds = training["channel_thresholds"](np.asarray(layer_params.v_th_int), layer.oc)
-            export = training["fpga_export"]
-            check_mem_file(mem_dir / version / f"{layer_name}_weight.mem",
-                           export.conv_weight_lines(q, TRAINED_WEIGHT_WIDTH))
-            check_mem_file(mem_dir / version / f"{layer_name}_threshold.mem",
-                           export.threshold_lines(thresholds, params.membrane_width))
-            check_mem_file(mem_dir / version / f"{layer_name}_decay.mem",
-                           export.decay_lines(decay_table, params.decay_frac_width))
-            layer_models[layer_name] = (layer_index, layer, LayerModel(training, params, q, thresholds, decay_table))
+        layer_models = {layer_name: trained_layer_model(training, model_file, version, layer_name, params, mem_dir)
+                        for layer_name, params in version_sets}
 
         if [layer_name for layer_name, _ in version_sets] != ["conv1", "conv2"]:
             raise RuntimeError(f"{version} 的層不是 conv1、conv2,兩層串接的答案要改")
@@ -485,11 +519,8 @@ def build_trained_references(training: dict, training_repo: Path, mem_dir: Path,
                 output = model.official_forward(stream, layer.max_queue_len, layer.max_out_spikes)
                 loop_result = model.run_events(events)
                 check_against_official(model, events, loop_result, output)
-                if not reference_truncated[sample_index, layer_index] and \
-                        len(loop_result["outputs"]) != reference_spike_count[sample_index, layer_index]:
-                    raise RuntimeError(f"{version} {layer_name} 第 {sample_index} 筆 spike 數 "
-                                       f"{len(loop_result['outputs'])},test_outputs.npz 是 "
-                                       f"{reference_spike_count[sample_index, layer_index]}")
+                check_spike_count(version, layer_name, sample_index, layer_index, len(loop_result["outputs"]),
+                                  test_outputs)
                 all_lines[layer_name] += sample_lines(params, events, loop_result)
                 all_fire_counts[layer_name].append(loop_result["fire_counts"])
                 layer_results[layer_name] = (params, events, loop_result)

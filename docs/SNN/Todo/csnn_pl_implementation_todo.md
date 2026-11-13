@@ -25,18 +25,21 @@
     - 設計推導：[`Conv.md`](../Concept/Layer-RTL/Conv.md) 5.5「實作」、5.8。
 - 分支：工作在 `test`，`main` 停在 `5507967`。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
 - FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完(第 6 節 2026-11-07 改成膜電位輸出不握手、加層外的暫存器模組與 PS 轉接)；RTL 做完 Part 10(整層管線含 fire、膜電位輸出、層外的 `fc/FCMembraneRegister`、conv → FC 轉接模組 `fc/ConvToFCAdapter`)。
+- 整個網路 `net/SaltConvFCNet`(conv1 → conv2 → 轉接模組 → FC → 膜電位暫存器，Part 11，2026-11-11 做完，使用者確認 2026-11-14)：test 前 10 筆、繞回飽和兩版，每一層每一次更新的 $(t,\hat V)$、每個 spike 跟訓練端逐筆相同。還沒做的：整條的合成量測(Part 12)；整條網路層級沒測到的情況見「Part 11 → 沒測到的」。
 
-## 交接(2026-11-11)
+## 交接(2026-11-14)
 
+- SaltFC Part 11(整個網路串接比對)完成，使用者確認(2026-11-14)，細節見下面「Part 11」。
+    - 頂層 `net/SaltConvFCNet`：conv1 → conv2 → `ConvToFCAdapter` → SaltFC → `FCMembraneRegister`，直接例化，不經過 `SaltConvNet`。
+    - 每一層每一次更新的 $(t,\hat V)$、每個 spike、FC 每筆事件之後的 10 顆 $\hat V$ 都跟訓練端逐筆相同：2 支 testbench × 4 組(繞回、飽和 × FC $n_{col}=4$、$n_{col}=1$ 逼出反壓) ALL PASS，反向測試四項都抓到。
+    - 答案檔(約 37 MB 兩個)不進 git，跑模擬前先跑 `scripts/net/gen_salt_conv_fc_net_ref.py`。
+    - 測到、沒測到的極端情況整理在「Part 11 → 極端情況」(2026-11-11 使用者問)。
+- 下一步：Part 12 合成量測(4.8 ns)，開始前先列這次做什麼、怎麼量、怎麼驗證給使用者確認。
+- 待使用者決定(2026-11-11 提出)：整條網路層級要不要補測。建議補的兩項是整條網路用人工參數逼出繞回、其他管線設定；其餘沒測到的項目已有單層測試，或設計還沒定。
 - SaltFC Part 10(conv → FC 轉接模組)完成，使用者確認(2026-11-11)，細節見下面「Part 10」。
     - `fc/ConvToFCAdapter`：conv 輸出存一級事件暫存器，下一拍換成 $\text{src}$；給 conv 的 ready 是「暫存器空的，或下游這拍收」。跟純組合邏輯版量過，只做暫存器版。
     - 單獨模擬兩支各 7 組 ALL PASS，反向測試三項都抓到；4.8 ns 布局繞線(conv2 → 轉接模組 → SaltFC)繞回 +0.333、飽和 +0.379。
     - 只單獨測過轉接模組，接上 conv2、SaltFC 跑資料在 Part 11。
-- 下一步：Part 11 串接比對，起點資訊見下面「Part 11」。開始前先列這次做什麼、怎麼量、怎麼驗證給使用者確認。要先定的：
-    - 頂層模組名字(Part 0 定了放 `net/`、不叫 `SaltNET`)。
-    - 最後膜電位比哪份答案：`reference.npz` 是 val 前 2000 筆，這台只有 N-MNIST 的 Test，各層單獨測時用 test 前 10 筆。
-    - catch-up 的差異：先確認 FC 的 `v_final` 是不是等於最後一次更新後的值。
-    - testbench 怎麼拆(一支只測一種情況，例如最後的輸出一直收、隨機收各一支)。
 - SaltFC Part 9(膜電位輸出)完成，使用者確認(2026-11-08)，細節見下面「Part 9」。
     - SaltFC 膜電位輸出只有 valid(`membrane_ready` 拿掉)，寫回那一拍存一級輸出暫存器、下一拍送；`stall` 不動。
     - 層外的 `fc/FCMembraneRegister`：存每顆最新值，收到最後一列的下一拍拉 `update_done`、送 `update_time`。
@@ -58,7 +61,7 @@
 - SaltFC Part 6 完成(細節見下面「Part 6」)：`NeuronUpdate` 拆成 `lib/DecayLookup` + `lib/NeuronUpdate`，加 `SPIKE_OUTPUT`；FC 的兩個時間暫存器改放 Part 8。
 - SaltFC Part 7 完成(細節見下面「Part 7」)：FC 挑選模組 `fc/FCSpikeSelect`，conv 的改名 `ConvSpikeSelect`;bitmask、送出交握放 Part 8。
 - 2026-10-29 盤點「答案用訓練端 salt_core 的函式產生」這條規則：訓練端有對應函式卻沒用的只有 `tb_spike_select` 的送出順序，已改(見下面「Part 7」最後)。bank 排列、記憶體讀寫清除、FIFO、拍數、寬字切段這些訓練端沒有對應函式，使用者決定不處理。
-- 分支 `test`，比 `origin/test` 多 7 個 commit(`cdc6315` 起，最新是 Part 10 的文件)還沒 push：agent 這邊 push 時 Git Credential Manager 存不了認證(`wincredman`)，要使用者在自己的終端機 `git push origin test`。`origin/main` 停在 `5507967`。
+- 分支 `test`，比 `origin/test` 多 8 個 commit(`cdc6315` 起，最新是 Part 11)還沒 push：agent 這邊 push 時 Git Credential Manager 存不了認證(`wincredman`)，要使用者在自己的終端機 `git push origin test`。`origin/main` 停在 `5507967`。
 - 訓練端(2026-11-09 確認)：重構改在新專案 `D:\Project\Spiking-Affine-Lazy-Training-refactor` 從頭寫，目前只有 `CLAUDE.md`、`docs/`，還沒有程式碼。答案腳本(`gen_salt_conv_ref.py`、`gen_salt_fc_ref.py` 等)照舊 import 原本的 `D:\Project\Spiking-Affine-Lazy-Training`(`per-layer-quant` 的 `7a6a863`)，只讀不改；之後要換到新專案，等使用者說再改，換了要重產答案、跟 HEAD 比。
 - 這幾次定下來、之後的 Part 照著做的：
     - 模組分法(Part 5「已定」)：有邏輯才包模組，兩層相同的放 lib；打包、切段寫在各層 top 的 generate 區塊。conv、FC 結構要對稱，提案前先用這條檢查兩層是不是一樣。
@@ -106,7 +109,7 @@
 | 8 | pipeline 整合 | 第 5 節 | 完成 |
 | 9 | 膜電位輸出：SaltFC 送出、層外暫存器模組 `fc/FCMembraneRegister` | 第 6 節 | 完成 |
 | 10 | conv → FC 轉接模組 `fc/ConvToFCAdapter`(暫存器版) | 第 1 節 | 完成 |
-| 11 | 串接 conv1 → conv2 → FC，跟訓練端比對 | — | 未開始 |
+| 11 | 串接 conv1 → conv2 → 轉接模組 → FC → 膜電位暫存器(`net/SaltConvFCNet`)，每一層每一次更新跟訓練端比對 | — | 完成 |
 | 12 | 合成量測(4.8 ns) | — | 未開始 |
 
 - 每個 Part 的細節到要做時才規劃。
@@ -540,13 +543,57 @@ ceil$。
 
 ### Part 11 串接比對
 
-- 用 `reference.npz` 的 `v_final_int` 比整條推論，見「待決事項 → 驗證」。
-- 串接範圍(2026-11-08 使用者決定到這裡再測)：conv1 → conv2 → 轉接模組(Part 10) → FC → `FCMembraneRegister`，用同一批樣本跑。
-    - 比每筆樣本最後一次 `update_done` 那一拍的 `membranes` 跟訓練端 `v_final_int`：FC 每筆事件都更新全部神經元，訓練端最後那步 catch-up 的 $\Delta t$ 一律是 0，應該直接相等(還沒驗證)。
-    - 中間每一層的輸出事件也跟訓練端比。
-    - 層跟層之間的反壓(FC 輸入 FIFO 滿 → 轉接模組 → conv2 → conv1)：各層單獨測時上游都是 testbench，整條串起來才碰得到。
-    - 單獨測已經確認的(2026-11-08)：SaltConvNet(conv1 → conv2)輸出、最終狀態跟訓練端相同；SaltFC 吃訓練端 conv2 的輸出，spike、每筆事件之後的 $\hat V$ 跟訓練端相同；兩邊都是 test 前 10 筆。硬體 conv2 接硬體 FC 也對是推論，沒跑過。
-- 訓練端的 `v_final` 多做了一步 catch-up(每顆神經元再衰減到樣本最後一筆事件的時間，權重 0)，硬體不做；SaltConv 的答案腳本比的是 catch-up 之前的 $\hat V$，FC 也要先處理這個差異。
+- 目標(使用者 2026-11-11)：軟體跟硬體每一層、每一次更新的 $(t,\hat V)$、每一個 spike 都對上。
+- 單獨測已經確認的(2026-11-08)：SaltConvNet(conv1 → conv2)輸出、最終狀態跟訓練端相同；SaltFC 吃訓練端 conv2 的輸出，spike、每筆事件之後的 $\hat V$ 跟訓練端相同；兩邊都是 test 前 10 筆。硬體 conv2 接硬體 FC 也對是推論，沒跑過。
+- 已定(2026-11-11)：
+    - 串接範圍：conv1 → conv2 → `ConvToFCAdapter` → SaltFC → `FCMembraneRegister`。頂層 `net/SaltConvFCNet`，直接例化這五個模組，不經過 `SaltConvNet`(使用者要求重新接；`SaltConvNet` 跟它的 testbench 不動)。SaltFC 是輸出層，固定不 fire、開膜電位輸出。
+    - 樣本：test 前 10 筆，跟單層測試同一批。答案照之前的做法由腳本叫訓練端算；原本寫的「用 `reference.npz` 比」不用：它跟 `eval/test_outputs.npz` 欄位相同(每筆樣本只有輸出層最後的 $\hat V$、每層 spike 總數、溢位與截斷旗標)，比不到逐次更新。腳本另外拿 `test_outputs.npz` 對 `spike_count` 跟 FC 最後的 `v_final_int`。
+    - catch-up：訓練端壓縮佇列後補的一步(每顆神經元衰減到這一層最後一筆輸入事件的時間，權重 0)，讓 `v_final` 等於「每筆事件每顆都走一步」的密集版；不影響 spike、下一層的輸入。硬體只在事件來時更新，不做這一步。比對時跳過：conv 的逐次更新拿掉最後那一步，最終狀態比 catch-up 之前的值；FC 每筆事件更新全部神經元，catch-up 的 $\Delta t$ 一律是 0。
+    - 比對項目：
+        - conv1、conv2 每一次更新：寫回神經元 BRAM 那一拍的 bank、位址、$(t,\hat V)$，依 bank 照順序比，不能多寫、少寫。寫入開關是 `compute_cycle && 候選合法`，停住的拍子不寫，每筆事件碰到的每顆神經元剛好寫一次。
+        - 每個 spike：conv1 → conv2、conv2 → 轉接模組、轉接模組 → SaltFC 三個介面交握成功那一拍逐筆比。
+        - FC 每一次更新：每次 `update_done` 比 10 顆的 `membranes`、`update_time`，次數等於 FC 的輸入事件數。
+        - 三個介面的握手規則；樣本結束時兩層 conv 的最終狀態。
+    - 參數組：繞回、飽和 × (FC $n_{col}=4$、FIFO 16，實際設定；FC $n_{col}=1$、FIFO 2，FC 每筆事件 10 拍，逼出反壓)，共 4 組；$R=2,C=2$ 重疊。
+    - testbench：這條網路最後是膜電位輸出，沒有 ready，只差上游怎麼餵：`tb_salt_conv_fc_net_input_high`(conv1 收得下就送)、`_input_random`(每拍 7 成機率送)。各介面被擋的拍數只印在 log，不當通過條件。
+    - 答案檔 `sim_1/new/net/ref/salt_conv_fc_net_SAT<0|1>.txt` 不進 git(估計每個約 33 MB，幾乎都是 conv 的逐次更新)，跑模擬前用 `scripts/net/gen_salt_conv_fc_net_ref.py` 產生；FC 的權重檔、衰減表檔照常進 git。
+    - 答案檔格式(使用者確認 2026-11-11)：每筆樣本 `sample <in> <conv1_out> <conv2_out> <conv1_write> <conv2_write> <conv1_state> <conv2_state>`，接 `in <x> <y> <c> <t>`、`conv1_out <o_c> <o_y> <o_x> <t>`、`conv2_out <o_c> <o_y> <o_x> <t> <src>`、`conv1_write`/`conv2_write <row_bank> <col_bank> <addr> <V̂> <t>`、`fc_update <t> <V̂_0> … <V̂_9>`、`conv1_state`/`conv2_state <row_bank> <col_bank> <addr> <V̂> <t_last>`，最後 `end <sample_count>`。
+    - 反向測試：conv 寫入開關不排除停住的拍子、轉接模組 `in_ready` 固定 1、答案檔改掉 conv 中間一次更新、答案檔改掉 FC 一筆更新。
+    - 合成量測在 Part 12。
+- RTL(2026-11-11)：`net/SaltConvFCNet.sv` 照事件流程分 5 段(conv1、conv2、轉接、FC、膜電位暫存器)。conv2 輸出形狀、FC 的 $n_{in}$、層間位寬都在頂層推出來；SaltFC 固定 `SPIKE_OUTPUT = 0`、`MEMBRANE_OUTPUT = 1`、`SHARED_THRESHOLD = 0`，spike 輸出不接、`out_ready` 接 1。
+    - elaborate(non-project `synth_design -rtl`)：飽和 $n_{col}=4$、繞回 $n_{col}=1$ 都展開，port 位寬對(`membranes` 110、140 位元)。`-lint` 只有 SaltFC、`NeuronUpdate` 不 fire 時沒用到的訊號(`shifted_product`、`unfitted`、`threshold`、`column_valid`、`spike`、`out_ready`)，新頂層沒有訊息。
+- 答案(2026-11-11)：`scripts/net/gen_salt_conv_fc_net_ref.py`。
+    - 單層腳本跟著改(行為不變)：`gen_salt_conv_ref.py` 的逐筆迴圈多回傳 `writes`(每一次更新，照硬體順序)，`official_forward` 加 `trace`；抽出 `load_trained_version`(讀量化資料夾、test 樣本、`test_outputs.npz`)、`trained_layer_model`、`check_spike_count`、`bank_location`，`gen_salt_fc_ref.py` 抽出 `trained_layer_model` 並改用 `load_trained_version`。兩支重產的 85 個答案檔、資料檔跟 HEAD 逐 byte 相同。
+    - conv 每一次更新的交叉比對：逐筆迴圈的 `writes` 依神經元(`o_c·H·W + o_y·W + o_x`，訓練端 `tile_channels` 的順序)分開，跟官方 `trace` 每顆前 n_real 步的 `v_steps`、`event_ms`、`spike_mask` 逐次比；n_real 從 `event_ms` 有值的步數拿(整數版第 t 步處理佇列第 t 欄，catch-up 那一步跟補齊的步 `event_ms` 是 nan)，並確認有值的步都在最前面。
+    - 繞回、飽和兩版 10 筆全部通過，每筆 conv1 約 3.6 萬次、conv2 約 9 萬次更新；答案檔 37.6 MB、37.7 MB(1382018、1387580 行)。FC 權重檔、衰減表檔 $n_{col}=4$、1 各一份寫在 `sim_1/new/net/ref/`，$n_{col}=4$ 繞回版跟 `sources_1/mem` 匯出的相同。
+- testbench(2026-11-11)：`tb_salt_conv_fc_net_common.svh` + `_input_high.sv`、`_input_random.sv`，`scripts/net/run_tb_salt_conv_fc_net.tcl`(支援 `NAME:value` 篩參數組；找不到答案檔時提示先跑答案腳本)。conv 的寫 port、記憶體快照用 generate 裡的 assign / `always @(snapshot_request)` 搬出來，判斷都在單一 `initial` 流程。
+- 驗證(2026-11-11)：
+    - 2 支 × 4 組 ALL PASS。每組比 conv1 358744 次、conv2 923088 次(繞回 917760)更新，FC 12023 次(繞回 11981)更新，三個介面每個 spike。一組 10 筆約 30 秒。
+    - $n_{col}=4$、FIFO 16：`conv2_blocked`、`fc_in_blocked` 都是 0，FC 從來沒擋過上游。$n_{col}=1$、FIFO 2：兩個都大於 0(飽和 `input_high` 第 0 筆 32、175 拍)，反壓從 SaltFC 傳回轉接模組、conv2。
+    - 反向測試(都在飽和 `input_high`；做完還原，跟備份逐 byte 相同、git 沒有改動)：
+        - conv 寫入開關改成 `pipe_valid[L] && 候選合法`(停住的拍子也寫)：FAIL，第一個錯在 sample 0 cycle 827 conv1 多寫。停住時寫進去的位址、值都不對，不是重寫同一個值，所以舊的 `tb_salt_conv_net_ready_high`(只比最終狀態)兩版也 FAIL；這項證明不了逐次比對比最終狀態多抓到什麼，那個由下面改答案檔那項證明。
+        - 轉接模組 `in_ready` 固定 1：$n_{col}=4$ 照樣 ALL PASS(FC 不擋)；$n_{col}=1$ FAIL，暫存器那筆被蓋掉(「上一拍送不出去，這一拍資料變了」)，SaltFC 少收 170 筆。
+        - 答案檔改 sample 5 一次 conv2 中間更新的 $\hat V$(−952 → −951)：error_count=1，只有那一次更新報錯，最終狀態、輸出事件都沒報。
+        - 答案檔改 sample 5 第 500 筆 FC 更新神經元 3(−465 → −464)：error_count=1。
+- 極端情況(2026-11-11，從兩個答案檔數的，都在 ALL PASS 的模擬裡)：
+    - 測到的(繞回版 / 飽和版)：
+        - 同一顆神經元同一毫秒再更新($\Delta t=0$，不衰減)：conv1 115736 / 115736 次、conv2 641520 / 646640 次、FC 10919 / 10967 次。
+        - 兩次更新隔超過衰減表深度 75 ms(衰減成 0，含第一次更新就從 $t_{last}=0$ 超過的)：conv1 2152 次、conv2 1728 次，兩版相同；FC 沒有。
+        - 剛好隔 75 ms(查表最後一格)：conv1 32 次；conv2、FC 沒有。
+        - 膜電位夾在暫存器上下限：繞回版 0；飽和版 conv1 14003 次、conv2 30586 次、FC 3075 次(神經元·次)。
+        - 寫回 0(fire 後歸 0 或剛好算出 0)：conv1 28832 / 29011 次、conv2 14598 / 14647 次。
+        - 輸入連續兩筆同一毫秒：20000 筆裡 18798 筆。
+        - 反壓：`input_high` 每筆樣本 conv1 擋上游約 3.8 萬拍、conv2 擋 conv1 約 2.5 萬拍；SaltFC 擋轉接模組只有 $n_{col}=1$、FIFO 2 那組碰得到。
+    - 只在單層測試的人工參數組測過的：繞回真的發生、參數不是 2 的次方、位寬下限、conv $OC=1$、1×1 輸出、FC $n_{row}=1$、最後一列不滿、$f_V>0$、truncate、FC fire(含同一列多個 fire、整層一個門檻)、讀寫衝突、下游長時間不收或交替收、其他 6 種管線設定。
+    - 沒測到的：
+        - 整條網路真的發生繞回(真實資料整個 test 一筆都沒有，整條網路也沒用人工參數跑過)。
+        - 整條網路的其他管線設定(只跑 $R=2,C=2$ 重疊)。
+        - 整條網路的 conv FIFO 深度(conv1、conv2 一律 16，只有 FC 換過 2)。
+        - 整條網路裡 FC fire(輸出層不 fire)。
+        - 樣本中途 reset、清除時還有事件在 FIFO(只測樣本之間 reset；中途 reset 會丟事件，是已知行為)。
+        - 時間戳記繞回($2^{16}$ ms，處理方式還沒定，見「待決事項 → 系統整合」)。
+        - 事件特別密或特別稀的樣本(#1589、#1073、#7596 沒用，只用 test 前 10 筆)。
+- 工具問題(2026-11-11)：`USF-XSIM-95 Failed to open file to read (elaborate.log)` 碰到 2 次(完整跑的 `input_high` 第 1 組、反向測試二的第 2 組 elaborate)，原封不動重跑就過；vivado-usage skill 第 11 節記過同訊息(當時是多個 Vivado 同時開專案)，這次沒有同時開，原因查不到。
 
 ## 延後、擱著的項目
 
@@ -602,10 +649,10 @@ ceil$。
 
 ### 驗證
 
-- 用 `reference.npz` 逐位元比對：每個量化資料夾都有 val 前 2000 筆的逐筆結果。
-    - 欄位：`preds`、`v_final_int`(輸出層暫存器最終值)、`spike_count`(每層 spike 總數)、`overflowed`(每層有沒有碰到暫存器範圍)。
-    - `v_final_int` 逐位元相同，就代表整條推論對上。
-    - 這台機器只有 N-MNIST 的 `Test`，val 要從 `Train` 切；SaltConv 因此改用 test 前 10 筆(量化資料夾 `eval/test.yaml` 記的評估取樣)，spike 數跟 `eval/test_outputs.npz` 比。
+- 訓練端存的逐筆結果：每個量化資料夾的 `reference.npz`(val 前 2000 筆，量化時寫的)、`eval/test_outputs.npz`(test 全部 10000 筆，評估時寫的)，欄位相同。
+    - 欄位：`labels`、`preds`、`v_final_int`(輸出層暫存器最終值，catch-up 之後)、`spike_count`(每層 spike 總數)、`truncated`(訓練端容量截斷)、`overflowed`(每層有沒有碰到暫存器範圍)。
+    - 每筆樣本只有最後的結果跟總數，比不到逐次更新；逐筆比對靠答案腳本叫訓練端算(2026-11-11，見「Part 11」)。答案腳本拿 `test_outputs.npz` 對 spike 數跟 FC 最後的 $\hat V$。
+    - 樣本用 test 前 10 筆(量化資料夾 `eval/test.yaml` 記的評估取樣)。這台的 `data/datasets/N-MNIST/Train` 已經有了(60000 筆，2026-11-11 確認)，要用 val 的話照訓練端 `example/quantize.py` 的抽法重抽就有，目前不需要。
 
 ## 作法
 
