@@ -1,38 +1,29 @@
 # Synthesis + implementation (opt, place, route) of the two-layer SaltConvNet (trained conv1 -> conv2), to measure
 # timing and resources. Non-project mode: it does not touch SaltNET.xpr, so it can run while a simulation runs.
-# The flow and every option are explained in docs/SNN/Concept/Layer-RTL/SaltConvSynthFlow.md.
+# The shared flow is in scripts/synth_common.tcl; the flow and every option are explained in
+# docs/SNN/Concept/Layer-RTL/SaltConvSynthFlow.md.
 # Usage (PowerShell; the run directory is under SaltNET.runs, which is not version controlled):
 #   cd D:\Project\SALT-FPGA\SaltNET\SaltNET.runs
 #   vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_conv_net.tcl -tclargs saturate 4.8
-#   arguments: version (wrap | saturate), clock period in ns (default 4.8: the 5 ns target with 0.2 ns kept back)
-# Outputs go to SaltNET.runs/net_<version>_<period>/: info.txt (WNS, layer-crossing and in-layer worst paths),
-# timing_summary.rpt, worst.rpt, conv1_output_to_conv2.rpt, conv2_ready_to_conv1.rpt, util.rpt, util_hier.rpt, post_route.dcp.
+#   arguments: version (wrap | saturate), clock period in ns (default 4.8: the 5 ns target with 0.2 ns kept back),
+#              optional synth_only (stop after synthesis)
+# Outputs go to SaltNET.runs/net_<version>_<period>/: info.txt (WNS, layer-crossing and in-layer worst paths), one .rpt
+# per path group, timing_summary.rpt, worst.rpt, util_synth.rpt, bram_regs.txt, util.rpt, util_hier.rpt, post_route.dcp.
 # Cross-layer paths: conv1_output_to_conv2 = conv1 sending a spike event (out_valid, data) into the conv2 FIFO;
 # conv2_ready_to_conv1 = conv2 back-pressure (in_ready -> conv1 out_ready -> conv1 stall, write-back), no data goes back.
 # This file is ASCII only: Vivado reads Tcl sources in the system code page, not UTF-8.
 
-set version [lindex $argv 0]
-set period [expr {[llength $argv] > 1 ? [lindex $argv 1] : 4.8}]
-set part xck26-sfvc784-2LV-c
+source [file join [file dirname [file normalize [info script]]] .. synth_common.tcl]
 
-set scripts_dir [file dirname [file normalize [info script]]]
-set srcs_dir [file normalize [file join $scripts_dir .. .. SaltNET.srcs]]
-# quant_mem_dir: exported .mem directory of the trained model, chosen in quant_versions.txt
-source [file join $scripts_dir .. quant_versions.tcl]
+set arguments [synth_arguments $argv]
+set version [dict get $arguments version]
+set period [dict get $arguments period]
 
 # Per-version parameters (same values as run_tb_salt_conv_net.tcl); the rest are SaltConvNet defaults or below
-switch -- $version {
-    wrap {
-        set data_dir [file join $srcs_dir [quant_mem_dir wrap]]
-        set version_generics {CONV1_MEMBRANE_INT_WIDTH=12 CONV2_MEMBRANE_INT_WIDTH=14 SATURATE=0}
-    }
-    saturate {
-        set data_dir [file join $srcs_dir [quant_mem_dir saturate]]
-        set version_generics {CONV1_MEMBRANE_INT_WIDTH=9 CONV2_MEMBRANE_INT_WIDTH=11 SATURATE=1}
-    }
-    default {
-        error "unknown version '$version': expected wrap or saturate"
-    }
+if {$version eq "wrap"} {
+    set version_generics {CONV1_MEMBRANE_INT_WIDTH=12 CONV2_MEMBRANE_INT_WIDTH=14 SATURATE=0}
+} else {
+    set version_generics {CONV1_MEMBRANE_INT_WIDTH=9 CONV2_MEMBRANE_INT_WIDTH=11 SATURATE=1}
 }
 set generics [concat {
     IN_CHANNELS=2 IN_ROWS=34 IN_COLS=34
@@ -41,74 +32,26 @@ set generics [concat {
     TIME_WIDTH=16 WEIGHT_WIDTH=7 MEMBRANE_FRAC_WIDTH=0 DECAY_FRAC_WIDTH=6 ROUND=1
     READ_LATENCY=2 COMPUTE_LATENCY=2 OVERLAP=1
 } $version_generics]
+set data_dir [file join $::synth_srcs_dir [quant_mem_dir $version]]
 foreach layer {CONV1 CONV2} {
     set file_prefix [string tolower $layer]
     foreach {name suffix} {WEIGHT_FILE _weight.mem THRESHOLD_FILE _threshold.mem DECAY_FILE _decay.mem} {
-        set path [file join $data_dir $file_prefix$suffix]
-        if {![file exists $path]} {
-            error "data file not found: $path"
-        }
-        lappend generics "${layer}_$name=\"$path\""
+        lappend generics [synth_data_file_generic ${layer}_$name [file join $data_dir $file_prefix$suffix]]
     }
 }
-set generic_args {}
-foreach generic $generics {
-    lappend generic_args -generic $generic
+
+synth_enter_run_dir net_${version}_$period
+synth_top SaltConvNet $generics
+if {[dict get $arguments synth_only]} {
+    return
 }
+synth_implement $period
 
-set run_dir [file join [pwd] net_${version}_$period]
-file mkdir $run_dir
-cd $run_dir
-
-# Synthesis: the RTL under sources_1/new/{lib,conv,net}, top SaltConvNet, out-of-context (ports are not tied to
-# package pins)
-set rtl_files {}
-foreach rtl_folder {lib conv net} {
-    set rtl_files [concat $rtl_files [glob [file join $srcs_dir sources_1 new $rtl_folder *.sv]]]
-}
-read_verilog -sv $rtl_files
-synth_design -top SaltConvNet -part $part -mode out_of_context {*}$generic_args
-
-# Constraints: measurement clock on the clk port; the other ports are treated as registers right at the boundary
-# (delay 0), so only paths inside the design count. Then the implementation-only constraints of SaltConv.
-create_clock -period $period -name clk [get_ports clk]
-set_input_delay 0 -clock clk [get_ports -filter {DIRECTION == IN && NAME != clk}]
-set_output_delay 0 -clock clk [all_outputs]
-read_xdc [file join $srcs_dir constrs_1 new salt_conv_impl.xdc]
-# A pattern that matches nothing only gives a critical warning; stop instead of measuring without the constraint
-set multiply_dsps [get_cells -hier -filter {REF_NAME == DSP48E2}]
-set protected_dsps [get_cells -quiet -hier -filter {REF_NAME == DSP48E2 && DONT_TOUCH}]
-if {[llength $multiply_dsps] == 0 || [llength $protected_dsps] != [llength $multiply_dsps]} {
-    error "salt_conv_impl.xdc: DONT_TOUCH on [llength $protected_dsps] of [llength $multiply_dsps] DSP48E2 cells"
-}
-
-# Implementation: every command with its default directive; no phys_opt_design, no bitstream (out-of-context)
-opt_design
-place_design
-route_design
-
-set conv1_cells [get_cells -hier -filter {NAME =~ conv1/* && IS_SEQUENTIAL}]
-set conv2_cells [get_cells -hier -filter {NAME =~ conv2/* && IS_SEQUENTIAL}]
-set fp [open info.txt w]
-puts $fp "version $version period $period"
-puts $fp "route wns [get_property SLACK [get_timing_paths -max_paths 1 -setup]]"
-puts $fp "dsp dont_touch [llength [get_cells -hier -filter {REF_NAME == DSP48E2 && DONT_TOUCH}]] of [llength [get_cells -hier -filter {REF_NAME == DSP48E2}]]"
-foreach {name from to} [list conv1_output_to_conv2 $conv1_cells $conv2_cells conv2_ready_to_conv1 $conv2_cells $conv1_cells \
-                             conv1_inside $conv1_cells $conv1_cells conv2_inside $conv2_cells $conv2_cells] {
-    set path [get_timing_paths -from $from -to $to -max_paths 1 -setup]
-    if {[llength $path] == 0} {
-        puts $fp "$name none"
-        continue
-    }
-    puts $fp [format "%s slack %.3f datapath %.3f levels %d  %s -> %s" $name [get_property SLACK $path] \
-        [get_property DATAPATH_DELAY $path] [get_property LOGIC_LEVELS $path] \
-        [get_property STARTPOINT_PIN $path] [get_property ENDPOINT_PIN $path]]
-}
-close $fp
-report_timing_summary -file timing_summary.rpt
-report_timing -max_paths 10 -nworst 1 -file worst.rpt
-report_timing -from $conv1_cells -to $conv2_cells -max_paths 3 -file conv1_output_to_conv2.rpt
-report_timing -from $conv2_cells -to $conv1_cells -max_paths 3 -file conv2_ready_to_conv1.rpt
-report_utilization -file util.rpt
-report_utilization -hierarchical -hierarchical_depth 2 -file util_hier.rpt
-write_checkpoint -force post_route.dcp
+set conv1_cells [synth_instance_cells conv1]
+set conv2_cells [synth_instance_cells conv2]
+synth_report "version $version period $period" [list \
+    [list conv1_output_to_conv2 $conv1_cells $conv2_cells] \
+    [list conv2_ready_to_conv1  $conv2_cells $conv1_cells] \
+    [list conv1_inside          $conv1_cells $conv1_cells] \
+    [list conv2_inside          $conv2_cells $conv2_cells] \
+]

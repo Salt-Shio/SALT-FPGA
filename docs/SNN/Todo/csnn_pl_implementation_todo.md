@@ -18,24 +18,30 @@
 - Vivado 專案 `SaltNET/`(2026-10-24 從 `SaltConv/` 改名，見 Part 0)：
     - RTL 在 `SaltNET.srcs/sources_1/new/{lib,conv,fc,net}/`，`.mem` 在 `sources_1/mem/`。
     - testbench 在 `sim_1/new/{lib,conv,fc,net}/`，答案檔在各自的 `ref/`。
-    - 模擬、合成腳本在 `SaltNET/scripts/{lib,conv,fc,net}/`，共用流程 `scripts/sim_common.tcl`。
+    - 模擬、合成腳本在 `SaltNET/scripts/{lib,conv,fc,net}/`，共用流程 `scripts/sim_common.tcl`(模擬)、`scripts/synth_common.tcl`(合成，2026-11-14 起)。
 - 讀現行 RTL：`SaltConv.sv` 照事件流程分 0~6 段(檔頭有目錄)。
     - 控制總覽：[`SaltConvOverview.md`](../Concept/Layer-RTL/SaltConvOverview.md)。
     - 逐拍例子、資料流程圖：[`Conv-image/SaltConvControl.md`](../Concept/Layer-RTL/Conv-image/SaltConvControl.md)、[`SaltConvDataflow.md`](../Concept/Layer-RTL/Conv-image/SaltConvDataflow.md)。
     - 設計推導：[`Conv.md`](../Concept/Layer-RTL/Conv.md) 5.5「實作」、5.8。
 - 分支：工作在 `test`，`main` 停在 `5507967`。$o_c$ 重疊 B 做法的實作留在 tag `overlap-b-redo`(`e8c7163`)。
 - FC 層設計 [`FC.md`](../Concept/Layer-RTL/FC.md) 第 1~6 節寫完(第 6 節 2026-11-07 改成膜電位輸出不握手、加層外的暫存器模組與 PS 轉接)；RTL 做完 Part 10(整層管線含 fire、膜電位輸出、層外的 `fc/FCMembraneRegister`、conv → FC 轉接模組 `fc/ConvToFCAdapter`)。
-- 整個網路 `net/SaltConvFCNet`(conv1 → conv2 → 轉接模組 → FC → 膜電位暫存器，Part 11，2026-11-11 做完，使用者確認 2026-11-14)：test 前 10 筆、繞回飽和兩版，每一層每一次更新的 $(t,\hat V)$、每個 spike 跟訓練端逐筆相同。還沒做的：整條的合成量測(Part 12)；整條網路層級沒測到的情況見「Part 11 → 沒測到的」。
+- 整個網路 `net/SaltConvFCNet`(conv1 → conv2 → 轉接模組 → FC → 膜電位暫存器，Part 11，2026-11-11 做完，使用者確認 2026-11-14)：test 前 10 筆、繞回飽和兩版，每一層每一次更新的 $(t,\hat V)$、每個 spike 跟訓練端逐筆相同。整條網路層級沒測到的情況見「Part 11 → 沒測到的」。
+    - 4.8 ns 兩版都過(繞回 +0.301、飽和 +0.179，Part 12，2026-11-14)；BRAM 12.5、DSP 12、LUT 約 1470。
 
-## 交接(2026-11-14)
+## 交接(2026-11-15)
 
+- SaltFC Part 12(合成量測)進行中，細節見下面「Part 12」。
+    - 實際網路 `SaltConvFCNet` 4.8 ns 兩版都過(繞回 +0.301、飽和 +0.179)；合成共用流程抽成 `scripts/synth_common.tcl`，改前改後結果相同。
+    - 極限測試 BRAM 73 顆(50.7%)兩版都過(+0.151、+0.092)，先被吃掉餘裕的是 FC。
+    - 等使用者決定：極限測試要不要補到約 82 顆(多一層 FC 256 → 128)、要不要量最高時脈。
+    - 檔案還沒 commit，清單見「Part 12」最後。
+    - 極限測試的資料要先在 WSL 跑 `scripts/net/gen_salt_stress_net_mem.py`(寫到 `SaltNET.runs/stress_net_mem/`，不進版控)。
 - SaltFC Part 11(整個網路串接比對)完成，使用者確認(2026-11-14)，細節見下面「Part 11」。
     - 頂層 `net/SaltConvFCNet`：conv1 → conv2 → `ConvToFCAdapter` → SaltFC → `FCMembraneRegister`，直接例化，不經過 `SaltConvNet`。
     - 每一層每一次更新的 $(t,\hat V)$、每個 spike、FC 每筆事件之後的 10 顆 $\hat V$ 都跟訓練端逐筆相同：2 支 testbench × 4 組(繞回、飽和 × FC $n_{col}=4$、$n_{col}=1$ 逼出反壓) ALL PASS，反向測試四項都抓到。
     - 答案檔(約 37 MB 兩個)不進 git，跑模擬前先跑 `scripts/net/gen_salt_conv_fc_net_ref.py`。
     - 測到、沒測到的極端情況整理在「Part 11 → 極端情況」(2026-11-11 使用者問)。
-- 下一步：Part 12 合成量測(4.8 ns)，開始前先列這次做什麼、怎麼量、怎麼驗證給使用者確認。
-- 待使用者決定(2026-11-11 提出)：整條網路層級要不要補測。建議補的兩項是整條網路用人工參數逼出繞回、其他管線設定；其餘沒測到的項目已有單層測試，或設計還沒定。
+- 整條網路層級的補測(人工參數逼出繞回、其他管線設定)：使用者決定先不補(2026-11-14)。
 - SaltFC Part 10(conv → FC 轉接模組)完成，使用者確認(2026-11-11)，細節見下面「Part 10」。
     - `fc/ConvToFCAdapter`：conv 輸出存一級事件暫存器，下一拍換成 $\text{src}$；給 conv 的 ready 是「暫存器空的，或下游這拍收」。跟純組合邏輯版量過，只做暫存器版。
     - 單獨模擬兩支各 7 組 ALL PASS，反向測試三項都抓到；4.8 ns 布局繞線(conv2 → 轉接模組 → SaltFC)繞回 +0.333、飽和 +0.379。
@@ -110,7 +116,7 @@
 | 9 | 膜電位輸出：SaltFC 送出、層外暫存器模組 `fc/FCMembraneRegister` | 第 6 節 | 完成 |
 | 10 | conv → FC 轉接模組 `fc/ConvToFCAdapter`(暫存器版) | 第 1 節 | 完成 |
 | 11 | 串接 conv1 → conv2 → 轉接模組 → FC → 膜電位暫存器(`net/SaltConvFCNet`)，每一層每一次更新跟訓練端比對 | — | 完成 |
-| 12 | 合成量測(4.8 ns) | — | 未開始 |
+| 12 | 合成量測(4.8 ns)：實際網路、極限測試(BRAM 約 84 顆) | — | 進行中 |
 
 - 每個 Part 的細節到要做時才規劃。
 
@@ -594,6 +600,35 @@ ceil$。
         - 時間戳記繞回($2^{16}$ ms，處理方式還沒定，見「待決事項 → 系統整合」)。
         - 事件特別密或特別稀的樣本(#1589、#1073、#7596 沒用，只用 test 前 10 筆)。
 - 工具問題(2026-11-11)：`USF-XSIM-95 Failed to open file to read (elaborate.log)` 碰到 2 次(完整跑的 `input_high` 第 1 組、反向測試二的第 2 組 elaborate)，原封不動重跑就過；vivado-usage skill 第 11 節記過同訊息(當時是多個 Vivado 同時開專案)，這次沒有同時開，原因查不到。
+- 整條網路層級的補測(人工參數逼出繞回、其他管線設定)：使用者決定先不補(2026-11-14)，「沒測到的」照列。
+
+### Part 12 合成量測
+
+- 要回答的：整條網路放進同一次布局，4.8 ns 還過不過、最長路徑在哪、總共吃多少資源；之前都是分段量(SaltConvNet、conv2 → 轉接模組 → SaltFC、SaltFC 單層)，分段過不代表整條過。
+- 已定(使用者確認 2026-11-14)：
+    - 量測：`net/SaltConvFCNet`，繞回、飽和各一次，參數同 Part 11 的前兩組(FC $n_{col}=4$、三層 FIFO 16、$R=2,C=2$ 重疊)，4.8 ns。不量 $n_{col}=1$、FIFO 2(只為模擬逼反壓)、其他管線設定、其他週期。
+    - 飽和版 FC 的 `.mem` 用訓練端 `tools/export_fpga.py --fc-cols 4` 匯出到 `sources_1/mem/<飽和版資料夾>/`(選 A；不選合成腳本讀 `sim_1/new/net/ref/`)：每層都從 `quant_versions.txt` 指的資料夾讀。
+    - 合成共用流程抽成 `scripts/synth_common.tcl`(同 `sim_common.tcl` 的分法)，`synth_salt_conv_net.tcl` 跟著改；改前改後同一份 RTL 各跑兩版，`info.txt`、utilization 要逐行相同。
+    - 極限測試(使用者 2026-11-14 加的)：BRAM 用到約 84 顆(假設 144 顆裡有 60 顆給別的電路，±5 顆)時 4.8 ns 還剩多少餘裕。
+        - 不擋 BRAM 位置，讓工具從 144 顆裡挑；占掉那 60 顆的電路用到的 LUT、繞線沒模擬，結果偏樂觀。
+        - 網路：conv1 → conv2 → conv3(16 通道 K3 S2 P0，輸出 4×4)→ 轉接模組 → FC1(256 → 512，fire)→ FC2(512 → 256，fire)→ FC 輸出層(256 → 10，不 fire)→ 膜電位暫存器。多一層 conv 縮小攤平寬度是使用者提的；兩層隱藏讓最大一顆權重記憶體約 29 顆 BRAM，不是一顆跨七十顆(結果沒過時分不出是互搶還是 FC 結構)。
+        - 三層 FC $n_{col}=4$(agent 定)：跟量過的輸出層同一種控制寬度，每層 FC 的時序能跟 Part 8、9 的單層量測比；代價是每筆事件 FC1 128 拍、FC2 64 拍，不影響時序量測。
+        - 權重、門檻用固定 seed 的亂數(用真的權重可能被內容修剪，Part 8 的門檻 BRAM 56 根輸出腳只接 8 根)，訓練端的打包函式寫 `.mem`；衰減表借訓練端現有的(conv3 借 conv2、FC1/FC2 借輸出層)。新層 $i_V$ 同 conv2(繞回 14、飽和 11)，繞回、飽和各一次。
+        - 先只合成看 BRAM 數，不在 79~89 就調 FC1 的輸出寬度，落在範圍內才布局繞線。只合成、不模擬，FC 接 FC 在模擬裡沒跑過(使用者 OK)。
+        - Part 7 留的「`FCSpikeSelect` 合成量測 Part 12 一起量」：FC1、FC2 會 fire，在極限測試裡量到。
+- 做了什麼(2026-11-14；數字、路徑、各層資源都整理在 [`SaltConvSynthFlow.md`](../Concept/Layer-RTL/SaltConvSynthFlow.md)「量測結果」，這裡只記結論)：
+    - 飽和版 `out_weight.mem`、`out_decay.mem` 匯出：conv 6 個檔跟 HEAD 逐 byte 相同，FC 2 個檔跟 Part 11 testbench 用的相同；訓練端 `git status` 不變。
+    - `scripts/synth_common.tcl` 抽出，`synth_salt_conv_net.tcl` 改寫：改前改後兩版報告除了表頭逐行相同，結果跟 10/27 相同(繞回 +0.281、飽和 +0.205)。
+    - 實際網路 `SaltConvFCNet`(`synth_salt_conv_fc_net.tcl`)4.8 ns：繞回 +0.301、飽和 +0.179，兩版都過；最長路徑在 conv 層內，跟兩層串接同一類；BRAM 12.5、DSP 12。讀權重位址 +1.18 以上，Part 4b 的位址暫存器不用做。
+    - 極限測試(`SaltStressNet.sv`、`gen_salt_stress_net_mem.py`、`synth_salt_stress_net.tcl`)：
+        - 原定「調 FC1 輸出寬度補到 79~89」行不通：Vivado 把唯讀記憶體深度補到 2 的次方，FC1 = 512 時 BRAM 總數 73，576 時 129(兩顆串接、讀出暫存器併不進去)，中間沒有。
+        - FC2 的 $n_{in}=576$ 時位址乘法合成成 DSP，`synth_common.tcl` 的 DONT_TOUCH 檢查改成只看 `NeuronUpdate` 的 DSP。
+        - 使用者決定(2026-11-14)：不強制到 84，先布局 73 顆那版。
+        - 73 顆(BRAM 50.7%)4.8 ns：繞回 +0.151、飽和 +0.092，兩版都過。整體比實際網路少 0.15 / 0.09(在 ±0.2 變動內)；掉得超過變動範圍的兩處都在 FC(輸出層衰減乘法路徑繞線變長、停住訊號拉到 28 顆權重 BRAM)，conv 幾乎沒變。布局時搬出 14、16 顆 BRAM 的輸出暫存器(實際網路沒搬)。
+- 待使用者決定(2026-11-14 提出)：
+    - 極限測試要不要補到約 82 顆：FC2 後面多一層 FC 256 → 128(權重 8192 字，剛好 2 的次方，約 +9 顆)。其他做法比過：FC1、FC2 改 $n_{col}=5$(約 87，控制寬度沒量過)、conv1 改 32 通道(約 85，神經元記憶體可能串接，在 conv1 最長路徑上)。
+    - 要不要量最高時脈(照 UG949 用更緊的週期多跑幾次)：只跑 4.8 ns 一次只能說過不過、大概剩多少。
+- Part 12 的檔案還沒 commit：`synth_common.tcl`、`synth_salt_conv_net.tcl`(改)、`synth_salt_conv_fc_net.tcl`、`SaltStressNet.sv`、`gen_salt_stress_net_mem.py`、`synth_salt_stress_net.tcl`、飽和版 `out_*.mem`、`SaltConvSynthFlow.md`、這份 TODO。
 
 ## 延後、擱著的項目
 
@@ -681,7 +716,7 @@ ceil$。
 
 ### 合成量測
 
-- 流程、參數、量測結果都在 [`SaltConvSynthFlow.md`](../Concept/Layer-RTL/SaltConvSynthFlow.md)：兩層串接用 `SaltNET/scripts/net/synth_salt_conv_net.tcl`，比較做法時的單層量測見「比較做法時的量測(單層)」。
+- 流程、參數、量測結果都在 [`SaltConvSynthFlow.md`](../Concept/Layer-RTL/SaltConvSynthFlow.md)：共用流程 `SaltNET/scripts/synth_common.tcl`；兩層串接 `synth_salt_conv_net.tcl`、整條網路 `synth_salt_conv_fc_net.tcl`、極限測試 `synth_salt_stress_net.tcl`(都在 `scripts/net/`)；比較做法時的單層量測見「比較做法時的量測(單層)」。
 - 目標固定 5 ns，跑 4.8 ns 看過不過，不掃最高時脈。
 
 ## 已定案設計
