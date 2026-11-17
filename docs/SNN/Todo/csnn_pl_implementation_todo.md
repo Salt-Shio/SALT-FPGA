@@ -28,8 +28,11 @@
 - 整個網路 `net/SaltConvFCNet`(conv1 → conv2 → 轉接模組 → FC → 膜電位暫存器，Part 11，2026-11-11 做完，使用者確認 2026-11-14)：test 前 10 筆、繞回飽和兩版，每一層每一次更新的 $(t,\hat V)$、每個 spike 跟訓練端逐筆相同。整條網路層級沒測到的情況見「Part 11 → 沒測到的」。
     - 4.8 ns 兩版都過(繞回 +0.301、飽和 +0.179，Part 12，2026-11-14)；BRAM 12.5、DSP 12、LUT 約 1470。
 
-## 交接(2026-11-15)
+## 交接(2026-11-17)
 
+- 時間處理(µs 換 ms、時間戳記繞回)實作中，細節見下面「時間處理」。
+    - T1 µs 換 ms 模組 `lib/MicrosecondToMillisecond` 完成(使用者確認 2026-11-17)：3 組 ALL PASS、反向測試三項都抓到、4.8 ns 單獨量 +2.847。
+    - T2~T5(繞回)的步驟、順序使用者確認；下一步 T2，第一個要討論的是掃描要不要用參數開關。
 - SaltFC Part 12(合成量測)進行中，細節見下面「Part 12」。
     - 實際網路 `SaltConvFCNet` 4.8 ns 兩版都過(繞回 +0.301、飽和 +0.179)；合成共用流程抽成 `scripts/synth_common.tcl`，改前改後結果相同。
     - 極限測試 BRAM 73 顆(50.7%)兩版都過(+0.151、+0.092)，先被吃掉餘裕的是 FC。
@@ -630,6 +633,62 @@ ceil$。
     - 要不要量最高時脈(照 UG949 用更緊的週期多跑幾次)：只跑 4.8 ns 一次只能說過不過、大概剩多少。
 - Part 12 的檔案還沒 commit：`synth_common.tcl`、`synth_salt_conv_net.tcl`(改)、`synth_salt_conv_fc_net.tcl`、`SaltStressNet.sv`、`gen_salt_stress_net_mem.py`、`synth_salt_stress_net.tcl`、飽和版 `out_*.mem`、`SaltConvSynthFlow.md`、這份 TODO。
 
+## 時間處理
+
+- 起因：「待決事項 → 系統整合」的 µs 換 ms(電路 2026-11-15 定案)跟時間戳記繞回(方向 2026-11-15 定了)；使用者 2026-11-16 要實作。
+- 跟 SaltFC 一樣每一步過目確認才進下一步。
+
+| 步驟 | 內容 | 狀態 |
+|---|---|---|
+| T1 | µs 換 ms 模組 `lib/MicrosecondToMillisecond` | 完成(使用者確認 2026-11-17) |
+| T2 | 頂層存「現在」(conv1 每收進一筆就更新)，SaltConv、SaltFC 多一個 `current_time` 輸入 | 下一步 |
+| T3 | SaltConv 的掃描(刻度、位址、等事件寫回再掃、每個 bank 判斷、寫 0 共用清除路徑) | 還沒做 |
+| T4 | SaltFC 的過期位元 | 還沒做 |
+| T5 | `SaltConvFCNet` 開掃描量 4.8 ns | 還沒做 |
+
+- 步驟、順序使用者 2026-11-17 確認；每一步的設計細節到要做時再一個一個討論。
+
+- T3、T4 的驗證(agent 提案)：`TIME_WIDTH` 設小(例如 12)，門檻、刻度跟著縮；好幾筆 N-MNIST 接成一條不 reset 的長串流逼它繞回，答案由訓練端用完整時間算；反向測試把掃描關掉。訓練端官方 forward 吃不吃得下長串流還沒查。
+- agent 建議加一個參數開關掃描：關掉時電路跟現在相同，舊的 testbench 只要接上新 port。
+
+### T1 µs 換 ms
+
+- 已定(使用者 2026-11-16)：同一筆事件的其他欄位(接相機時是 $x$、$y$、極性)跟著時間一級一級往後推，出來時跟 ms 對齊(參數 `PAYLOAD_WIDTH`)。
+    - 不選只算時間：轉接模組要自己做延遲線、要知道裡面有幾級、在哪幾拍停住，改級數時兩個模組一起改。
+    - 名字 `lib/MicrosecondToMillisecond`:跟哪一層都無關，放 lib 不用改 `sim_common.tcl`。
+- RTL(`sources_1/new/lib/MicrosecondToMillisecond.sv`)：
+    - 參數 `TIME_WIDTH`(輸出位寬，1~25)、`PAYLOAD_WIDTH`(至少 1，沒有其他欄位時給 1、接 0)、`PRODUCT_STAGES`(乘法後幾級，預設 3)；輸入固定 34 位元 µs(`EvtDecoder` 的時間欄位)。
+    - 管線：輸入暫存器存 $x'=\lfloor t/8\rfloor$ → 乘 274877907(DSP)→ `PRODUCT_STAGES` 級乘積暫存器，取第 35 位起；延遲 1 + `PRODUCT_STAGES` 拍。
+    - 交握：下游不收(`out_valid && !out_ready`)時整條停住，每一級保持；`in_ready` = 沒停住，從 `out_ready` 經過 1 級 LUT。
+    - 停住時不補空格(agent 寫 RTL 時選的，使用者 2026-11-17 同意)：
+        - 補空格只差在下游停住時，管線裡有幾個空格就多收幾筆(最多 3 筆，看當時有幾個空格，不固定)；下游一直收時都是每拍一筆、延遲 4 拍，平均吞吐量都由下游決定。
+        - 要多緩衝，conv1 的 `FIFO_DEPTH` 加 3 格效果一樣而且固定；接相機時 `EvtDecoder` 不能被擋太久是 conv1 每秒吃得下幾筆的問題(「待決事項 → 系統整合」反壓)，多 3 格解決不了。
+        - 補空格每一級要有自己的開關(`out_ready`，或這一級到最後一級有空格)，乘積暫存器開關不同時還推不推得進 DSP 沒量過。
+        - SaltConv、SaltFC 的管線也是停住時整條不動(`pipe_valid` 只在 `!stall` 時往後推)，跟它們一致。
+    - 每一級的開關都是「往後推」，資料不看 valid 也存：乘積暫存器才併得進 DSP。
+- 答案：訓練端的 µs 換 ms 寫在讀 N-MNIST 檔的函式裡(`data/src/nmnist.py`，23 位元)，沒有能單獨叫的函式；testbench 用 64 位元整數除法自己算，同 `tb_event_fifo` 自帶模型，不讀答案檔。
+- testbench(`sim_1/new/lib/tb_microsecond_to_millisecond.sv`，`scripts/lib/run_tb_microsecond_to_millisecond.tcl`)：
+    - 情況：上下游都隨機交握(上游每拍 7 成機率開始送、送了保持到被收；下游每拍 7 成機率收)。
+    - 輸入 16018 筆：邊界 18 筆(0 附近、1000 前後、65,536 ms 前後、最大的 1000 倍數前後、34 位元最大值)、1000 的倍數前後一格 6000 筆、34 位元隨機 1 萬筆；payload 每筆隨機。
+    - 檢查：每筆輸出照順序等於 $\lfloor t/1000\rfloor$ 的低 `TIME_WIDTH` 位、payload 相同；上一拍沒被收的輸出這一拍不能變；`out_ready=1` 時 `in_ready` 要是 1;最後全部都出來。
+    - 參數組：(`TIME_WIDTH`, `PAYLOAD_WIDTH`, `PRODUCT_STAGES`) = (16, 23, 3) 實際設定、(16, 23, 1)、(25, 1, 5) 完整的商。
+- 驗證(2026-11-16)：
+    - 3 組 ALL PASS(每組約 2.8 萬拍、4.2 萬次檢查)；compile 沒有警告。
+    - 反向測試(做完還原，跟備份逐 byte 相同)：
+        - 常數改成往下取整(274877906)：3 組都 FAIL，每組 4364 筆錯，第一筆在 $t$=1000(應該 1，算出 0)。
+        - payload 不走乘積暫存器(直接接輸入暫存器)：3 組都 FAIL，payload 跟時間錯開。
+        - 拿掉停住(一律往後推)：3 組都 FAIL，「上一拍沒被收的輸出變了」抓到。
+- 單獨量 4.8 ns(2026-11-16，scratchpad 量完已刪；流程同 `synth_common.tcl`：out-of-context、埠延遲 0、DSP 設 `DONT_TOUCH`、預設指令，布局後)：
+
+    | `PAYLOAD_WIDTH` | 4.8 ns 餘裕 | LUT | 其中 SRL | FF | DSP |
+    |---|---|---|---|---|---|
+    | 1 | +2.847 | 2 | 1 | 6 | 4 |
+    | 23 | +2.847 | 16 | 15 | 50 | 4 |
+
+    - 乘法、時序跟 11-15 沒有 payload 的量測相同(DSP 4 顆、+2.847，最長路徑在 DSP 內)。
+    - payload 每個位元 4 級：中間兩級 Vivado 做成 SRL16E(LUT 當移位暫存器)，頭尾兩級是 FF，所以 23 位元是 23 個 SRL(放在 15 個 LUT)加 46 個 FF，不是 4 × 23 個 FF。
+    - 單獨量、各跑一次；接進轉接模組、整條網路後餘裕會變小。
+
 ## 延後、擱著的項目
 
 | 編號 | 項目 | 什麼時候處理 |
@@ -682,7 +741,7 @@ ceil$。
             - 輸入 34 位元 µs(`EvtDecoder` 時間的完整範圍)，右移後 31 位元，乘積 60 位元；完整的商最大 17179869(25 位元)，留低 16 位元。
             - 常數多出來的誤差 $7x' < 2^{35}$($x'<2^{31}$)，34 位元的所有輸入都等於 $\lfloor t/1000\rfloor$。
             - 單獨量：DSP 4 顆、FF 4、LUT 1，延遲 4 拍、每拍收一筆，4.8 ns 餘裕 +2.847(量測見下面的表)。
-        - 有自己的管線跟 valid，照「有邏輯才包模組」另開一個模組；放哪個資料夾、名字還沒定。
+        - 有自己的管線跟 valid，照「有邏輯才包模組」另開一個模組：做成 `lib/MicrosecondToMillisecond`(2026-11-16，見「時間處理 → T1」)。
         - GenX320 不能改時間單位(2026-11-15 查)：Prophesee EVT 2.1 文件只寫 µs、34 位元；openeb 暫存器表 `ro/time_base_ctrl` 有 7 位元的 `us_counter_max`(openeb 寫 25，註解「Core clock is 25 MHz」)，官方沒有說明，照名字推是「幾個時脈算 1 µs」；要讓 1 ms 剛好 $2^k$ 格，一格要 $25000/2^k$ 個時脈，最多除到 8 得 3125，超過上限 127。
         - 網路上的做法(2026-11-15 查)：主流是乘倒數(MathWorks HDL Coder 文件)；查表法(de Dinechin 等)每步的表輸入是餘數加這步吃的位元，作者寫「Efficient for small constants only」，除 125 的餘數就 7 位元，超過 LUT6；UG901 Table 7-9 列 `/` 為 Supported，沒寫電路。
         - 四種做法單獨量(2026-11-15，scratchpad 量完已刪)：testbench 邊界值、1000 的倍數前後一格、隨機 1 萬筆共 16219 筆，上下游隨機交握，全部跟 $\lfloor t/1000\rfloor$ 的低 16 位元相同；反向測試把常數改成往下取整，4437 筆抓到。合成流程同 `synth_common.tcl`(out-of-context、埠延遲 0、DSP 設 `DONT_TOUCH`、預設指令)，4.8 ns 各跑一次布局繞線，數字是布局後：
@@ -710,7 +769,7 @@ ceil$。
         - PS 還要不要收相機事件：GENX320 定的是 `EvtDecoder` 只輸出一條串流接 AXI DMA，要接 CSNN 時重新接線。同時給 PS 跟 conv1 要分兩路，兩邊的 ready 怎麼合要另外想。
 - PS → PL → PS 的系統檢查路徑(使用者 2026-11-15 提)：PS 送訓練端的事件(N-MNIST)進 PL 的網路，PL 把輸出送回 PS 看答案，確認整個系統串得起來。還沒設計，不卡 `EvtDecoder → conv1` 轉接模組。
     - 跟轉接模組的關係：PS 用 `EvtDecoder` 同一種 64 位元排法送，就能經過同一個轉接模組；N-MNIST 原始資料是 µs，硬體的 µs 換 ms 也會跟訓練端一起比到。談這條路徑時再定。
-- 時間戳記繞回(2026-11-15 討論；方向定了，什麼時候做還沒定，agent 建議等正式專案接相機連續跑時再規劃成一個 Part)：
+- 時間戳記繞回(2026-11-15 討論、方向定了；使用者 2026-11-16 決定現在做，實作見「時間處理」T2~T5)：
     - 1 問題：
         - 時間只有 `TIME_WIDTH` = 16 位元，只能存 0~65,535 ms，再往上從 0 數：65,536 存成 0，66,540 存成 1,004。
         - 硬體用時間只做一件事：每次更新算 $\Delta t$ = 這次時間 − 上次更新時間($t_{last}$)；$\Delta t$ 超過 75 時電位直接歸零。
@@ -782,7 +841,7 @@ ceil$。
         - SaltFC：一個位元，跟著事件的每一列帶下去。
         - `DecayLookup` 不用改(現在用 `TIME_WIDTH` 位元無號減法算 $\Delta t$)。
     - 12 還沒決定的：
-        - 什麼時候做(agent 建議等正式專案要連續跑時)。
+        - 什麼時候做：使用者 2026-11-16 決定現在做(「時間處理」)。
         - 模組怎麼分、名字。
         - 怎麼驗證：模擬不可能真的跑 65 秒，大概要把 `TIME_WIDTH` 設小，門檻、刻度跟著縮，逼它很快繞回。
         - 一次掃幾格的預設值。
