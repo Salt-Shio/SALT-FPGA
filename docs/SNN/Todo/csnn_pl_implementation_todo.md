@@ -28,11 +28,13 @@
 - 整個網路 `net/SaltConvFCNet`(conv1 → conv2 → 轉接模組 → FC → 膜電位暫存器，Part 11，2026-11-11 做完，使用者確認 2026-11-14)：test 前 10 筆、繞回飽和兩版，每一層每一次更新的 $(t,\hat V)$、每個 spike 跟訓練端逐筆相同。整條網路層級沒測到的情況見「Part 11 → 沒測到的」。
     - 4.8 ns 兩版都過(繞回 +0.301、飽和 +0.179，Part 12，2026-11-14)；BRAM 12.5、DSP 12、LUT 約 1470。
 
-## 交接(2026-11-17)
+## 交接(2026-11-18)
 
 - 時間處理(µs 換 ms、時間戳記繞回)實作中，細節見下面「時間處理」。
     - T1 µs 換 ms 模組 `lib/MicrosecondToMillisecond` 完成(使用者確認 2026-11-17)：3 組 ALL PASS、反向測試三項都抓到、4.8 ns 單獨量 +2.847。
-    - T2~T5(繞回)的步驟、順序使用者確認；下一步 T2，第一個要討論的是掃描要不要用參數開關。
+    - T2~T5(繞回)的步驟、順序使用者確認。
+    - T2「現在」完成(使用者確認 2026-11-18)：頂層存 conv1 最新收進的事件時間，SaltConv、SaltFC 多 `current_time` port(還沒用到)；合成改前改後逐行相同，改到的 testbench 部分參數組 ALL PASS。
+    - 下一步 T3(SaltConv 的掃描)，第一個要討論的是刻度間隔怎麼定。
 - SaltFC Part 12(合成量測)進行中，細節見下面「Part 12」。
     - 實際網路 `SaltConvFCNet` 4.8 ns 兩版都過(繞回 +0.301、飽和 +0.179)；合成共用流程抽成 `scripts/synth_common.tcl`，改前改後結果相同。
     - 極限測試 BRAM 73 顆(50.7%)兩版都過(+0.151、+0.092)，先被吃掉餘裕的是 FC。
@@ -641,8 +643,8 @@ ceil$。
 | 步驟 | 內容 | 狀態 |
 |---|---|---|
 | T1 | µs 換 ms 模組 `lib/MicrosecondToMillisecond` | 完成(使用者確認 2026-11-17) |
-| T2 | 頂層存「現在」(conv1 每收進一筆就更新)，SaltConv、SaltFC 多一個 `current_time` 輸入 | 下一步 |
-| T3 | SaltConv 的掃描(刻度、位址、等事件寫回再掃、每個 bank 判斷、寫 0 共用清除路徑) | 還沒做 |
+| T2 | 頂層存「現在」(conv1 每收進一筆就更新)，SaltConv、SaltFC 多一個 `current_time` 輸入 | 完成(使用者確認 2026-11-18) |
+| T3 | SaltConv 的掃描(刻度、位址、等事件寫回再掃、每個 bank 判斷、寫 0 共用清除路徑) | 下一步 |
 | T4 | SaltFC 的過期位元 | 還沒做 |
 | T5 | `SaltConvFCNet` 開掃描量 4.8 ns | 還沒做 |
 
@@ -688,6 +690,22 @@ ceil$。
     - 乘法、時序跟 11-15 沒有 payload 的量測相同(DSP 4 顆、+2.847，最長路徑在 DSP 內)。
     - payload 每個位元 4 級：中間兩級 Vivado 做成 SRL16E(LUT 當移位暫存器)，頭尾兩級是 FF，所以 23 位元是 23 個 SRL(放在 15 個 LUT)加 46 個 FF，不是 4 × 23 個 FF。
     - 單獨量、各跑一次；接進轉接模組、整條網路後餘裕會變小。
+
+### T2 「現在」
+
+- 已定(使用者 2026-11-17)：
+    - 「現在」= conv1 輸入握手成功那一拍的 `in_time`，reset 歸 0；直接寫在頂層，不另外包模組(8 行；接相機的頂層要看轉接模組的輸入握手，連 ROI 外的事件都算，每個頂層更新它的訊號不同)。
+    - SaltConv、SaltFC 多一個輸入 port `current_time`；T2 只接線，T3、T4 才用。
+    - 掃描開關用參數 `STALE_CLEAR`(SaltConv、SaltFC 同名)，在 T3 跟掃描邏輯一起加：關掉時電路跟現在相同；`tb_salt_conv_ready_high` 比對精確拍數，舊的 testbench 只能跑「關」。
+- RTL(2026-11-17)：
+    - `SaltConv.sv`、`SaltFC.sv`：`rst_n` 後面加 `current_time`(`TIME_WIDTH` 位元)，註明目前沒有用到。
+    - `SaltConvFCNet.sv`、`scripts/net/SaltStressNet.sv`：第 1 段改成「conv1、「現在」」，「現在」暫存器跟 conv1 互相依賴(conv1 用它，它看 conv1 的 `in_ready`)，照排版規則放同一段；每個 SaltConv、SaltFC 例化接 `current_time`。`SaltConvNet.sv` 沒有分段，暫存器放在 conv1 前面。
+    - `tb_salt_conv_common.svh`、`tb_salt_fc_common.svh`、`tb_salt_fc_no_spike.sv`(`dut (.*)` 隱式連接)：宣告 `current_time`、接 0。
+- 驗證(2026-11-17，行為不變，照「作法 → 驗證」的範圍，不做反向測試)：
+    - `SaltConvFCNet` 只合成，繞回、飽和兩版：改前改後 `util_synth.rpt`(去掉表頭)、`bram_regs.txt` 逐行相同(暫存器 859 / 817、BRAM 12.5、DSP 12)。多的警告只有 SaltConv、SaltFC 的 `current_time` 沒有負載(Synth 8-7129)。
+    - 模擬：`tb_salt_conv_ready_high` R2C2 重疊 10 組、`tb_salt_fc_ready_high` R2C2 重疊 7 組、`tb_salt_fc_no_spike` 72 組、`tb_salt_conv_net_ready_high` 2 組、`tb_salt_conv_fc_net_input_high` $n_{col}=4$ 2 組，全部 ALL PASS(含 conv 的拍數比對)。
+        - `tb_salt_conv_ready_high` 10 組的總結行都是 ALL PASS，最後印總表的 `puts` 報 `can not find channel named "stdout"`、exit 1，同「交接 → 工具問題」記過的偶發情況，沒有重跑。
+    - `SaltStressNet` 不在專案裡：跟 lib、conv、fc 的 RTL 一起 xvlog + xelab，展開成功、沒有錯誤或警告(只合成用，沒有資料檔，不合成)。
 
 ## 延後、擱著的項目
 

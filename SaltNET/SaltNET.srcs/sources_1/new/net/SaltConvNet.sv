@@ -94,6 +94,18 @@ module SaltConvNet #(
 	output logic [TIME_WIDTH-1:0]        out_time
 );
 
+	// 「現在」:conv1 最新收進的事件時間,兩層都拿來判斷神經元多久沒更新。
+	// 跟 conv1 互相依賴(conv1 用它,它看 conv1 的 in_ready),放在 conv1 前面
+	logic [TIME_WIDTH-1:0] current_time;
+
+	always_ff @(posedge clk or negedge rst_n) begin
+		if (!rst_n) begin
+			current_time <= '0;
+		end else if (in_valid && in_ready) begin
+			current_time <= in_time;
+		end
+	end
+
 	// conv1 → conv2
 	logic                           conv1_out_valid;
 	logic                           conv1_out_ready;
@@ -129,20 +141,21 @@ module SaltConvNet #(
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
 		.OVERLAP            (OVERLAP)
 	) conv1 (
-		.clk        (clk),
-		.rst_n      (rst_n),
-		.in_valid   (in_valid),
-		.in_ready   (in_ready),
-		.in_x       (in_x),
-		.in_y       (in_y),
-		.in_channel (in_channel),
-		.in_time    (in_time),
-		.out_valid  (conv1_out_valid),
-		.out_ready  (conv1_out_ready),
-		.out_x      (conv1_out_x),
-		.out_y      (conv1_out_y),
-		.out_channel(conv1_out_channel),
-		.out_time   (conv1_out_time)
+		.clk         (clk),
+		.rst_n       (rst_n),
+		.current_time(current_time),
+		.in_valid    (in_valid),
+		.in_ready    (in_ready),
+		.in_x        (in_x),
+		.in_y        (in_y),
+		.in_channel  (in_channel),
+		.in_time     (in_time),
+		.out_valid   (conv1_out_valid),
+		.out_ready   (conv1_out_ready),
+		.out_x       (conv1_out_x),
+		.out_y       (conv1_out_y),
+		.out_channel (conv1_out_channel),
+		.out_time    (conv1_out_time)
 	);
 
 	SaltConv #(
@@ -172,20 +185,21 @@ module SaltConvNet #(
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
 		.OVERLAP            (OVERLAP)
 	) conv2 (
-		.clk        (clk),
-		.rst_n      (rst_n),
-		.in_valid   (conv1_out_valid),
-		.in_ready   (conv1_out_ready),
-		.in_x       (conv1_out_x),
-		.in_y       (conv1_out_y),
-		.in_channel (conv1_out_channel),
-		.in_time    (conv1_out_time),
-		.out_valid  (out_valid),
-		.out_ready  (out_ready),
-		.out_x      (out_x),
-		.out_y      (out_y),
-		.out_channel(out_channel),
-		.out_time   (out_time)
+		.clk         (clk),
+		.rst_n       (rst_n),
+		.current_time(current_time),
+		.in_valid    (conv1_out_valid),
+		.in_ready    (conv1_out_ready),
+		.in_x        (conv1_out_x),
+		.in_y        (conv1_out_y),
+		.in_channel  (conv1_out_channel),
+		.in_time     (conv1_out_time),
+		.out_valid   (out_valid),
+		.out_ready   (out_ready),
+		.out_x       (out_x),
+		.out_y       (out_y),
+		.out_channel (out_channel),
+		.out_time    (out_time)
 	);
 
 endmodule

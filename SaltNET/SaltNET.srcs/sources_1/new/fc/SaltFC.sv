@@ -78,6 +78,10 @@ module SaltFC #(
 	input  logic clk,
 	input  logic rst_n,   // active-low,同步釋放;釋放後先把神經元記憶體逐位址清 0,清完才拉高 in_ready
 
+	// 「現在」:網路最新收進的事件時間,頂層給,判斷神經元多久沒更新(docs/SNN/Todo「待決事項 → 系統整合」時間戳記繞回)。
+	// 目前還沒有用到,時間處理 T4 接上
+	input  logic [TIME_WIDTH-1:0] current_time,
+
 	// 輸入事件 (src, t)(分離欄位,valid/ready 握手);FC 接 FC 時接上一層同名的 out_ 欄位
 	input  logic                       in_valid,
 	output logic                       in_ready,

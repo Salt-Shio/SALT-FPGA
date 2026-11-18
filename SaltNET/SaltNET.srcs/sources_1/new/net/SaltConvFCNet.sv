@@ -17,7 +17,7 @@
 //   rst_n 全部共用,各層各自清自己的神經元記憶體;上一層先清完時,輸出會被下一層的 in_ready=0 擋住。
 //
 //   檔案照事件的流程由上往下排:
-//     1 conv1
+//     1 conv1、「現在」(conv1 最新收進的事件時間,接給每一層)
 //     2 conv2
 //     3 conv2 → FC 轉接
 //     4 FC
@@ -113,8 +113,20 @@ module SaltConvFCNet #(
 );
 
 	// ===============================================================
-	// 1 conv1
+	// 1 conv1、「現在」
 	// ===============================================================
+	// 「現在」:conv1 最新收進的事件時間,每一層都拿來判斷神經元多久沒更新。
+	// 跟 conv1 互相依賴(conv1 用它,它看 conv1 的 in_ready),放同一段
+	logic [TIME_WIDTH-1:0] current_time;
+
+	always_ff @(posedge clk or negedge rst_n) begin
+		if (!rst_n) begin
+			current_time <= '0;
+		end else if (in_valid && in_ready) begin
+			current_time <= in_time;
+		end
+	end
+
 	logic                           conv1_out_valid;
 	logic                           conv1_out_ready;
 	logic [CONV1_X_WIDTH-1:0]       conv1_out_x;
@@ -149,20 +161,21 @@ module SaltConvFCNet #(
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
 		.OVERLAP            (OVERLAP)
 	) conv1 (
-		.clk        (clk),
-		.rst_n      (rst_n),
-		.in_valid   (in_valid),
-		.in_ready   (in_ready),
-		.in_x       (in_x),
-		.in_y       (in_y),
-		.in_channel (in_channel),
-		.in_time    (in_time),
-		.out_valid  (conv1_out_valid),
-		.out_ready  (conv1_out_ready),
-		.out_x      (conv1_out_x),
-		.out_y      (conv1_out_y),
-		.out_channel(conv1_out_channel),
-		.out_time   (conv1_out_time)
+		.clk         (clk),
+		.rst_n       (rst_n),
+		.current_time(current_time),
+		.in_valid    (in_valid),
+		.in_ready    (in_ready),
+		.in_x        (in_x),
+		.in_y        (in_y),
+		.in_channel  (in_channel),
+		.in_time     (in_time),
+		.out_valid   (conv1_out_valid),
+		.out_ready   (conv1_out_ready),
+		.out_x       (conv1_out_x),
+		.out_y       (conv1_out_y),
+		.out_channel (conv1_out_channel),
+		.out_time    (conv1_out_time)
 	);
 
 	// ===============================================================
@@ -202,20 +215,21 @@ module SaltConvFCNet #(
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
 		.OVERLAP            (OVERLAP)
 	) conv2 (
-		.clk        (clk),
-		.rst_n      (rst_n),
-		.in_valid   (conv1_out_valid),
-		.in_ready   (conv1_out_ready),
-		.in_x       (conv1_out_x),
-		.in_y       (conv1_out_y),
-		.in_channel (conv1_out_channel),
-		.in_time    (conv1_out_time),
-		.out_valid  (conv2_out_valid),
-		.out_ready  (conv2_out_ready),
-		.out_x      (conv2_out_x),
-		.out_y      (conv2_out_y),
-		.out_channel(conv2_out_channel),
-		.out_time   (conv2_out_time)
+		.clk         (clk),
+		.rst_n       (rst_n),
+		.current_time(current_time),
+		.in_valid    (conv1_out_valid),
+		.in_ready    (conv1_out_ready),
+		.in_x        (conv1_out_x),
+		.in_y        (conv1_out_y),
+		.in_channel  (conv1_out_channel),
+		.in_time     (conv1_out_time),
+		.out_valid   (conv2_out_valid),
+		.out_ready   (conv2_out_ready),
+		.out_x       (conv2_out_x),
+		.out_y       (conv2_out_y),
+		.out_channel (conv2_out_channel),
+		.out_time    (conv2_out_time)
 	);
 
 	// ===============================================================
@@ -279,6 +293,7 @@ module SaltConvFCNet #(
 	) fc (
 		.clk              (clk),
 		.rst_n            (rst_n),
+		.current_time     (current_time),
 		.in_valid         (fc_in_valid),
 		.in_ready         (fc_in_ready),
 		.in_neuron        (fc_in_neuron),

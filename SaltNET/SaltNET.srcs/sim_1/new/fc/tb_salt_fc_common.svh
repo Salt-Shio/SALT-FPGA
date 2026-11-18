@@ -100,6 +100,7 @@
 
 	logic clk;
 	logic rst_n;
+	logic [TIME_WIDTH-1:0]                     current_time;   // 「現在」:SaltFC 目前沒有用到(時間處理 T4 接上),接 0
 	logic                                      in_valid;
 	logic                                      in_ready;
 	logic [IN_NEURON_WIDTH-1:0]                in_neuron;
@@ -136,6 +137,8 @@
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
 		.OVERLAP            (OVERLAP)
 	) dut (.*);
+
+	assign current_time = '0;
 
 	initial clk = 1'b0;
 	always #(CLOCK_PERIOD / 2) clk = ~clk;
