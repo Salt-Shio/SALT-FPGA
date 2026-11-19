@@ -7,8 +7,9 @@
 //   輸出 decay_code 接 NeuronUpdate 的同名 port。
 //     conv 每顆神經元有自己的 t_last,每個 bank 一份,跟 NeuronUpdate 一對一。
 //     FC 整層共用 t_last,一列只要 1 份,n_col 份 NeuronUpdate 共用它的 decay_code。
-//   Δt 用 TIME_WIDTH 位元無號減法:event_time < last_time 只會在時間戳記繞回時發生,
-//   繞回怎麼處理還沒定,這時 Δt 是 mod 2^TIME_WIDTH 的值。
+//   Δt 用 TIME_WIDTH 位元無號減法,得到 mod 2^TIME_WIDTH 的值:真實間隔小於 2^TIME_WIDTH 時就是真實的 Δt。
+//   隔更久才更新的神經元由上層處理(docs/SNN/Todo「時間處理」):conv 的掃描(SaltConv STALE_CLEAR)事先把它寫 0,
+//   電位 0 時 Δt 算成多少結果都一樣。
 //   衰減表用 $readmemh 從 DECAY_FILE 載入,檔案格式見 Conv.md 第 3 節 ① 的「檔案格式」;
 //   每一份 DecayLookup 各有一份,讀取是組合邏輯。
 //////////////////////////////////////////////////////////////////////////////////

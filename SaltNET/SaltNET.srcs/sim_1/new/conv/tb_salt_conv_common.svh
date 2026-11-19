@@ -107,7 +107,7 @@
 
 	logic clk;
 	logic rst_n;
-	logic [TIME_WIDTH-1:0]        current_time;   // 「現在」:SaltConv 目前沒有用到(時間處理 T3 接上),接 0
+	logic [TIME_WIDTH-1:0]        current_time;   // 「現在」:只有掃描用,這裡 STALE_CLEAR = 0(預設,拍數比對要沒有掃描的停頓),接 0
 	logic                         in_valid;
 	logic                         in_ready;
 	logic [X_WIDTH-1:0]           in_x;

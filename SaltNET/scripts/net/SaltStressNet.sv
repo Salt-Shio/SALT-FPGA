@@ -107,6 +107,8 @@ module SaltStressNet #(
 	parameter integer READ_LATENCY        = 2,    // R
 	parameter integer COMPUTE_LATENCY     = 2,    // C
 	parameter bit     OVERLAP             = 1,
+	parameter bit     STALE_CLEAR         = 0,    // 1:conv 掃描神經元記憶體,太久沒更新的寫 0(時間戳記繞回)
+	parameter integer SCAN_CELLS_PER_TICK = 1,    // conv 每個刻度掃幾格
 
 	// 輸出大小:(H_in + 2P - K) / S + 1,跟訓練端相同
 	localparam integer CONV1_OUT_ROWS = (IN_ROWS + 2 * CONV1_PADDING - CONV1_KERNEL_SIZE) / CONV1_STRIDE + 1,
@@ -202,7 +204,9 @@ module SaltStressNet #(
 		.FIFO_DEPTH         (CONV1_FIFO_DEPTH),
 		.READ_LATENCY       (READ_LATENCY),
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
-		.OVERLAP            (OVERLAP)
+		.OVERLAP            (OVERLAP),
+		.STALE_CLEAR        (STALE_CLEAR),
+		.SCAN_CELLS_PER_TICK(SCAN_CELLS_PER_TICK)
 	) conv1 (
 		.clk         (clk),
 		.rst_n       (rst_n),
@@ -256,7 +260,9 @@ module SaltStressNet #(
 		.FIFO_DEPTH         (CONV2_FIFO_DEPTH),
 		.READ_LATENCY       (READ_LATENCY),
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
-		.OVERLAP            (OVERLAP)
+		.OVERLAP            (OVERLAP),
+		.STALE_CLEAR        (STALE_CLEAR),
+		.SCAN_CELLS_PER_TICK(SCAN_CELLS_PER_TICK)
 	) conv2 (
 		.clk         (clk),
 		.rst_n       (rst_n),
@@ -310,7 +316,9 @@ module SaltStressNet #(
 		.FIFO_DEPTH         (CONV3_FIFO_DEPTH),
 		.READ_LATENCY       (READ_LATENCY),
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
-		.OVERLAP            (OVERLAP)
+		.OVERLAP            (OVERLAP),
+		.STALE_CLEAR        (STALE_CLEAR),
+		.SCAN_CELLS_PER_TICK(SCAN_CELLS_PER_TICK)
 	) conv3 (
 		.clk         (clk),
 		.rst_n       (rst_n),

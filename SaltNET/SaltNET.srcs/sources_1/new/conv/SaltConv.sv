@@ -13,6 +13,8 @@
 //   OVERLAP = 1:每拍都送下一個 o_c 的讀位址;位置 L 的 o_c 送不完時整條管線停住,一個 o_c 占 max(1, k) 拍。
 //   L = 1(R = C = 1)時兩種是同一個電路。k 是這個 o_c fire 的個數(out_ready 一直是 1 時)。
 //   OC <= L 時,新事件的 o_c = 0 要等上一筆事件的 o_c = 0 寫回才讀(讀寫衝突,第 6 段)。
+//   STALE_CLEAR = 1 時加掃描(conv/StaleScan,第 5 段):輪流讀每一格,太久沒更新的神經元寫 0,處理時間戳記繞回;
+//   掃描時事件暫停,等管線空才讀。STALE_CLEAR = 0 時沒有掃描電路,讀位址、讀取開關、清除照原本接。
 //
 //   檔案照一筆事件的流程由上往下排:
 //     0 共用控制:宣告(第 6 段才算出來,前面就要用)
@@ -20,7 +22,7 @@
 //     2 下一個 o_c 是誰、讀位址
 //     3 下一個 o_c 碰到哪些神經元(CandidateGrid)
 //     4 管線位置 1..L:每個位置一份那個 o_c 的候選、t、o_c
-//     5 讀出、算、寫回:權重、門檻、NeuronMemory + DecayLookup + NeuronUpdate
+//     5 讀出、算、寫回:權重、門檻、掃描、NeuronMemory + DecayLookup + NeuronUpdate、掃描的判斷
 //     6 送出、做完沒、換不換
 //   排列規則:變數的宣告跟設定它的邏輯放在同一段;要用到的變數,設定它的那段排在前面。
 //   互相依賴的(例如 last_read_out_channel 和 read_out_channel)放同一段,宣告在段首。
@@ -68,6 +70,10 @@ module SaltConv #(
 	parameter integer COMPUTE_LATENCY = 1,   // C,計算級數:1 或 2(2 = NeuronUpdate 在 ② 之後切開)
 	parameter bit     OVERLAP         = 0,   // 1:o_c 重疊,下一個 o_c 先讀、前一個還在算
 
+	// 時間戳記繞回(docs/SNN/Todo「時間處理 → T3」)
+	parameter bit     STALE_CLEAR         = 0,   // 1:掃描神經元記憶體,太久沒更新的寫 0;0:沒有掃描電路
+	parameter integer SCAN_CELLS_PER_TICK = 1,   // N,每個刻度掃幾格;STALE_CLEAR = 0 時沒有作用
+
 	// 推導出來的位寬($clog2(1)=0 時至少保留 1 bit)
 	localparam integer MEMBRANE_WIDTH    = MEMBRANE_INT_WIDTH + MEMBRANE_FRAC_WIDTH,   // w
 	localparam integer OUT_CHANNEL_WIDTH = (OUT_CHANNELS > 1) ? $clog2(OUT_CHANNELS) : 1,
@@ -77,8 +83,8 @@ module SaltConv #(
 	input  logic clk,
 	input  logic rst_n,   // active-low,同步釋放;釋放後先把神經元記憶體逐位址清 0,清完才拉高 in_ready
 
-	// 「現在」:網路最新收進的事件時間,頂層給,判斷神經元多久沒更新(docs/SNN/Todo「待決事項 → 系統整合」時間戳記繞回)。
-	// 目前還沒有用到,時間處理 T3 接上
+	// 「現在」:網路最新收進的事件時間,頂層給,掃描用來判斷神經元多久沒更新(docs/SNN/Todo「待決事項 → 系統整合」時間戳記繞回)。
+	// STALE_CLEAR = 0 時沒有用到
 	input  logic [TIME_WIDTH-1:0] current_time,
 
 	// 輸入事件(分離欄位,valid/ready 握手)
@@ -356,7 +362,56 @@ module SaltConv #(
 		$readmemh(THRESHOLD_FILE, thresholds);
 	end
 
-	// 每個 bank 一份:權重選 tap、NeuronMemory(打包 {t_last, V̂})+ DecayLookup + NeuronUpdate
+	// 掃描(STALE_CLEAR = 1):刻度、掃描位址、讓事件暫停;所有 bank 同一拍掃同一格。
+	// 寫 0 共用 reset 清除那條路徑:清除位址在 reset 清除中用 clear_addr,否則用掃描位址
+	logic                       scan_hold;         // 擋住事件的讀(第 6 段)
+	logic                       scan_read;         // 這一拍所有 bank 讀 scan_addr
+	logic                       scan_word_valid;   // 這一拍讀出的是 scan_addr 那一格
+	logic                       scan_clear;        // 這一拍判斷要清的 bank 寫 0
+	logic [BANK_ADDR_WIDTH-1:0] scan_addr;
+	logic [BANK_ADDR_WIDTH-1:0] neuron_clear_addr;   // 每個 bank 的 NeuronMemory 清除位址
+
+	if (STALE_CLEAR) begin : stale_scan_control
+		logic pipeline_empty;   // 管線位置 1..L 都沒有 o_c:事件讀出的格子都寫回了,位置 L 也沒有停住
+
+		always_comb begin
+			pipeline_empty = 1'b1;
+			for (int position = 1; position <= PIPELINE_DEPTH; position++) begin
+				if (pipe_valid[position]) begin
+					pipeline_empty = 1'b0;
+				end
+			end
+		end
+
+		StaleScan #(
+			.TIME_WIDTH    (TIME_WIDTH),
+			.BANK_DEPTH    (BANK_DEPTH),
+			.CELLS_PER_TICK(SCAN_CELLS_PER_TICK),
+			.READ_LATENCY  (READ_LATENCY)
+		) stale_scan (
+			.clk            (clk),
+			.rst_n          (rst_n),
+			.clearing       (clearing),
+			.current_time   (current_time),
+			.pipeline_empty (pipeline_empty),
+			.scan_hold      (scan_hold),
+			.scan_read      (scan_read),
+			.scan_word_valid(scan_word_valid),
+			.scan_clear     (scan_clear),
+			.scan_addr      (scan_addr)
+		);
+
+		assign neuron_clear_addr = clearing ? clear_addr : scan_addr;
+	end else begin : no_stale_scan_control
+		assign scan_hold         = 1'b0;
+		assign scan_read         = 1'b0;
+		assign scan_word_valid   = 1'b0;
+		assign scan_clear        = 1'b0;
+		assign scan_addr         = '0;
+		assign neuron_clear_addr = clear_addr;
+	end
+
+	// 每個 bank 一份:權重選 tap、NeuronMemory(打包 {t_last, V̂})+ DecayLookup + NeuronUpdate、掃描的判斷
 	// 讀:下一個 o_c(第 3 段的 grid_*);寫:位置 L 的 o_c(第 4 段的 pipe_*),只在算的那一拍
 	logic spike [0:AXIS_BANK_COUNT-1][0:AXIS_BANK_COUNT-1];
 
@@ -377,11 +432,15 @@ module SaltConv #(
 			                   ? kernel_word[(tap_y * KERNEL_SIZE + tap_x) * WEIGHT_WIDTH +: WEIGHT_WIDTH]
 			                   : '0;
 
-			// 神經元記憶體:每格一個字 {t_last, V̂},V̂ 在低位(Conv.md 第 2 節「神經元」)
+			// 神經元記憶體:每格一個字 {t_last, V̂},V̂ 在低位(Conv.md 第 2 節「神經元」)。
+			// 讀取開關、讀位址、清除由下面的掃描判斷決定(STALE_CLEAR = 0 時照原本接),跟讀出的值互相依賴,宣告放這裡
 			logic        [NEURON_WORD_WIDTH-1:0] read_word;
 			logic signed [MEMBRANE_WIDTH-1:0]    membrane;       // 讀出的 V̂
 			logic        [TIME_WIDTH-1:0]        last_time;      // 讀出的 t_last
 			logic signed [MEMBRANE_WIDTH-1:0]    new_membrane;   // 算出的 V̂_new
+			logic                                bank_read_enable;
+			logic        [BANK_ADDR_WIDTH-1:0]   bank_read_addr;
+			logic                                bank_clearing;   // reset 清除中,或掃描要清這個 bank 的 scan_addr
 
 			NeuronMemory #(
 				.DEPTH       (BANK_DEPTH),
@@ -389,12 +448,11 @@ module SaltConv #(
 				.READ_LATENCY(READ_LATENCY)
 			) neuron_memory (
 				.clk         (clk),
-				.clearing    (clearing),
-				.clear_addr  (clear_addr),
-				// 沒有合法候選的 bank 不讀
-				.read_enable (read_enable && grid_valid[row_bank][col_bank]),
+				.clearing    (bank_clearing),
+				.clear_addr  (neuron_clear_addr),
+				.read_enable (bank_read_enable),
 				.shift_enable(read_shift_enable),
-				.read_addr   (grid_bank_addr[row_bank][col_bank]),
+				.read_addr   (bank_read_addr),
 				.read_word   (read_word),
 				// NeuronUpdate 對不合法的候選也照算,只寫回合法的;不是算的那一拍,讀出的資料跟候選對不上,不寫
 				.write_enable(compute_cycle && pipe_candidate_valid[PIPELINE_DEPTH][row_bank][col_bank]),
@@ -404,6 +462,33 @@ module SaltConv #(
 
 			assign membrane  = read_word[MEMBRANE_WIDTH-1:0];
 			assign last_time = read_word[NEURON_WORD_WIDTH-1:MEMBRANE_WIDTH];
+
+			// 掃描的判斷:年紀 = 現在 - t_last(W 位元減法),最高位是 1 表示年紀 >= 2^(W-1),
+			// 電位不是 0 才清(電位 0 時之後怎麼算結果都一樣,不用寫)。判斷結果存一級暫存器,下一拍(scan_clear)寫全 0
+			if (STALE_CLEAR) begin : stale_check
+				logic [TIME_WIDTH-1:0] age;            // 現在 - t_last
+				logic                  stale;          // 這一格太久沒更新而且電位不是 0
+				logic                  clear_pending;  // 掃描這一格的判斷結果:要清
+
+				assign age   = current_time - last_time;
+				assign stale = age[TIME_WIDTH-1] && (membrane != '0);
+
+				always_ff @(posedge clk) begin
+					if (scan_word_valid) begin
+						clear_pending <= stale;
+					end
+				end
+
+				// 掃描時事件不讀(scan_hold),讀位址只給掃描;沒有合法候選的 bank 事件不讀
+				assign bank_read_enable = scan_read || (read_enable && grid_valid[row_bank][col_bank]);
+				assign bank_read_addr   = scan_hold ? scan_addr : grid_bank_addr[row_bank][col_bank];
+				assign bank_clearing    = clearing || (scan_clear && clear_pending);
+			end else begin : no_stale_check
+				// 沒有合法候選的 bank 不讀
+				assign bank_read_enable = read_enable && grid_valid[row_bank][col_bank];
+				assign bank_read_addr   = grid_bank_addr[row_bank][col_bank];
+				assign bank_clearing    = clearing;
+			end
 
 			// 衰減碼:每顆神經元有自己的 t_last,每個 bank 一份
 			logic [DECAY_FRAC_WIDTH:0] decay_code;   // A
@@ -574,10 +659,10 @@ module SaltConv #(
 		assign read_conflict = 1'b0;
 	end
 
-	// 管線裡前面的 o_c 擋住下一個
+	// 管線裡前面的 o_c 擋住下一個;掃描時也不送(第 5 段的 scan_hold)
 	logic next_oc_blocked;
 
-	assign next_oc_blocked = wait_previous_oc || read_conflict;
+	assign next_oc_blocked = wait_previous_oc || read_conflict || scan_hold;
 
 	// 送不送下一個 o_c 的讀位址:管線沒停住、下一個 o_c 有東西可做、沒被擋住
 	assign read_next_oc   = !stall && next_oc_available && !next_oc_blocked;

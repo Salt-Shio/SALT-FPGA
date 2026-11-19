@@ -1,12 +1,19 @@
 # Run the tb_salt_conv_fc_net_* testbenches (the whole network SaltConvFCNet: conv1 -> conv2 -> ConvToFCAdapter ->
 # SaltFC -> FCMembraneRegister) once per parameter set, each in its own simulation set
-# (sim_salt_conv_fc_net_input_high, sim_salt_conv_fc_net_input_random) of the SaltNET project.
-# Each testbench covers one upstream driving pattern; the shared checks are in tb_salt_conv_fc_net_common.svh.
-# Generate the reference files first (WSL): scripts/net/gen_salt_conv_fc_net_ref.py writes
-# salt_conv_fc_net_SAT0.txt and _SAT1.txt (about 35 MB each, not version controlled) and the FC data files.
-# Parameter sets: the trained conv1 + conv2 + out layer, wrap and saturate versions, pipeline R2C2 with overlap,
-# each with FC n_col = 4 and FIFO depth 16 (the target configuration) and with FC n_col = 1 and FIFO depth 2
-# (the FC needs 10 cycles per event, so its FIFO fills up and back-pressure reaches the adapter, conv2 and conv1).
+# (sim_salt_conv_fc_net_input_high, sim_salt_conv_fc_net_input_random, sim_salt_conv_fc_net_stale_clear) of the
+# SaltNET project. Each testbench covers one situation; the shared checks are in tb_salt_conv_fc_net_common.svh.
+# Generate the reference files first (WSL), then run; reference files are not version controlled:
+#   input_high, input_random : scripts/net/gen_salt_conv_fc_net_ref.py writes salt_conv_fc_net_SAT0.txt and _SAT1.txt
+#                              (about 35 MB each) and the FC data files
+#   stale_clear              : scripts/net/gen_salt_conv_fc_net_stale_clear_ref.py writes
+#                              salt_conv_fc_net_stale_clear_SAT0.txt and _SAT1.txt (about 60 MB each); it uses the
+#                              FC n_col = 4 data files written by gen_salt_conv_fc_net_ref.py
+# Parameter sets: the trained conv1 + conv2 + out layer, wrap and saturate versions, pipeline R2C2 with overlap.
+#   input_high, input_random : FC n_col = 4 and FIFO depth 16 (the target configuration), and FC n_col = 1 and FIFO
+#                              depth 2 (the FC needs 10 cycles per event, so its FIFO fills up and back-pressure
+#                              reaches the adapter, conv2 and conv1); no scan (STALE_CLEAR = 0), 16-bit time
+#   stale_clear              : FC n_col = 4, FIFO depth 16, scan on (STALE_CLEAR = 1, one cell per tick) and 11-bit
+#                              time, so the time stamps wrap every 2048 ms within one long input stream
 # The first run creates the simulation sets (sim_common.tcl registers all RTL in sources_1); later runs skip that.
 # One Vivado session runs one simulation set only (see run_tb_salt_conv.tcl), so:
 #   one testbench name in -tclargs : run that testbench in this session
@@ -24,7 +31,7 @@
 set scripts_dir [file dirname [file normalize [info script]]]
 source [file join $scripts_dir .. sim_common.tcl]
 
-set testbenches [list tb_salt_conv_fc_net_input_high tb_salt_conv_fc_net_input_random]
+set testbenches [list tb_salt_conv_fc_net_input_high tb_salt_conv_fc_net_input_random tb_salt_conv_fc_net_stale_clear]
 set requested_testbenches {}
 set set_conditions {}
 foreach arg $argv {
@@ -55,12 +62,23 @@ set saturate_dir [quant_mem_dir saturate]
 # CONV1_FIFO_DEPTH, the same seven for CONV2_,
 # FC_OUT_NEURONS FC_NEURONS_PER_ROW FC_MEMBRANE_INT_WIDTH FC_DECAY_TABLE_DEPTH FC_FIFO_DEPTH,
 # TIME_WIDTH WEIGHT_WIDTH MEMBRANE_FRAC_WIDTH DECAY_FRAC_WIDTH ROUND SATURATE READ_LATENCY COMPUTE_LATENCY OVERLAP,
+# STALE_CLEAR SCAN_CELLS_PER_TICK,
 # then the conv data file directory (relative to SaltNET.srcs; conv1_weight.mem ... conv2_decay.mem inside).
-set param_sets [list \
-    [list 2 34 34  8 3 2 1 12 75 16  16 3 2 1 14 75 16  10 4 14 75 16  16 7 0 6 1 0 2 2 1 $wrap_dir] \
-    [list 2 34 34  8 3 2 1  9 75 16  16 3 2 1 11 75 16  10 4 11 75 16  16 7 0 6 1 1 2 2 1 $saturate_dir] \
-    [list 2 34 34  8 3 2 1 12 75 16  16 3 2 1 14 75 16  10 1 14 75  2  16 7 0 6 1 0 2 2 1 $wrap_dir] \
-    [list 2 34 34  8 3 2 1  9 75 16  16 3 2 1 11 75 16  10 1 11 75  2  16 7 0 6 1 1 2 2 1 $saturate_dir] \
+# Each testbench runs its own sets and reads its own reference files (testbench_sets: reference file stem, sets).
+set reset_per_sample_sets [list \
+    [list 2 34 34  8 3 2 1 12 75 16  16 3 2 1 14 75 16  10 4 14 75 16  16 7 0 6 1 0 2 2 1  0 1 $wrap_dir] \
+    [list 2 34 34  8 3 2 1  9 75 16  16 3 2 1 11 75 16  10 4 11 75 16  16 7 0 6 1 1 2 2 1  0 1 $saturate_dir] \
+    [list 2 34 34  8 3 2 1 12 75 16  16 3 2 1 14 75 16  10 1 14 75  2  16 7 0 6 1 0 2 2 1  0 1 $wrap_dir] \
+    [list 2 34 34  8 3 2 1  9 75 16  16 3 2 1 11 75 16  10 1 11 75  2  16 7 0 6 1 1 2 2 1  0 1 $saturate_dir] \
+]
+set stale_clear_sets [list \
+    [list 2 34 34  8 3 2 1 12 75 16  16 3 2 1 14 75 16  10 4 14 75 16  11 7 0 6 1 0 2 2 1  1 1 $wrap_dir] \
+    [list 2 34 34  8 3 2 1  9 75 16  16 3 2 1 11 75 16  10 4 11 75 16  11 7 0 6 1 1 2 2 1  1 1 $saturate_dir] \
+]
+set testbench_sets [dict create \
+    tb_salt_conv_fc_net_input_high   [list salt_conv_fc_net $reset_per_sample_sets] \
+    tb_salt_conv_fc_net_input_random [list salt_conv_fc_net $reset_per_sample_sets] \
+    tb_salt_conv_fc_net_stale_clear  [list salt_conv_fc_net_stale_clear $stale_clear_sets] \
 ]
 
 set integer_param_names {IN_CHANNELS IN_ROWS IN_COLS
@@ -70,7 +88,7 @@ set integer_param_names {IN_CHANNELS IN_ROWS IN_COLS
     CONV2_DECAY_TABLE_DEPTH CONV2_FIFO_DEPTH
     FC_OUT_NEURONS FC_NEURONS_PER_ROW FC_MEMBRANE_INT_WIDTH FC_DECAY_TABLE_DEPTH FC_FIFO_DEPTH
     TIME_WIDTH WEIGHT_WIDTH MEMBRANE_FRAC_WIDTH DECAY_FRAC_WIDTH ROUND SATURATE
-    READ_LATENCY COMPUTE_LATENCY OVERLAP}
+    READ_LATENCY COMPUTE_LATENCY OVERLAP STALE_CLEAR SCAN_CELLS_PER_TICK}
 
 # NAME value dict of the integer parameters of one set
 proc salt_conv_fc_net_values {param_set} {
@@ -105,9 +123,9 @@ proc salt_conv_fc_net_generic {param_set} {
     set generic [salt_conv_fc_net_integer_params $param_set]
 
     # The reference file is not version controlled: stop with a hint instead of letting xsim fail to open it
-    set ref_path [file join $srcs_dir $::ref_dir salt_conv_fc_net_SAT[dict get $v SATURATE].txt]
+    set ref_path [file join $srcs_dir $::ref_dir ${::reference_name}_SAT[dict get $v SATURATE].txt]
     if {![file exists $ref_path]} {
-        error "reference file not found: $ref_path (generate it with scripts/net/gen_salt_conv_fc_net_ref.py)"
+        error "reference file not found: $ref_path (generate it with scripts/net/gen_${::reference_name}_ref.py)"
     }
 
     set conv_dir [lindex $param_set end]
@@ -144,6 +162,13 @@ proc salt_conv_fc_net_prefix {param_set} {
     return "[salt_conv_fc_net_integer_params $param_set]:"
 }
 
+# One testbench in this session: its reference file stem and parameter sets
+set tb_name [lindex $testbenches 0]
+if {![dict exists $testbench_sets $tb_name]} {
+    error "unknown testbench '$tb_name': expected one of [dict keys $testbench_sets]"
+}
+lassign [dict get $testbench_sets $tb_name] reference_name param_sets
+
 # Keep only the sets that meet every NAME:value condition from -tclargs
 if {[llength $set_conditions] > 0} {
     set selected_sets {}
@@ -168,8 +193,6 @@ if {[llength $set_conditions] > 0} {
 
 open_saltnet_project
 
-# One testbench in this session
-set tb_name [lindex $testbenches 0]
 set simset_name [string map {tb_ sim_} $tb_name]
 create_simset_if_missing $simset_name $tb_name [list net/$tb_name.sv net/tb_salt_conv_fc_net_common.svh]
 run_param_sets $simset_name $tb_name $ref_dir $param_sets salt_conv_fc_net_generic salt_conv_fc_net_prefix

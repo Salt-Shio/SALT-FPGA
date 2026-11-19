@@ -96,7 +96,7 @@ flowchart LR
 | `next_oc_available` | 2 | 不是新事件，或 FIFO 有事件 | `read_next_oc` |
 | `wait_previous_oc` | 6 | 不重疊時，位置 1..L−1 有 o_c;重疊時固定 0 | `next_oc_blocked` |
 | `read_conflict` | 6 | OC ≤ L 時：下一個是新事件的 o_c=0,而且位置 1..L 有 o_c=0;OC > L 時固定 0 | `next_oc_blocked` |
-| `next_oc_blocked` | 6 | `wait_previous_oc` 或 `read_conflict` | `read_next_oc` |
+| `next_oc_blocked` | 6 | `wait_previous_oc` 或 `read_conflict` 或 `scan_hold`(STALE_CLEAR=1 才有，見逐拍例子 5) | `read_next_oc` |
 | `read_next_oc` | 6 | `!stall`、`next_oc_available`、`!next_oc_blocked` | 位置 1、`last_read_out_channel`、BRAM 讀出第一級、`take_new_event` |
 | `take_new_event` | 6 | `read_next_oc` 而且 `next_from_fifo` | FIFO 拿走最前面那筆、存事件暫存器 |
 
@@ -175,3 +175,40 @@ R=2、C=2、重疊(L=3),OC=2。FIFO 裡有事件 A、B,兩筆碰到同一批神�
 - A0 第 1 拍讀、B0 第 5 拍讀，隔 L+1 步。只比 o_c=0 就夠：同一筆事件的 o_c 一步接一步讀，B1 跟 A1 也會隔 L+1 步(A1 第 5 拍寫回，B1 第 6 拍讀)。
 - 位置 L 停住的拍子也算衝突。OC ≥ 2 時一定要這樣：上一筆的 o_c=1 可能沒停，下一步就寫回。OC=1 時那幾拍其實已經寫回了，但照同一條規則等，只留一套規則。
 - OC=1 時一個 o_c 占 L + max(1, k) 拍：要等上一筆的 o_c=0 離開位置 L 才讀下一筆。
+
+## 逐拍例子 5:掃描(STALE_CLEAR = 1)
+
+R=2、C=2、重疊(L=3),N=1。FIFO 裡有事件 A,第 2 拍「現在」跨過下一個刻度。
+掃描的控制在 `conv/StaleScan`(第 5 段例化):不掃 → 等管線空(空了那拍讀)→ 等讀出 → 寫 0,每格 R + 2 拍。
+掃描讀的那一格不進位置 1..L:讀出的資料什麼時候出來由 StaleScan 自己數拍，判斷結果存在每個 bank 的 `clear_pending`。
+
+| 拍 | 位置 1 | 位置 2 | 位置 3 | 掃描步驟 | `scan_hold` | 這拍讀 | 掃描這拍 |
+|---|---|---|---|---|---|---|---|
+| 1 | — | — | — | 不掃 | 0 | A 的 o_c=0(拿走 A) | — |
+| 2 | A0 | — | — | 不掃 | 0 | A 的 o_c=1 | 刻度到了，刻度往後加 T |
+| 3 | A1 | A0 | — | 等管線空 | 1 | 不讀 | 管線不空，等 |
+| 4 | — | A1 | A0 | 等管線空 | 1 | 不讀 | 等(A0 這拍寫回) |
+| 5 | — | — | A1 | 等管線空 | 1 | 不讀 | 等(A1 這拍寫回) |
+| 6 | — | — | — | 等管線空 | 1 | 不讀(掃描讀) | 管線空了，所有 bank 讀 `scan_addr` |
+| 7 | — | — | — | 等讀出 | 1 | 不讀 | 等 BRAM |
+| 8 | — | — | — | 等讀出 | 1 | 不讀 | 資料出來，每個 bank 判斷，結果存 `clear_pending` |
+| 9 | — | — | — | 寫 0 | 1 | 不讀 | 要清的 bank 把 `scan_addr` 寫 0,`scan_addr` 加 1 |
+| 10 | — | — | — | 不掃 | 0 | A 的 o_c=2 | — |
+
+- 第 2 拍還是「不掃」,`scan_hold`=0,事件照常讀 A1。第 3 拍起 `scan_hold`=1,`next_oc_blocked`=1,不送新的 o_c、FIFO 不拿;已經在管線裡的 A0、A1 照常往後推、寫回。這跟 `stall`(整條停住)不一樣。
+- 為什麼等管線空：掃描的那一格可能是 A0、A1 正要寫回的格子。
+    - 例：那一格存 {t_last=1000, V̂=50},A 的時間 40000,A0 第 4 拍寫回 {40000, q}。掃描如果第 2 拍就讀，讀到舊的 {1000, 50},年紀 39000 ≥ 32768 判斷要清，第 5 拍寫 0,把 A0 剛寫好的值蓋掉。
+    - 要知道是不是同一格得比位址，所以一律等。
+- 寫 0 走 NeuronMemory 的清除路徑(`clearing`、`clear_addr`),清除那拍外部寫入會被忽略。管線空了才讀、之後事件一直擋住，寫 0 那拍不會有事件寫回。
+- 第 9 拍事件不讀：同一拍讀、寫同一格，讀出的值不保證。
+- 事件停第 3～9 拍，共 7 拍；掃一格是第 6～9 拍，R + 2 = 4 拍。刻度到的時候沒有事件在處理，第 3 拍管線就是空的，直接讀，事件停 R + 2 拍。
+- 一個刻度要掃好幾格(N > 1,或「現在」一次跨過好幾個刻度)時，第 9 拍不回「不掃」,直接回「等管線空」;管線還是空的，下一格馬上讀，每格 R + 2 拍。
+
+第 6～9 拍每個地方在做什麼：
+
+| 拍 | StaleScan 送出 | 記憶體 | SaltConv 每個 bank |
+|---|---|---|---|
+| 6 | `scan_read`=1,`scan_addr`=k | 讀口讀第 k 格(讀位址二選一選 `scan_addr`) | — |
+| 7 | — | BRAM 讀取中 | — |
+| 8 | `scan_word_valid`=1 | 讀口送出第 k 格的 {t_last, V̂} | 算年紀、看 V̂ ≠ 0,結果存 `clear_pending` |
+| 9 | `scan_clear`=1 | `clear_pending`=1 的 bank 寫口把第 k 格寫 0 | — |

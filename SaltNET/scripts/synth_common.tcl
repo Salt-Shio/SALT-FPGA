@@ -3,8 +3,8 @@
 # touch SaltNET.xpr, so it can run while a simulation runs.
 # The flow and every option are explained in docs/SNN/Concept/Layer-RTL/SaltConvSynthFlow.md.
 # Sourced by each synth_*.tcl; not meant to be run on its own. A synth_*.tcl calls, in this order:
-#   synth_arguments $argv                       -> version, period, synth_only
-#   synth_enter_run_dir <directory name>        (under the directory Vivado was started in)
+#   synth_arguments $argv                       -> version, period, synth_only, stale_clear
+#   synth_enter_run_dir <directory name>        (under the directory Vivado was started in; synth_run_name builds it)
 #   synth_top <top> <generics> [extra files]    -> util_synth.rpt, bram_regs.txt
 #   synth_implement <period>                    (skipped with synth_only)
 #   synth_report <header> <path groups>         -> info.txt and the other reports
@@ -22,24 +22,44 @@ source [file join $::synth_scripts_dir quant_versions.tcl]
 set ::synth_rtl_folders {lib conv fc net}
 
 # Command-line arguments of every synth_*.tcl:
-#   version    : wrap or saturate
-#   period     : clock period in ns, default 4.8 (the 5 ns target with 0.2 ns kept back)
-#   synth_only : optional; stop after synthesis (util_synth.rpt, bram_regs.txt), no place and route
-# Returns a dict with the keys version, period, synth_only.
+#   version     : wrap or saturate
+#   period      : clock period in ns, default 4.8 (the 5 ns target with 0.2 ns kept back)
+#   then, in any order, optional words:
+#     synth_only  : stop after synthesis (util_synth.rpt, bram_regs.txt), no place and route
+#     stale_clear : STALE_CLEAR = 1 (every SaltConv scans its neuron memory); without it STALE_CLEAR = 0
+# Returns a dict with the keys version, period, synth_only, stale_clear (0 or 1).
 proc synth_arguments {argv} {
     set version [lindex $argv 0]
     if {[lsearch -exact {wrap saturate} $version] < 0} {
         error "unknown version '$version': expected wrap or saturate"
     }
     set period [expr {[llength $argv] > 1 ? [lindex $argv 1] : 4.8}]
-    set synth_only 0
-    if {[llength $argv] > 2} {
-        if {[lindex $argv 2] ne "synth_only" || [llength $argv] > 3} {
-            error "unexpected arguments '[lrange $argv 2 end]': expected nothing or synth_only"
+    set options [lrange $argv 2 end]
+    foreach option $options {
+        if {[lsearch -exact {synth_only stale_clear} $option] < 0} {
+            error "unexpected argument '$option': expected synth_only or stale_clear"
         }
-        set synth_only 1
+        if {[llength [lsearch -all -exact $options $option]] > 1} {
+            error "argument '$option' given more than once"
+        }
     }
-    return [dict create version $version period $period synth_only $synth_only]
+    set synth_only [expr {[lsearch -exact $options synth_only] >= 0}]
+    set stale_clear [expr {[lsearch -exact $options stale_clear] >= 0}]
+    return [dict create version $version period $period synth_only $synth_only stale_clear $stale_clear]
+}
+
+# Run directory name: <base>_<version>_<period>, with _stale_clear when STALE_CLEAR = 1
+proc synth_run_name {base arguments} {
+    set name "${base}_[dict get $arguments version]_[dict get $arguments period]"
+    if {[dict get $arguments stale_clear]} {
+        append name _stale_clear
+    }
+    return $name
+}
+
+# First line of info.txt: the settings given on the command line
+proc synth_header {arguments} {
+    return "version [dict get $arguments version] period [dict get $arguments period] stale_clear [dict get $arguments stale_clear]"
 }
 
 # NAME="path" generic of a data file read with $readmemh; errors if the file does not exist
@@ -111,13 +131,19 @@ proc synth_instance_cells {instance} {
     return [get_cells -quiet -hier -filter "NAME =~ $instance/* && IS_SEQUENTIAL"]
 }
 
-# Address pins of the block RAMs under one memory instance, e.g. fc/weight_memory; used as a path group end
-proc synth_bram_address_pins {memory_instance} {
+# Pins whose name matches pin_pattern (e.g. ADDR*, EN*) of the block RAMs under one memory instance, e.g.
+# fc/weight_memory, or conv1/*neuron_memory for every bank of conv1; used as a path group end
+proc synth_bram_pins {memory_instance pin_pattern} {
     set brams [get_cells -quiet -hier -filter "NAME =~ $memory_instance/* && REF_NAME =~ RAMB*"]
     if {[llength $brams] == 0} {
         return {}
     }
-    return [get_pins -of_objects $brams -filter {REF_PIN_NAME =~ ADDR*}]
+    return [get_pins -of_objects $brams -filter "REF_PIN_NAME =~ $pin_pattern"]
+}
+
+# Address pins of the block RAMs under one memory instance; used as a path group end
+proc synth_bram_address_pins {memory_instance} {
+    return [synth_bram_pins $memory_instance ADDR*]
 }
 
 # Reports after routing, written to the run directory:

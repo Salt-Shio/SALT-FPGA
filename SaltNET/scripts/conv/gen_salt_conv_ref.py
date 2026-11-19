@@ -82,6 +82,7 @@ SAMPLE_COUNT = 10
 TRAINED_TIME_WIDTH = 16
 TRAINED_WEIGHT_WIDTH = 7
 SEED = 0
+MAX_CAPACITY_RETRIES = 8   # 官方 forward 容量不夠時最多放大幾次
 # 答案檔列拍數的 (R, C, OVERLAP),R、C 各 1~2,順序是 ((R-1)*2 + (C-1))*2 + OVERLAP;
 # tb_salt_conv_common.svh 挑拍數用同一個順序
 CYCLE_CONFIGS = tuple((read_latency, compute_latency, overlap)
@@ -227,17 +228,21 @@ class LayerModel:
             overflow_mode=self.overflow_mode, round_mode=self.round_mode)
 
     def official_forward(self, in_stream, max_queue_len: int, max_out_spikes: int, trace: bool = False):
-        """訓練端整層 forward;容量不夠就放大到 diag.needed 再跑。回傳 LayerOutput;trace=True 時帶逐步軌跡。"""
+        """訓練端整層 forward;容量不夠就放大到 diag.needed 再跑,直到放得下。回傳 LayerOutput;trace=True 時帶逐步軌跡。
+        被截斷的那次算出的 needed 可能還不夠(截掉的事件後面還有),長串流要放大好幾次。"""
         backend = self.training["QuantBackend"]()   # 捨入、溢位規則照 quantized_params
         layer = self.layer(max_queue_len, max_out_spikes)
         output = layer.forward(self.quantized_params(), in_stream, backend=backend, trace=trace)
-        if not bool(layer.capacity.fits(output.diag)):
+        for _ in range(MAX_CAPACITY_RETRIES):
+            if bool(layer.capacity.fits(output.diag)):
+                return output
             needed = output.diag.needed
-            layer = self.layer(max(max_queue_len, int(needed["max_queue_len"])),
-                               max(max_out_spikes, int(needed["max_out_spikes"])))
+            max_queue_len = max(max_queue_len, int(needed["max_queue_len"]))
+            max_out_spikes = max(max_out_spikes, int(needed["max_out_spikes"]))
+            layer = self.layer(max_queue_len, max_out_spikes)
             output = layer.forward(self.quantized_params(), in_stream, backend=backend, trace=trace)
-            if not bool(layer.capacity.fits(output.diag)):
-                raise RuntimeError("放大容量之後還是放不下")
+        if not bool(layer.capacity.fits(output.diag)):
+            raise RuntimeError(f"放大容量 {MAX_CAPACITY_RETRIES} 次之後還是放不下")
         return output
 
     def run_events(self, events: np.ndarray) -> dict:
@@ -348,16 +353,19 @@ def bank_location(params: ParamSet, oc, oy, ox):
     return oy % bank_count, ox % bank_count, (oc * row_slots + oy // bank_count) * col_slots + ox // bank_count
 
 
-def state_lines(params: ParamSet, loop_result: dict, kind: str) -> list[str]:
-    """每顆神經元最後的 (V̂, t_last),一行一顆,第一個欄位是 kind。"""
+def state_lines(params: ParamSet, loop_result: dict, kind: str, extra: np.ndarray | None = None) -> list[str]:
+    """每顆神經元最後的 (V̂, t_last),一行一顆,第一個欄位是 kind。
+    extra:(o_c, o_y, o_x) 形狀的整數陣列,有給時每行最後多一欄。"""
     membrane, last_time = loop_result["membrane"], loop_result["last_time"]
     lines = []
     for oc in range(params.out_channels):
         for oy in range(params.out_rows):
             for ox in range(params.out_cols):
                 row_bank, col_bank, bank_addr = bank_location(params, oc, oy, ox)
-                lines.append(f"{kind} {row_bank} {col_bank} {bank_addr} "
-                             f"{membrane[oc, oy, ox]} {last_time[oc, oy, ox]}")
+                line = f"{kind} {row_bank} {col_bank} {bank_addr} {membrane[oc, oy, ox]} {last_time[oc, oy, ox]}"
+                if extra is not None:
+                    line += f" {extra[oc, oy, ox]}"
+                lines.append(line)
     return lines
 
 

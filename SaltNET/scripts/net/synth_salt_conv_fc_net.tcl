@@ -7,8 +7,9 @@
 #   cd D:\Project\SALT-FPGA\SaltNET\SaltNET.runs
 #   vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_conv_fc_net.tcl -tclargs saturate 4.8
 #   arguments: version (wrap | saturate), clock period in ns (default 4.8: the 5 ns target with 0.2 ns kept back),
-#              optional synth_only (stop after synthesis)
-# Outputs go to SaltNET.runs/conv_fc_net_<version>_<period>/: info.txt (WNS, worst path of every path group below),
+#              then optional words: synth_only (stop after synthesis), stale_clear (STALE_CLEAR = 1: every conv
+#              scans its neuron memory; without it STALE_CLEAR = 0)
+# Outputs go to SaltNET.runs/conv_fc_net_<version>_<period>[_stale_clear]/: info.txt (WNS, worst path of every path group below),
 # one .rpt per path group, timing_summary.rpt, worst.rpt, util_synth.rpt, bram_regs.txt, util.rpt, util_hier.rpt,
 # post_route.dcp.
 # Path groups (from -> to; "inside" = both ends in the same instance):
@@ -19,6 +20,10 @@
 #   fc_ready_to_adapter    : SaltFC in_ready (FIFO full) -> the adapter's event register
 #   fc_ready_to_conv2      : SaltFC in_ready -> the adapter's in_ready (1 LUT) -> conv2 stall, write-back
 #   fc_weight_read_address : anything in SaltFC -> the address pins of its weight BRAMs (FIFO head -> y*n_in + src)
+#   conv<n>_neuron_address : anything in that conv -> the address pins (read and write) of its neuron BRAMs
+#                            (read: FIFO head -> CandidateGrid, or the scan address with STALE_CLEAR = 1)
+#   conv<n>_neuron_enable  : anything in that conv -> the enable pins (read and write) of its neuron BRAMs
+#                            (read: compute stage 2 -> stall -> read enable)
 # This file is ASCII only: Vivado reads Tcl sources in the system code page, not UTF-8.
 
 source [file join [file dirname [file normalize [info script]]] .. synth_common.tcl]
@@ -39,8 +44,9 @@ set generics [concat {
     CONV2_OUT_CHANNELS=16 CONV2_KERNEL_SIZE=3 CONV2_STRIDE=2 CONV2_PADDING=1 CONV2_DECAY_TABLE_DEPTH=75 CONV2_FIFO_DEPTH=16
     FC_OUT_NEURONS=10 FC_NEURONS_PER_ROW=4 FC_DECAY_TABLE_DEPTH=75 FC_FIFO_DEPTH=16
     TIME_WIDTH=16 WEIGHT_WIDTH=7 MEMBRANE_FRAC_WIDTH=0 DECAY_FRAC_WIDTH=6 ROUND=1
-    READ_LATENCY=2 COMPUTE_LATENCY=2 OVERLAP=1
+    READ_LATENCY=2 COMPUTE_LATENCY=2 OVERLAP=1 SCAN_CELLS_PER_TICK=1
 } $version_generics]
+lappend generics STALE_CLEAR=[dict get $arguments stale_clear]
 # Exported .mem files of the trained model; out_weight.mem is packed for n_col = 4 (tools/export_fpga.py --fc-cols 4)
 set data_dir [file join $::synth_srcs_dir [quant_mem_dir $version]]
 foreach layer {CONV1 CONV2} {
@@ -52,7 +58,7 @@ foreach layer {CONV1 CONV2} {
 lappend generics [synth_data_file_generic FC_WEIGHT_FILE [file join $data_dir out_weight.mem]]
 lappend generics [synth_data_file_generic FC_DECAY_FILE [file join $data_dir out_decay.mem]]
 
-synth_enter_run_dir conv_fc_net_${version}_$period
+synth_enter_run_dir [synth_run_name conv_fc_net $arguments]
 synth_top SaltConvFCNet $generics
 if {[dict get $arguments synth_only]} {
     return
@@ -64,7 +70,7 @@ set conv2_cells    [synth_instance_cells conv2]
 set adapter_cells  [synth_instance_cells conv_to_fc]
 set fc_cells       [synth_instance_cells fc]
 set register_cells [synth_instance_cells membrane_register]
-synth_report "version $version period $period" [list \
+synth_report [synth_header $arguments] [list \
     [list conv1_output_to_conv2           $conv1_cells   $conv2_cells] \
     [list conv2_ready_to_conv1            $conv2_cells   $conv1_cells] \
     [list conv2_output_to_adapter         $conv2_cells   $adapter_cells] \
@@ -79,4 +85,8 @@ synth_report "version $version period $period" [list \
     [list fc_inside                       $fc_cells      $fc_cells] \
     [list membrane_register_inside        $register_cells $register_cells] \
     [list fc_weight_read_address          $fc_cells      [synth_bram_address_pins fc/weight_memory]] \
+    [list conv1_neuron_address            $conv1_cells   [synth_bram_address_pins conv1/*neuron_memory]] \
+    [list conv1_neuron_enable             $conv1_cells   [synth_bram_pins conv1/*neuron_memory EN*]] \
+    [list conv2_neuron_address            $conv2_cells   [synth_bram_address_pins conv2/*neuron_memory]] \
+    [list conv2_neuron_enable             $conv2_cells   [synth_bram_pins conv2/*neuron_memory EN*]] \
 ]

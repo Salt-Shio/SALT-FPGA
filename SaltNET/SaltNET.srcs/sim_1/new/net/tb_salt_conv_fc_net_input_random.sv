@@ -9,12 +9,16 @@
 
 module tb_salt_conv_fc_net_input_random;
 
+	// 答案:test 前 10 筆,每筆樣本 reset(scripts/net/gen_salt_conv_fc_net_ref.py)
+	localparam string REFERENCE_NAME      = "salt_conv_fc_net";
+	localparam bit    CLEAR_RULE_IN_STATE = 1'b0;
+
 	`include "tb_salt_conv_fc_net_common.svh"
 
 	function automatic void reset_driver();
 	endfunction
 
-	function automatic bit input_starts_now();
+	function automatic bit input_starts_now(int cycle, int event_index);
 		return $urandom_range(0, 9) < 7;
 	endfunction
 

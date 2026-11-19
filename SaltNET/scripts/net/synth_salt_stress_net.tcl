@@ -15,8 +15,9 @@
 #   cd D:\Project\SALT-FPGA\SaltNET\SaltNET.runs
 #   vivado -mode batch -source D:/Project/SALT-FPGA/SaltNET/scripts/net/synth_salt_stress_net.tcl -tclargs saturate 4.8
 #   arguments: version (wrap | saturate), clock period in ns (default 4.8: the 5 ns target with 0.2 ns kept back),
-#              optional synth_only (stop after synthesis: check the block RAM count in util_synth.rpt first)
-# Outputs go to SaltNET.runs/stress_net_<version>_<period>/: info.txt (WNS, worst path of every path group below),
+#              then optional words: synth_only (stop after synthesis: check the block RAM count in util_synth.rpt
+#              first), stale_clear (STALE_CLEAR = 1: every conv scans its neuron memory; without it STALE_CLEAR = 0)
+# Outputs go to SaltNET.runs/stress_net_<version>_<period>[_stale_clear]/: info.txt (WNS, worst path of every path group below),
 # one .rpt per path group, timing_summary.rpt, worst.rpt, util_synth.rpt, bram_regs.txt, util.rpt, util_hier.rpt,
 # post_route.dcp.
 # Path groups, for every pair of neighbouring instances a -> b (the adapter is conv_to_fc):
@@ -59,6 +60,7 @@ proc read_generics_file {path} {
 set stress_dir [file normalize [file join $::synth_scripts_dir .. SaltNET.runs stress_net_mem $version]]
 set trained_dir [file join $::synth_srcs_dir [quant_mem_dir $version]]
 set generics [read_generics_file [file join $stress_dir generics.txt]]
+lappend generics STALE_CLEAR=[dict get $arguments stale_clear]
 foreach layer {conv1 conv2 conv3 fc1 fc2 fc3} {
     lappend generics [synth_data_file_generic [string toupper $layer]_WEIGHT_FILE \
         [file join $stress_dir ${layer}_weight.mem]]
@@ -72,7 +74,7 @@ foreach {layer trained_layer} {conv1 conv1 conv2 conv2 conv3 conv2 fc1 out fc2 o
         [file join $trained_dir ${trained_layer}_decay.mem]]
 }
 
-synth_enter_run_dir stress_net_${version}_$period
+synth_enter_run_dir [synth_run_name stress_net $arguments]
 synth_top SaltStressNet $generics [list [file join $::synth_scripts_dir net SaltStressNet.sv]]
 if {[dict get $arguments synth_only]} {
     return
@@ -102,4 +104,4 @@ foreach layer {fc1 fc2 fc3} {
     lappend path_groups [list ${layer}_weight_read_address $cells($layer) \
         [synth_bram_address_pins $layer/weight_memory]]
 }
-synth_report "version $version period $period" $path_groups
+synth_report [synth_header $arguments] $path_groups

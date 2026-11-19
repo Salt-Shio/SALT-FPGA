@@ -12,7 +12,7 @@
 //   不另外給參數,上下層對不上的組合寫不出來。
 //   參數分兩種(model_operation_quant.md 第 1 節「粒度」):
 //     每層各自一份的加 CONV1_、CONV2_ 前綴:幾何、i_V、衰減表深度、FIFO 深度、三個資料檔
-//     整個網路共用一份的不加前綴:時間位寬、b、f_V、f_a、捨入、溢位處理、管線設定
+//     整個網路共用一份的不加前綴:時間位寬、b、f_V、f_a、捨入、溢位處理、管線設定、conv 的掃描
 //   rst_n 兩層共用,兩層各自清自己的神經元記憶體;conv1 先清完時輸出會被 conv2 的 in_ready=0 擋住。
 //////////////////////////////////////////////////////////////////////////////////
 
@@ -56,6 +56,8 @@ module SaltConvNet #(
 	parameter integer READ_LATENCY        = 2,    // R
 	parameter integer COMPUTE_LATENCY     = 2,    // C
 	parameter bit     OVERLAP             = 1,
+	parameter bit     STALE_CLEAR         = 0,    // 1:conv 掃描神經元記憶體,太久沒更新的寫 0(時間戳記繞回)
+	parameter integer SCAN_CELLS_PER_TICK = 1,    // conv 每個刻度掃幾格
 
 	// 輸出大小:(H_in + 2P - K) / S + 1,跟訓練端相同
 	localparam integer CONV1_OUT_ROWS = (IN_ROWS + 2 * CONV1_PADDING - CONV1_KERNEL_SIZE) / CONV1_STRIDE + 1,
@@ -139,7 +141,9 @@ module SaltConvNet #(
 		.FIFO_DEPTH         (CONV1_FIFO_DEPTH),
 		.READ_LATENCY       (READ_LATENCY),
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
-		.OVERLAP            (OVERLAP)
+		.OVERLAP            (OVERLAP),
+		.STALE_CLEAR        (STALE_CLEAR),
+		.SCAN_CELLS_PER_TICK(SCAN_CELLS_PER_TICK)
 	) conv1 (
 		.clk         (clk),
 		.rst_n       (rst_n),
@@ -183,7 +187,9 @@ module SaltConvNet #(
 		.FIFO_DEPTH         (CONV2_FIFO_DEPTH),
 		.READ_LATENCY       (READ_LATENCY),
 		.COMPUTE_LATENCY    (COMPUTE_LATENCY),
-		.OVERLAP            (OVERLAP)
+		.OVERLAP            (OVERLAP),
+		.STALE_CLEAR        (STALE_CLEAR),
+		.SCAN_CELLS_PER_TICK(SCAN_CELLS_PER_TICK)
 	) conv2 (
 		.clk         (clk),
 		.rst_n       (rst_n),

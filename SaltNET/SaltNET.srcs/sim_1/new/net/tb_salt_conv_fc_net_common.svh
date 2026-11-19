@@ -3,7 +3,7 @@
 //   tb_salt_conv_fc_net_*.sv 共用的部分,在各自的 module 裡 `include,不單獨編譯。
 //   整個網路 SaltConvFCNet(conv1 → conv2 → ConvToFCAdapter → SaltFC → FCMembraneRegister),輸入照答案檔餵,
 //   每支 testbench 只換上游的驅動方式(網路最後是膜電位輸出,沒有 ready)。
-//   答案由 scripts/net/gen_salt_conv_fc_net_ref.py 產生(訓練端量化模型整條算的,檔頭有格式;答案檔不進 git)。
+//   答案由 scripts/net/gen_<REFERENCE_NAME>_ref.py 產生(訓練端量化模型整條算的,檔頭有格式;答案檔不進 git)。
 //   目標:每一層每一次更新的 (t, V̂)、每一個 spike 都跟訓練端對上。每一拍(posedge 之前)比:
 //     三個介面交握成功那一拍的事件,逐筆照順序:
 //       conv1 → conv2 的 (o_c, o_y, o_x, t);conv2 → 轉接模組的 (o_c, o_y, o_x, t);轉接模組 → SaltFC 的 (src, t)。
@@ -11,11 +11,16 @@
 //       每個 bank 一串答案照順序比;寫入開關停住的拍子不開,所以每筆事件碰到的每顆神經元剛好寫一次,多寫、少寫都會錯開。
 //     FC 每一次更新:update_done 那一拍的 membranes(10 顆的 V̂)、update_time。
 //   每一拍檢查的協定規則(三個介面都查):上一拍 valid=1、ready=0,這一拍 valid 要還是 1,資料不變。
+//   每一拍也檢查掃描的前提(對餵法的要求,不是電路的檢查):「現在」減掉還沒處理的最舊事件時間要小於
+//   門檻 − Δt_max(門檻 = 2^(TIME_WIDTH-1)),不成立時答案不保證,報「前提不成立」。最大值印在 latency 行的 max_lag。
 //   reset 之後 in_ready 不是 X;清除:conv1 清除期間 in_ready=0,conv2 清除期間 conv1 的輸出不能被收,
 //   SaltFC 清除期間轉接模組的輸出不能被收。
-//   樣本結束(全部輸入送完、整條空下來,再多跑 END_CYCLES 拍,看有沒有多寫、多送):
+//   樣本結束(全部輸入送完、整條空下來、兩層的掃描也做完,再多跑 END_CYCLES 拍,看有沒有多寫、多送):
 //     三個介面的筆數、每個 bank 的更新筆數、FC 的更新筆數都要等於答案;
 //     兩層 conv 每顆神經元的 (V̂, t_last),直接從各自 NeuronMemory 的記憶體內容讀出來比。
+//     CLEAR_RULE_IN_STATE = 1 時答案的狀態行多一欄 clear_rule(掃描可能把這格清成全 0):
+//       0 要跟答案相同,1 跟答案相同或全 0 都可以,2 一定要全 0。
+//     掃描寫的 0 走清除路徑,不經過寫 port,不在每一次更新的比對裡。
 //   每筆樣本跑一次,開始前用 rst_n 重來(每層都清除神經元記憶體)。
 //   只用一個 initial 流程:negedge 驅動輸入、#1 等組合邏輯穩定後取樣,posedge 後 #1 依取樣結果判斷。
 //   讀 DUT 內部訊號的 assign(寫 port、記憶體快照)只把 generate 裡的訊號搬出來,不做判斷。
@@ -28,10 +33,14 @@
 //     conv1 → conv2、conv2 → 轉接模組、轉接模組 → SaltFC 有東西要送、下一級不收的拍數。
 //
 //   include 這個檔案的 module 要定義這兩個函式,決定這支 testbench 的驅動方式:
-//     function automatic void reset_driver();      每筆樣本開始前,把驅動用的狀態回到初始值
-//     function automatic bit  input_starts_now();   上游這一拍要不要開始送下一筆事件
-//   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入,
-//   答案檔是 <REF_DIR>/salt_conv_fc_net_SAT<SATURATE>.txt。
+//     function automatic void reset_driver();   每筆樣本開始前,把驅動用的狀態回到初始值
+//     function automatic bit  input_starts_now(int cycle, int event_index);
+//                                               上游這一拍(第 cycle 拍)要不要開始送第 event_index 筆事件
+//   還要在 include 之前宣告這兩個 localparam,決定讀哪一種答案:
+//     localparam string REFERENCE_NAME;        答案檔是 <REF_DIR>/<REFERENCE_NAME>_SAT<SATURATE>.txt,
+//                                              由 scripts/net/gen_<REFERENCE_NAME>_ref.py 產生
+//     localparam bit    CLEAR_RULE_IN_STATE;   答案的狀態行有沒有 clear_rule 那一欄
+//   參數用 xelab -generic_top 帶入,答案檔目錄用 xsim -testplusarg REF_DIR=<目錄> 帶入。
 //////////////////////////////////////////////////////////////////////////////////
 
 	// 預設值是訓練端飽和版、FC n_col = 4、R2C2 重疊
@@ -74,6 +83,8 @@
 	parameter integer READ_LATENCY        = 2;
 	parameter integer COMPUTE_LATENCY     = 2;
 	parameter bit     OVERLAP             = 1;
+	parameter bit     STALE_CLEAR         = 0;
+	parameter integer SCAN_CELLS_PER_TICK = 1;
 
 	// 跟 SaltConvFCNet、SaltConv、SaltFC 的 localparam 同一套公式
 	localparam integer CONV1_OUT_ROWS = (IN_ROWS + 2 * CONV1_PADDING - CONV1_KERNEL_SIZE) / CONV1_STRIDE + 1;
@@ -157,7 +168,9 @@
 		.SATURATE                (SATURATE),
 		.READ_LATENCY            (READ_LATENCY),
 		.COMPUTE_LATENCY         (COMPUTE_LATENCY),
-		.OVERLAP                 (OVERLAP)
+		.OVERLAP                 (OVERLAP),
+		.STALE_CLEAR             (STALE_CLEAR),
+		.SCAN_CELLS_PER_TICK     (SCAN_CELLS_PER_TICK)
 	) dut (.*);
 
 	initial clk = 1'b0;
@@ -248,9 +261,10 @@
 	// FC 每筆事件之後的 V̂:第 k 筆的第 i 顆在 expected_update_membrane[k * FC_OUT_NEURONS + i]
 	int expected_update_time[$];
 	int expected_update_membrane[$];
-	// 樣本結束時兩層 conv 每顆神經元的 (V̂, t_last)
+	// 樣本結束時兩層 conv 每顆神經元的 (V̂, t_last),跟可不可以被掃描清成全 0(CLEAR_RULE_IN_STATE = 0 時全是 0)
 	int state_count [0:1];
 	int state_row_bank[0:1][$], state_col_bank[0:1][$], state_addr[0:1][$], state_membrane[0:1][$], state_last_time[0:1][$];
+	int state_clear_rule[0:1][$];
 
 	// 統計
 	int error_count  = 0;
@@ -259,6 +273,7 @@
 	int write_check_count [0:1] = '{0, 0};
 	int update_check_count = 0;
 	int state_check_count [0:1] = '{0, 0};
+	int state_cleared_count [0:1] = '{0, 0};   // 樣本結束時被掃描清成全 0、答案不是全 0 的格數(只印在 log)
 
 	function automatic string interface_name(int interface_index);
 		case (interface_index)
@@ -281,7 +296,8 @@
 		                  "FC_OUT_NEURONS=%0d FC_NEURONS_PER_ROW=%0d FC_MEMBRANE_INT_WIDTH=%0d FC_DECAY_TABLE_DEPTH=%0d ",
 		                  "FC_FIFO_DEPTH=%0d ",
 		                  "TIME_WIDTH=%0d WEIGHT_WIDTH=%0d MEMBRANE_FRAC_WIDTH=%0d DECAY_FRAC_WIDTH=%0d ",
-		                  "ROUND=%0d SATURATE=%0d READ_LATENCY=%0d COMPUTE_LATENCY=%0d OVERLAP=%0d"},
+		                  "ROUND=%0d SATURATE=%0d READ_LATENCY=%0d COMPUTE_LATENCY=%0d OVERLAP=%0d ",
+		                  "STALE_CLEAR=%0d SCAN_CELLS_PER_TICK=%0d"},
 		                 IN_CHANNELS, IN_ROWS, IN_COLS,
 		                 CONV1_OUT_CHANNELS, CONV1_KERNEL_SIZE, CONV1_STRIDE, CONV1_PADDING,
 		                 CONV1_MEMBRANE_INT_WIDTH, CONV1_DECAY_TABLE_DEPTH, CONV1_FIFO_DEPTH,
@@ -290,7 +306,8 @@
 		                 FC_OUT_NEURONS, FC_NEURONS_PER_ROW, FC_MEMBRANE_INT_WIDTH, FC_DECAY_TABLE_DEPTH,
 		                 FC_FIFO_DEPTH,
 		                 TIME_WIDTH, WEIGHT_WIDTH, MEMBRANE_FRAC_WIDTH, DECAY_FRAC_WIDTH,
-		                 ROUND, SATURATE, READ_LATENCY, COMPUTE_LATENCY, OVERLAP);
+		                 ROUND, SATURATE, READ_LATENCY, COMPUTE_LATENCY, OVERLAP,
+		                 STALE_CLEAR, SCAN_CELLS_PER_TICK);
 	endfunction
 
 	function automatic void report_error(string message);
@@ -339,11 +356,15 @@
 	function automatic void read_states(int fd, int sample_index, int layer, string expected_kind);
 		string kind;
 		int a, b, c, d, e;
+		int clear_rule = 0;
 		for (int i = 0; i < state_count[layer]; i++) begin
 			if ($fscanf(fd, "%s %d %d %d %d %d", kind, a, b, c, d, e) != 6 || kind != expected_kind)
 				$fatal(1, "樣本 %0d 第 %0d 個 %s 行格式不對", sample_index, i, expected_kind);
+			if (CLEAR_RULE_IN_STATE && ($fscanf(fd, "%d", clear_rule) != 1 || clear_rule < 0 || clear_rule > 2))
+				$fatal(1, "樣本 %0d 第 %0d 個 %s 行的 clear_rule 不對", sample_index, i, expected_kind);
 			state_row_bank[layer].push_back(a); state_col_bank[layer].push_back(b); state_addr[layer].push_back(c);
 			state_membrane[layer].push_back(d); state_last_time[layer].push_back(e);
+			state_clear_rule[layer].push_back(clear_rule);
 		end
 	endfunction
 
@@ -360,7 +381,7 @@
 				end
 			end
 			state_row_bank[layer].delete(); state_col_bank[layer].delete(); state_addr[layer].delete();
-			state_membrane[layer].delete(); state_last_time[layer].delete();
+			state_membrane[layer].delete(); state_last_time[layer].delete(); state_clear_rule[layer].delete();
 		end
 		expected_update_time.delete();
 		expected_update_membrane.delete();
@@ -409,7 +430,8 @@
 	// ---------------------------------------------------------------
 	// 每一拍的檢查
 	// ---------------------------------------------------------------
-	// 整條空下來:三層的管線裡沒有東西、FIFO 沒有事件、轉接模組的暫存器空的、FC 沒有膜電位要送、都不在清除
+	// 整條空下來:三層的管線裡沒有東西、FIFO 沒有事件、轉接模組的暫存器空的、FC 沒有膜電位要送、都不在清除、
+	// 兩層 conv 都沒在掃描(scan_hold 放開時「現在」到了的刻度都掃完了;STALE_CLEAR = 0 時固定 0)
 	function automatic bit net_idle();
 		for (int position = 1; position <= PIPELINE_DEPTH; position++) begin
 			if (dut.conv1.pipe_valid[position] || dut.conv2.pipe_valid[position] || dut.fc.pipe_valid[position])
@@ -417,7 +439,8 @@
 		end
 		return !dut.conv1.fifo_read_valid && !dut.conv2.fifo_read_valid && !dut.fc.fifo_read_valid
 		       && !dut.conv_to_fc.event_valid && !dut.fc.membrane_valid
-		       && !dut.conv1.clearing && !dut.conv2.clearing && !dut.fc.clearing;
+		       && !dut.conv1.clearing && !dut.conv2.clearing && !dut.fc.clearing
+		       && !dut.conv1.scan_hold && !dut.conv2.scan_hold;
 	endfunction
 
 	// 一個 valid/ready 介面這一拍的檢查:上一拍沒送出去,這一拍 valid 要還是 1、內容不變;
@@ -529,6 +552,29 @@
 		update_index++;
 	endtask
 
+	// 掃描的前提(conv/StaleScan 檔頭):掃描清掉一格時,不能還有事件會在 Δt_max 內碰到它,
+	// 所以「現在」減掉還沒處理的最舊事件時間要小於 門檻 − Δt_max。時間不倒退,越下游的事件越舊,照這個順序找最舊的:
+	// conv2 這筆事件還沒讀完的 o_c、conv2 FIFO 最前面、conv1 送不出去的 spike、conv1 這筆事件還沒讀完的 o_c、conv1 FIFO 最前面
+	task automatic check_pending_lag(string where, ref int max_lag);
+		int decay_table_depth = (CONV1_DECAY_TABLE_DEPTH > CONV2_DECAY_TABLE_DEPTH) ? CONV1_DECAY_TABLE_DEPTH
+		                                                                            : CONV2_DECAY_TABLE_DEPTH;
+		int limit = (1 << (TIME_WIDTH - 1)) - decay_table_depth;
+		logic [TIME_WIDTH-1:0] oldest_time;
+		int lag;
+		if (!dut.conv2.next_from_fifo)        oldest_time = dut.conv2.event_time;
+		else if (dut.conv2.fifo_read_valid)   oldest_time = dut.conv2.fifo_time;
+		else if (dut.conv1_out_valid)         oldest_time = dut.conv1_out_time;
+		else if (!dut.conv1.next_from_fifo)   oldest_time = dut.conv1.event_time;
+		else if (dut.conv1.fifo_read_valid)   oldest_time = dut.conv1.fifo_time;
+		else return;   // 沒有還沒處理的事件
+		lag = TIME_WIDTH'(dut.current_time - oldest_time);
+		if (lag > max_lag) max_lag = lag;
+		if (lag >= limit) begin
+			report_error($sformatf("%s 前提不成立:「現在」=%0d 比還沒處理的最舊事件 %0d 早 %0d ms,要小於 %0d",
+			                       where, dut.current_time, oldest_time, lag, limit));
+		end
+	endtask
+
 	task automatic apply_reset();
 		@(negedge clk);
 		rst_n    = 1'b0;
@@ -557,6 +603,7 @@
 		int  conv1_blocked = 0;
 		int  conv2_blocked = 0;
 		int  fc_in_blocked = 0;
+		int  max_lag       = 0;   // check_pending_lag 量到的最大值
 		bit  sampled_in_handshake;
 		string where;
 
@@ -573,7 +620,7 @@
 			where = $sformatf("sample=%0d cycle=%0d", sample_index, cycle);
 
 			// ---------------- negedge:驅動輸入 ----------------
-			if (!presenting && in_index < in_count && input_starts_now()) begin
+			if (!presenting && in_index < in_count && input_starts_now(cycle, in_index)) begin
 				presenting = 1'b1;
 				in_x       = IN_X_WIDTH'(expected_in_x[in_index]);
 				in_y       = IN_Y_WIDTH'(expected_in_y[in_index]);
@@ -597,6 +644,7 @@
 			                dut.fc_in_valid, dut.fc_in_ready, previous_stalled[2], previous[2], event_index[2]);
 			check_writes(where);
 			check_fc_update(where, update_index);
+			check_pending_lag(where, max_lag);
 
 			if (in_valid && !in_ready && !dut.conv1.clearing) in_blocked++;
 			if (dut.conv1_out_valid && !dut.conv1_out_ready) conv1_blocked++;
@@ -655,28 +703,39 @@
 			report_error($sformatf("sample=%0d FC 更新 %0d 次,答案 %0d 次", sample_index, update_index, event_count[2]));
 		end
 
-		$display("latency sample=%0d in=%0d conv1_out=%0d conv2_out=%0d last_in=%0d done=%0d after_input=%0d in_blocked=%0d conv1_blocked=%0d conv2_blocked=%0d fc_in_blocked=%0d",
+		$display("latency sample=%0d in=%0d conv1_out=%0d conv2_out=%0d last_in=%0d done=%0d after_input=%0d in_blocked=%0d conv1_blocked=%0d conv2_blocked=%0d fc_in_blocked=%0d max_lag=%0d",
 		         sample_index, in_count, event_count[0], event_count[1], last_in_cycle, done_cycle,
-		         done_cycle - last_in_cycle, in_blocked, conv1_blocked, conv2_blocked, fc_in_blocked);
+		         done_cycle - last_in_cycle, in_blocked, conv1_blocked, conv2_blocked, fc_in_blocked, max_lag);
 
 		// 兩層 conv 樣本結束時的神經元狀態
 		-> snapshot_request;
 		#1;
+		// clear_rule:0 要跟答案相同,1 跟答案相同或全 0 都可以,2 一定要全 0
 		for (int layer = 0; layer < 2; layer++) begin
 			for (int i = 0; i < state_count[layer]; i++) begin
-				int row_bank = state_row_bank[layer][i];
-				int col_bank = state_col_bank[layer][i];
-				int addr     = state_addr[layer][i];
-				if (snapshot_membrane[layer][row_bank][col_bank][addr] != state_membrane[layer][i]
-				    || snapshot_time[layer][row_bank][col_bank][addr] != state_last_time[layer][i]) begin
-					report_error($sformatf("sample=%0d %s 最終狀態 bank=(%0d,%0d) addr=%0d:expected=(%0d,%0d) actual=(%0d,%0d)",
-					                       sample_index, conv_name(layer), row_bank, col_bank, addr,
+				int row_bank   = state_row_bank[layer][i];
+				int col_bank   = state_col_bank[layer][i];
+				int addr       = state_addr[layer][i];
+				int clear_rule = state_clear_rule[layer][i];
+				bit matched    = snapshot_membrane[layer][row_bank][col_bank][addr] == state_membrane[layer][i]
+				              && snapshot_time[layer][row_bank][col_bank][addr] == state_last_time[layer][i];
+				bit cleared    = snapshot_membrane[layer][row_bank][col_bank][addr] == 0
+				              && snapshot_time[layer][row_bank][col_bank][addr] == 0;
+				bit accepted   = (clear_rule == 0) ? matched : (clear_rule == 1) ? (matched || cleared) : cleared;
+				if (!accepted) begin
+					report_error($sformatf("sample=%0d %s 最終狀態 bank=(%0d,%0d) addr=%0d clear_rule=%0d:expected=(%0d,%0d) actual=(%0d,%0d)",
+					                       sample_index, conv_name(layer), row_bank, col_bank, addr, clear_rule,
 					                       state_membrane[layer][i], state_last_time[layer][i],
 					                       snapshot_membrane[layer][row_bank][col_bank][addr],
 					                       snapshot_time[layer][row_bank][col_bank][addr]));
 				end
+				if (cleared && !matched) state_cleared_count[layer]++;
 				state_check_count[layer]++;
 			end
+		end
+		if (CLEAR_RULE_IN_STATE) begin
+			$display("stale_clear sample=%0d conv1_cleared=%0d conv2_cleared=%0d", sample_index,
+			         state_cleared_count[0], state_cleared_count[1]);
 		end
 		run_count++;
 	endtask
@@ -695,9 +754,9 @@
 
 		if (!$value$plusargs("REF_DIR=%s", ref_dir))
 			$fatal(1, "缺少 -testplusarg REF_DIR=<答案檔目錄>");
-		ref_path = $sformatf("%s/salt_conv_fc_net_SAT%0d.txt", ref_dir, SATURATE);
+		ref_path = $sformatf("%s/%s_SAT%0d.txt", ref_dir, REFERENCE_NAME, SATURATE);
 		ref_fd = $fopen(ref_path, "r");
-		if (ref_fd == 0) $fatal(1, "打不開答案檔 %s(不進 git,先跑 scripts/net/gen_salt_conv_fc_net_ref.py)", ref_path);
+		if (ref_fd == 0) $fatal(1, "打不開答案檔 %s(不進 git,先跑 scripts/net/gen_%s_ref.py)", ref_path, REFERENCE_NAME);
 
 		sample_index = 0;
 		while (read_sample(ref_fd, sample_index)) begin
